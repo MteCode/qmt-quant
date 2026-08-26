@@ -1,0 +1,39 @@
+# 敏感配置：包含资金账号、QMT 路径、webhook token，绝不入库
+config/config.yaml
+config/*.local.yaml
+.env
+
+# 数据与日志
+data/
+logs/
+*.parquet
+*.db
+*.sqlite3
+*.csv
+
+# 回测产物
+reports/
+*.html
+!docs/*.html
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+desktop.ini
