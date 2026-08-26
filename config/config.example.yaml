@@ -1,0 +1,61 @@
+# qmtquant 配置模板
+# 使用方式：复制为 config/config.yaml 后填入真实值。
+# config.yaml 已在 .gitignore 中，不会入库 —— 资金账号绝不要提交。
+
+log_level: INFO
+
+gateway:
+  # sim = 本地模拟撮合（联调用）; miniqmt = 真实/模拟券商通道; amt = 国金算法通道
+  name: sim
+  # miniQMT 数据目录，注意是 userdata_mini 而不是安装根目录
+  qmt_path: "D:\\国金QMT交易端模拟\\userdata_mini"
+  account_id: ""            # 资金账号
+  account_type: STOCK       # STOCK / CREDIT(两融)
+  reconnect_max_retry: 10
+  reconnect_base_delay: 2.0
+
+data:
+  provider: xt              # xt / csv
+  store_dir: "./data"
+  dividend_type: front      # front(前复权) / back / none
+  default_interval: 1d
+
+cost:
+  commission_rate: 0.00025  # 佣金万 2.5，按你实际费率改
+  commission_min: 5.0
+  stamp_tax_rate: 0.001     # 印花税千 1，仅卖出
+  transfer_fee_rate: 0.00001
+  slippage_tick: 1
+
+# 风控为硬约束，策略无法绕过。首次实盘务必把额度调到很小。
+risk:
+  max_order_value: 50000            # 单笔委托金额上限
+  max_position_ratio: 0.20          # 单票市值占总资产上限
+  max_total_position_ratio: 0.95    # 总仓位上限
+  max_order_count_per_day: 200
+  max_turnover_per_day: 1000000
+  daily_loss_limit_ratio: 0.03      # 当日亏 3% 转入只平不开
+  forbid_st: true
+  blacklist: []                     # 如 ["000001.SZSE"]
+
+backtest:
+  start: "2021-01-01"
+  end: "2024-12-31"
+  initial_capital: 1000000
+  interval: 1d
+  benchmark: "000300.SSE"
+
+notify:
+  enabled: false
+  channel: wecom            # wecom / dingtalk
+  webhook: ""               # 机器人 webhook，属于 secret，勿提交
+
+strategies:
+  - name: MaCrossDemo
+    class: qmtquant.strategy.examples.ma_cross.MaCrossStrategy
+    vt_symbols:
+      - "000001.SZSE"
+    setting:
+      fast_window: 5
+      slow_window: 20
+      position_ratio: 0.95

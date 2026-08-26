@@ -1,0 +1,22 @@
+# ---- 核心依赖 ----
+pandas>=2.0,<3.0
+numpy>=1.24,<3.0
+pyarrow>=14.0          # Parquet 落地
+PyYAML>=6.0            # 配置加载
+
+# ---- 调度与通知 ----
+APScheduler>=3.10       # 盘前/盘中/盘后定时任务
+requests>=2.31          # 企微/钉钉 webhook
+
+# ---- 报告与可视化 ----
+matplotlib>=3.7
+plotly>=5.18            # 交互式 HTML 回测报告
+
+# ---- 开发与测试 ----
+pytest>=7.4
+pytest-cov>=4.1
+
+# ---- 券商 SDK（不通过 pip 安装）----
+# xtquant: 从 miniQMT / 大 QMT 客户端安装目录复制到 site-packages，
+#          或把 <QMT安装目录>\bin.x64\Lib\site-packages 加入 PYTHONPATH。
+#          版本必须与本机 QMT 客户端一致，pip 上的第三方同名包不要用。
