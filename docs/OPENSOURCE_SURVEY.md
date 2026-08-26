@@ -6,7 +6,7 @@
 
 | 框架 | 语言 | 类型 | A股实盘 | QMT/miniQMT 对接 | 二开难度 | 结论 |
 |------|------|------|---------|------------------|----------|------|
-| **vn.py** | Python | 全栈（CTA/回测/实盘/GUI） | ✅ 成熟 | 社区有 `vnpy_xt`（miniQMT 网关） | 中，架构清晰 | **强烈推荐做底座** |
+| **vn.py** | Python | 全栈（CTA/回测/实盘/GUI） | ✅ 成熟（期货/CTP） | ⚠ 见下方更正 | 中，架构清晰 | 期货强，A股 miniQMT 弱 |
 | **Qlib**（微软） | Python | AI 因子研究 / 模型训练 | ❌ 无实盘 | 无 | 中 | 推荐做**因子/选股研究层** |
 | **backtrader** | Python | 回测为主 | 弱 | 无 | 低 | 只适合快速验证策略逻辑 |
 | **RQAlpha** | Python | 回测 + 简单实盘 | 一般 | 无 | 中 | 米筐生态绑定重，不推荐 |
@@ -25,14 +25,66 @@
 
 **结论**：以 **miniQMT 作为主通道**（行情 + 交易），AMT 作为**备用/大单算法执行通道**，大 QMT 用于人工盯盘与应急手工干预。
 
+## 2.5 更正（2026-08-26，查证后）
+
+本文档初版凭印象写就，有一处关键错误，更正如下：
+
+### 更正 1：vnpy_xt 不是 miniQMT 交易网关
+
+初版称「社区有 `vnpy_xt`（miniQMT 网关）」。**这是错的。**
+
+[vnpy/vnpy_xt](https://github.com/vnpy/vnpy_xt) 官方定位是**迅投研数据服务接口（datafeed）**，
+用于获取历史量价数据。VeighNa 社区中资深用户的明确回复是：
+vnpy_xt 支持的是「迅投研」数据服务，**并未支持 miniQMT 交易**。
+
+包内虽然含 gateway 文件，但社区实践显示需要自行改造（注释掉 QMT 路径后缀等）
+才能实盘，属于**非官方支持的自行魔改**，且框架升级后改动会丢失。
+社区里「连接XT 报错：服务器端只支持用户模式」之类的问题至今存在。
+
+**结论**：截至 2026-08，**不存在成熟且官方维护的开源 miniQMT 交易网关**。
+
+### 更正 2：khQuant 只做回测，不含实盘
+
+[khscience/OSkhQuant](https://github.com/khscience/OSkhQuant)（约 1.5k stars）是真实存在
+且质量不错的 miniQMT 原生框架：PyQt5 图形界面、完整撮合引擎、DuckDB 数据源、
+回测报告齐全，全部开源。
+
+但有两个硬约束：
+
+1. **明确不含实盘交易**。官方文档原话：核心功能是历史数据验证，
+   官方版本不包含任何直接执行实盘交易的功能。改造实盘属自行承担。
+2. **许可证是 CC BY-NC 4.0**（署名-非商业性使用）。这是内容许可证而非软件许可证，
+   用于代码时权责边界模糊，且 NC 条款限制商业用途。
+
 ## 3. 最终选型
 
-采取 **"借鉴 vn.py 架构 + 自建轻量内核"** 路线，而非直接 fork vn.py：
+采取 **"借鉴 vn.py 架构 + 自建轻量内核"** 路线。
 
-**理由**
-1. vn.py 体量大（GUI/期货/期权/CTP 一大堆），A 股单市场场景 80% 用不上，维护负担重。
-2. `vnpy_xt` 网关属社区维护，版本跟随 xtquant 更新有滞后，出问题时仍需自己改。
-3. 本项目内核只需 4 层：事件引擎 / 网关抽象 / 策略引擎 / 风控，代码量 2k 行以内可控。
+**查证后的理由**（原理由中关于 vnpy_xt 的部分已作废，见 2.5）
+
+1. **交易网关层：没有可用的开源替代品。** 这是决定性因素。
+   vnpy_xt 是数据接口不是交易网关，OSkhQuant 明确不含实盘。
+   要用 miniQMT 实盘，网关这层无论如何都得自己写。
+2. **回测层：有替代品（OSkhQuant），但迁移成本 > 收益。**
+   本项目回测引擎已实现且有测试覆盖；换过去要重写全部策略，
+   且受 CC BY-NC 许可证约束。
+3. vn.py 体量大（GUI/期货/期权/CTP），A 股单市场场景 80% 用不上。
+
+**自建的真实代价（诚实记录）**
+
+miniQMT 的坑要自己一个个踩。已踩过的：
+
+| 坑 | 后果 | 发现方式 |
+|----|------|---------|
+| 深市限价类型用了旧版 101 | **所有深市股票下不了单**，且失败无原因 | 实测报单返回 -1 |
+| xtdata 时间戳时区 | 日线整体偏移一天，回测静默用错日期 | 检查首根 K 线落在元旦 |
+| 板块缓存为空 | 沪深300 取到 0 只 | 实测 |
+| 客户端未打包 xtquant | 按文档复制目录找不到文件 | 实测 |
+
+这些在成熟框架里本该已经趟平。自建意味着这类问题会持续出现 ——
+应对办法是**每个坑都补一条回归测试**，让它只坑一次。
+本项目 `tests/test_miniqmt_gateway.py` 即为此而设，会校验常量映射与 SDK 一致，
+SDK 升级后若枚举变动能立刻发现。
 
 **但保留 vn.py 的核心设计**：事件驱动（EventEngine）、Gateway 抽象、`TickData/BarData/OrderData/TradeData` 对象模型 —— 这样将来若要迁回 vn.py 或接入 `vnpy_xt`，成本极低。
 
@@ -44,7 +96,8 @@
 ## 4. 参考链接
 
 - vn.py: https://github.com/vnpy/vnpy
-- vnpy_xt: https://github.com/vnpy/vnpy_xt
+- vnpy_xt（数据服务，非交易网关）: https://github.com/vnpy/vnpy_xt
 - Qlib: https://github.com/microsoft/qlib
-- khQuant: https://github.com/KHQuant/khQuant
+- OSkhQuant（miniQMT 原生回测，CC BY-NC）: https://github.com/khscience/OSkhQuant
 - xtquant 官方文档: http://docs.thinktrader.net/
+- VeighNa 社区（miniQMT 相关问题）: https://www.vnpy.com/forum/
