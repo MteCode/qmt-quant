@@ -66,9 +66,36 @@ cp config/config.example.yaml config/config.yaml
 | 配置 | 说明 |
 |------|------|
 | `gateway.name` | `sim` 模拟撮合 / `miniqmt` 券商通道 / `amt` 国金算法通道 |
-| `gateway.qmt_path` | miniQMT 的 `userdata_mini` 目录，注意不是安装根目录 |
+| `gateway.qmt_path` | miniQMT 的 `userdata_mini` 目录，注意不是安装根目录。**用正斜杠**，YAML 双引号里 `\q` `\u` 会被当转义符 |
+| `data.dividend_type` | **必须用 `back`（后复权）**，见下方说明 |
 | `cost.*` | 佣金/印花税/过户费/滑点，按你的实际费率改 |
 | `risk.*` | 风控硬约束。**首次实盘务必把额度调到很小** |
+
+### 为什么必须用后复权
+
+前复权是从当前价往回**减去累计分红**，高分红股的累计分红会超过当年股价，**算出负价格**。
+
+实测 601919 中远海控（2020-01 ~ 2026-08）：
+
+| 复权方式 | 负价格 | 最低价 | 区间收益 |
+|---|---|---|---|
+| `front` 前复权 | **227 根** | **-5.14** | 无意义 |
+| `back` 后复权 | 0 | 3.70 | 448.56%（含分红再投） |
+| `none` 不复权 | 0 | 3.14 | 216.98%（不含分红） |
+
+沪深300 中 7 只共 851 根 K 线为负。负价格会让均线、收益率、仓位计算全部失效，**而且不报错**。
+
+实盘下单用行情推送的真实价（天然不复权），不受此项影响。
+
+## 数据质量检查
+
+每次下载完新数据后跑一遍：
+
+```bash
+python scripts/check_data.py --sector 沪深300 --interval 1d,1w,1m --financial
+```
+
+分级输出问题清单（错误/可疑/提示），**只报告不修改数据** —— 自动"修复"比脏数据更危险，你不知道它改了什么。存在错误时返回码为 2，方便接入自动化。
 
 ## 项目结构
 
@@ -109,8 +136,9 @@ class MyStrategy(StrategyBase):
 |------|------|
 | [架构设计](docs/ARCHITECTURE.md) | 分层设计、模块职责、关键流程、技术选型 |
 | [需求文档](docs/REQUIREMENTS.md) | 功能需求清单、优先级、风险与里程碑 |
-| [实现文档](docs/IMPLEMENTATION.md) | 环境搭建、接入步骤、上线检查清单 |
-| [选型调研](docs/OPENSOURCE_SURVEY.md) | vn.py / Qlib / khQuant 等框架对比 |
+| [实现文档](docs/IMPLEMENTATION.md) | 环境搭建、接入步骤、踩坑记录、上线检查清单 |
+| [选型调研](docs/OPENSOURCE_SURVEY.md) | vn.py / Qlib / khQuant 等框架对比与星标实况 |
+| [任务表](docs/TASKS.md) | 当前进度、待办、遗留事项 |
 
 ## 环境要求
 

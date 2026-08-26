@@ -17,7 +17,7 @@ import pandas as pd  # noqa: E402
 
 from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.utils.logger import setup_logging  # noqa: E402
-from qmtquant.utils.symbol import from_xt_symbol, to_xt_symbol  # noqa: E402
+from qmtquant.utils.symbol import to_xt_symbol  # noqa: E402
 
 #: ExpireDate 为该值表示尚未退市
 NOT_EXPIRED = "99999999"

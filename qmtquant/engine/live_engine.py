@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from ..core.constants import Direction, OrderType, Status
 from ..core.objects import (
     AccountData,
-    CancelRequest,
+    BarData,
     OrderData,
     OrderRequest,
     PositionData,

@@ -11,7 +11,7 @@ import time
 from datetime import datetime
 from threading import Thread
 
-from ..core.constants import Direction, Exchange, OrderType, Status
+from ..core.constants import Direction, OrderType, Status
 from ..core.objects import (
     AccountData,
     CancelRequest,
@@ -332,15 +332,42 @@ class MiniQmtGateway(BaseGateway):
                 gateway_name=self.gateway_name,
             ))
 
-    def _sync_orders(self) -> None:
-        """断线重连/启动时全量拉取当日委托做对账"""
+    def query_orders(self) -> list[OrderData]:
+        """查询当日全部委托，供 LiveEngine.reconcile() 对账。
+
+        必须实现：基类默认返回空列表，不覆写的话对账会永远报告
+        「活动委托 0 笔」—— 实盘重启时看不到已挂的单，可能重复下单。
+        """
         if not self._trader:
-            return
+            return []
+
+        orders = []
         for o in self._trader.query_stock_orders(self._account) or []:
             try:
-                self.on_order(self._convert_order(o))
+                orders.append(self._convert_order(o))
             except Exception:
-                logger.exception("对账解析委托失败")
+                logger.exception("解析委托失败: order_id=%s",
+                                 getattr(o, "order_id", "?"))
+        return orders
+
+    def query_trades(self) -> list[TradeData]:
+        """查询当日全部成交，供对账使用"""
+        if not self._trader:
+            return []
+
+        trades = []
+        for t in self._trader.query_stock_trades(self._account) or []:
+            try:
+                trades.append(self._convert_trade(t))
+            except Exception:
+                logger.exception("解析成交失败: traded_id=%s",
+                                 getattr(t, "traded_id", "?"))
+        return trades
+
+    def _sync_orders(self) -> None:
+        """启动/重连时把当日委托全部推入事件引擎，重建本地订单簿"""
+        for order in self.query_orders():
+            self.on_order(order)
 
     def _convert_order(self, o) -> OrderData:
         symbol, exchange = split_vt_symbol(from_xt_symbol(o.stock_code))

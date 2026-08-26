@@ -5,7 +5,7 @@
 """
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from queue import Empty, Queue
 from threading import Thread
 from typing import Any, Callable

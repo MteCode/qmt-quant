@@ -1,8 +1,7 @@
 """选股策略与调仓逻辑测试。"""
 import pandas as pd
-import pytest
 
-from qmtquant.core.constants import Direction, Exchange, Interval, OrderType
+from qmtquant.core.constants import Direction, Exchange, Interval
 from qmtquant.core.objects import BarData
 from qmtquant.engine.backtest_engine import BacktestEngine
 from qmtquant.strategy.portfolio import PortfolioStrategy

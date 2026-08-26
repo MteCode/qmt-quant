@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 class PortfolioStrategy(StrategyBase):
     """按周期调仓的等权选股策略基类"""
 
-    parameters = ["rebalance_days", "max_holdings", "cash_buffer"]
+    parameters = ["rebalance_days", "max_holdings", "cash_buffer", "price_buffer"]
 
     #: 每隔多少个交易日调仓一次
     rebalance_days: int = 20
@@ -26,6 +26,10 @@ class PortfolioStrategy(StrategyBase):
     max_holdings: int = 10
     #: 预留现金比例，防止因价格波动导致买单资金不足
     cash_buffer: float = 0.05
+    #: 限价单相对收盘价的缓冲。信号在 T 日收盘产生、T+1 开盘成交，
+    #: 次日跳空超过缓冲时限价单会失效（买单低于开盘价、卖单高于开盘价）。
+    #: 实测 2% 在快速上涨行情中会踏空，故取 3%。
+    price_buffer: float = 0.03
 
     def __init__(self, engine, strategy_name, vt_symbols, setting=None):
         super().__init__(engine, strategy_name, vt_symbols, setting)
@@ -87,7 +91,7 @@ class PortfolioStrategy(StrategyBase):
                 continue
             volume = self.get_pos(vt_symbol)
             if volume > 0:
-                self.sell(vt_symbol, bar.close_price * 0.98, volume)
+                self.sell(vt_symbol, bar.close_price * (1 - self.price_buffer), volume)
 
         # --- 买入新增的
         new_symbols = [s for s in targets if s not in held]
@@ -106,7 +110,7 @@ class PortfolioStrategy(StrategyBase):
             volume = int(budget_per_name / bar.close_price // 100) * 100
             if volume <= 0:
                 continue
-            self.buy(vt_symbol, bar.close_price * 1.02, volume)
+            self.buy(vt_symbol, bar.close_price * (1 + self.price_buffer), volume)
 
     def _estimate_total_value(self, bars: dict[str, BarData]) -> float:
         """现金 + 持仓市值。持仓无当日行情时按成本价估。"""

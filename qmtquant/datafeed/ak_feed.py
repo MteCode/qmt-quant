@@ -42,7 +42,7 @@ ADJUST_MAP = {"front": "qfq", "back": "hfq", "none": ""}
 class AkshareDataFeed(BaseDataFeed):
     """akshare 数据源，主要用于补齐 QMT 缺失的退市股行情"""
 
-    def __init__(self, store_dir: str, dividend_type: str = "front",
+    def __init__(self, store_dir: str, dividend_type: str = "back",
                  request_interval: float = 2.0, max_retry: int = 3,
                  circuit_breaker: int = 15) -> None:
         """

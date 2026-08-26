@@ -81,7 +81,7 @@ def main() -> int:
     print(f"退市股数量 : {len(symbols)}")
     print(f"周期       : {interval.value}")
     print(f"区间       : {args.start} ~ {args.end}")
-    print(f"数据源     : akshare（QMT 无退市股数据）")
+    print("数据源     : akshare（QMT 无退市股数据）")
     print(f"预计耗时   : 约 {len(symbols)*1.2/60:.0f} 分钟（含限流间隔）")
     print("=" * 60)
 

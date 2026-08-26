@@ -1,6 +1,4 @@
 """回测引擎测试：重点验证 A 股规则与无前视偏差。"""
-from datetime import datetime
-
 import pandas as pd
 import pytest
 

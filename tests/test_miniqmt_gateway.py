@@ -93,3 +93,42 @@ class TestStatusMapping:
             if isinstance(v, int) and v not in STATUS_XT2VT and name != "ORDER_UNKNOWN":
                 missing.append(f"{name}={v}")
         assert not missing, f"以下 SDK 状态未映射: {missing}"
+
+
+class TestQueryInterfaces:
+    """网关必须实现 query_orders / query_trades。
+
+    真实 bug：MiniQmtGateway 曾未覆写 query_orders，一直用基类的空实现，
+    导致 LiveEngine.reconcile() 永远报告「活动委托 0 笔」——
+    实盘重启时看不到已挂的单，可能重复下单。
+    """
+
+    def test_query_orders_overridden(self):
+        from qmtquant.gateway.base import BaseGateway
+        from qmtquant.gateway.miniqmt_gateway import MiniQmtGateway
+
+        assert MiniQmtGateway.query_orders is not BaseGateway.query_orders, \
+            "MiniQmtGateway 必须覆写 query_orders，否则对账形同虚设"
+
+    def test_query_trades_overridden(self):
+        from qmtquant.gateway.base import BaseGateway
+        from qmtquant.gateway.miniqmt_gateway import MiniQmtGateway
+
+        assert MiniQmtGateway.query_trades is not BaseGateway.query_trades
+
+    def test_query_returns_empty_when_disconnected(self):
+        """未连接时应返回空列表而非抛异常"""
+        from qmtquant.event.engine import EventEngine
+        from qmtquant.gateway.miniqmt_gateway import MiniQmtGateway
+
+        gw = MiniQmtGateway(EventEngine())
+        assert gw.query_orders() == []
+        assert gw.query_trades() == []
+
+    def test_reported_cancel_status_is_active(self):
+        """51 已报待撤必须算活动状态 —— 它仍占用资金，撤单未生效"""
+        from qmtquant.core.objects import OrderData
+        from qmtquant.gateway.miniqmt_gateway import STATUS_XT2VT
+
+        status = STATUS_XT2VT[xtconstant.ORDER_REPORTED_CANCEL]
+        assert OrderData(status=status).is_active()

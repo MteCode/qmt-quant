@@ -52,9 +52,12 @@ SECTOR_ALL_A = "沪深A股"
 class XtDataFeed(BaseDataFeed):
     """xtdata 数据源"""
 
-    def __init__(self, store_dir: str, dividend_type: str = "front") -> None:
+    def __init__(self, store_dir: str, dividend_type: str = "back") -> None:
         """
-        :param dividend_type: front(前复权) / back(后复权) / none(不复权)
+        :param dividend_type: back(后复权) / front(前复权) / none(不复权)
+
+            默认后复权。前复权对高分红股会算出负价格 —— 实测 601919 最低 -5.14 元，
+            沪深300 中 7 只共 851 根 K 线为负，会让均线与收益率计算静默失效。
         """
         self.store_dir = Path(store_dir)
         self.store_dir.mkdir(parents=True, exist_ok=True)

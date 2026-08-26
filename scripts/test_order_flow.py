@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.core.constants import ACTIVE_STATUSES, Direction, OrderType  # noqa: E402
 from qmtquant.engine.live_engine import LiveEngine  # noqa: E402
-from qmtquant.event.engine import EVENT_ORDER, EVENT_TRADE, Event, EventEngine  # noqa: E402
+from qmtquant.event.engine import EVENT_ORDER, EVENT_TRADE, EventEngine  # noqa: E402
 from qmtquant.gateway.miniqmt_gateway import MiniQmtGateway  # noqa: E402
 from qmtquant.risk.risk_manager import RiskManager  # noqa: E402
 from qmtquant.utils.logger import setup_logging  # noqa: E402
@@ -85,7 +85,7 @@ def main() -> int:
     print(f"标的      : {vt_symbol}")
     print(f"参考价    : {ref:.2f}（最近收盘）")
     print(f"委托      : 买入 {args.volume} 股 @ {price:.2f}  金额 {amount:,.2f} 元")
-    print(f"预期      : 挂单价远低于市价，不应成交；随后"
+    print("预期      : 挂单价远低于市价，不应成交；随后"
           + ("保留委托" if args.no_cancel else "撤单"))
     print(f"风控上限  : 单笔 {cfg.risk.max_order_value:,.0f} 元")
     print("=" * 62)

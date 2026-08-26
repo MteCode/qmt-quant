@@ -87,7 +87,7 @@ def main() -> int:
           + (f"（板块：{args.sector}）" if args.sector else ""))
     print(f"报表     : {', '.join(tables)}")
     print(f"存储目录 : {store.root.resolve()}")
-    print(f"数据源   : QMT（本地取数，不受限流影响）")
+    print("数据源   : QMT（本地取数，不受限流影响）")
     print("=" * 60)
 
     if not args.yes:
