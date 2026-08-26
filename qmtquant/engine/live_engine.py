@@ -9,7 +9,8 @@
 对策略暴露的接口与 BacktestEngine 完全一致，同一份策略代码可直接切换。
 """
 import logging
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 
 from ..core.constants import Direction, OrderType, Status
 from ..core.objects import (
@@ -200,7 +201,14 @@ class LiveEngine:
         return self.ticks.get(normalize(vt_symbol))
 
     def load_bars(self, strategy: StrategyBase, days: int, interval: str = "1d") -> None:
-        """用历史数据预热策略指标。数据源缺失时跳过，不阻断启动。"""
+        """用历史数据预热策略指标。
+
+        盘中重启时这一步是必须的：不预热的话均线等窗口指标是空的，
+        策略要等攒够 N 根 Bar 才能出信号，期间形同停摆。
+
+        预热期间 `strategy.trading` 必须为 False，否则会按历史行情真实下单。
+        数据源缺失时跳过，不阻断启动。
+        """
         from ..config import get_config
         from ..core.constants import Interval
 
@@ -213,14 +221,39 @@ class LiveEngine:
             return
 
         end = datetime.now().strftime("%Y-%m-%d")
-        start = (datetime.now() - __import__("datetime").timedelta(days=days * 2)).strftime("%Y-%m-%d")
-        bars = feed.load_bars(strategy.vt_symbols, start, end, Interval(interval))
-        for bar in bars:
-            try:
-                strategy.on_bar(bar)
-            except Exception:
-                logger.exception("预热推送 Bar 异常: %s", strategy.strategy_name)
-        logger.info("策略 %s 预热完成，%d 根 Bar", strategy.strategy_name, len(bars))
+        # 自然日转交易日：留 2 倍余量覆盖周末与节假日
+        start = (datetime.now() - timedelta(days=days * 2)).strftime("%Y-%m-%d")
+
+        try:
+            bars = feed.load_bars(strategy.vt_symbols, start, end, Interval(interval))
+        except Exception:
+            logger.exception("预热数据加载失败: %s", strategy.strategy_name)
+            return
+
+        if not bars:
+            logger.warning("策略 %s 无预热数据，指标需盘中自行积累。"
+                           "建议先运行 scripts/download_data.py", strategy.strategy_name)
+            return
+
+        was_trading = strategy.trading
+        strategy.trading = False   # 预热期禁止下单
+        try:
+            grouped: dict[datetime, dict[str, BarData]] = {}
+            for bar in bars:
+                grouped.setdefault(bar.datetime, {})[bar.vt_symbol] = bar
+            for dt in sorted(grouped):
+                section = grouped[dt]
+                strategy.on_bars(section)
+                for bar in section.values():
+                    strategy.on_bar(bar)
+        except Exception:
+            logger.exception("预热推送 Bar 异常: %s", strategy.strategy_name)
+        finally:
+            strategy.trading = was_trading
+
+        logger.info("策略 %s 预热完成，%d 根 Bar（%s ~ %s）",
+                    strategy.strategy_name, len(bars),
+                    bars[0].datetime.date(), bars[-1].datetime.date())
 
     # ------------------------------------------------------------ 事件处理
 
@@ -338,8 +371,24 @@ class LiveEngine:
 
         self.gateway.query_account()
         self.gateway.query_position()
+
+        # 查询是异步回调，等事件处理完再打印，否则账户还是 None
+        deadline = time.time() + 5
+        while self.account is None and time.time() < deadline:
+            time.sleep(0.1)
+
+        if self.account:
+            logger.info("账户 %s | 总资产 %.2f | 可用 %.2f | 市值 %.2f",
+                        self.account.accountid, self.account.balance,
+                        self.account.available, self.account.market_value)
+        else:
+            logger.error("对账失败：查询不到账户资金，请检查资金账号与账户类型配置")
+
         logger.info("对账完成：持仓 %d 个标的，活动委托 %d 笔",
                     len(self.positions), len(active))
+        for pos in self.positions.values():
+            logger.info("  持仓 %s 数量=%s 可用=%s 成本=%.3f",
+                        pos.vt_symbol, pos.volume, pos.available, pos.price)
         return not active
 
     def daily_settle(self) -> None:

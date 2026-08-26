@@ -27,6 +27,9 @@ class MaCrossStrategy(StrategyBase):
 
     def on_init(self) -> None:
         self.write_log(f"初始化：fast={self.fast_window} slow={self.slow_window}")
+        # 预热均线窗口。不预热的话盘中重启后要等 slow_window 根 Bar 才能出信号。
+        # 回测引擎的 load_bars 是空实现（数据已一次性装载），实盘才真正读历史。
+        self.load_bars(self.slow_window + 10)
 
     def on_start(self) -> None:
         self.write_log("策略启动")
@@ -66,10 +69,12 @@ class MaCrossStrategy(StrategyBase):
             volume = int(cash / bar.close_price // 100) * 100
             if volume > 0:
                 # 用略高于收盘的限价，提高次日开盘成交概率
-                self.buy(vt_symbol, bar.close_price * 1.02, volume)
-                self.write_log(f"金叉买入 {vt_symbol} {volume}股 @{bar.close_price:.2f}")
+                # 只在委托真正发出后才记日志：预热期 trading=False、
+                # 或被风控拦截时都会返回空，此时打「已买入」会误导排查
+                if self.buy(vt_symbol, bar.close_price * 1.02, volume):
+                    self.write_log(f"金叉买入 {vt_symbol} {volume}股 @{bar.close_price:.2f}")
 
         # 死叉且有仓 → 清仓
         elif prev_diff >= 0 > diff and pos > 0:
-            self.sell(vt_symbol, bar.close_price * 0.98, pos)
-            self.write_log(f"死叉卖出 {vt_symbol} {pos}股 @{bar.close_price:.2f}")
+            if self.sell(vt_symbol, bar.close_price * 0.98, pos):
+                self.write_log(f"死叉卖出 {vt_symbol} {pos}股 @{bar.close_price:.2f}")
