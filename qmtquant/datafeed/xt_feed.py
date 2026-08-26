@@ -36,6 +36,12 @@ RESAMPLE_RULE = {
     Interval.MONTHLY: "ME",
 }
 
+#: xtdata 的 volume 单位是**手**（1 手 = 100 股），amount 单位是元。
+#: 实测校验：amount / (volume × 100) 精确等于收盘价（600519/000001/000002 三只均符合）。
+#: 本项目内部统一用**股**，与 OrderRequest.volume 保持同一单位，
+#: 否则 VWAP、流动性过滤等任何混用量与额的计算都会差 100 倍。
+LOT_SIZE = 100
+
 #: 常用板块名称，xtdata 的板块名是中文
 SECTOR_HS300 = "沪深300"
 SECTOR_ZZ500 = "中证500"
@@ -277,15 +283,17 @@ class XtDataFeed(BaseDataFeed):
             symbol, exchange = split_vt_symbol(vt_symbol)
 
             for dt, row in df.iterrows():
-                volume = float(row.get("volume", 0) or 0)
+                lots = float(row.get("volume", 0) or 0)
                 bars.append(BarData(
                     symbol=symbol, exchange=exchange, datetime=dt.to_pydatetime(),
                     interval=interval,
                     open_price=float(row["open"]), high_price=float(row["high"]),
                     low_price=float(row["low"]), close_price=float(row["close"]),
-                    volume=volume, turnover=float(row.get("amount", 0) or 0),
+                    # 手 -> 股，与下单数量单位保持一致
+                    volume=lots * LOT_SIZE,
+                    turnover=float(row.get("amount", 0) or 0),
                     # xtdata 停牌日成交量为 0，据此标记
-                    suspended=(volume == 0),
+                    suspended=(lots == 0),
                     gateway_name="XT",
                 ))
 

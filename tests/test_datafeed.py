@@ -224,3 +224,53 @@ class TestSummary:
 
     def test_empty_store(self, feed):
         assert feed.summary().empty
+
+
+class TestVolumeUnit:
+    """xtdata 的 volume 单位是「手」，必须转成「股」。
+
+    实测校验：amount / (volume × 100) 精确等于收盘价。
+    不转换的话 VWAP 会差 100 倍（茅台算出 145265 而非 1482），
+    而且不会报错，只会让任何混用量与额的指标静默错掉。
+    """
+
+    def test_volume_converted_to_shares(self, feed):
+        df = pd.DataFrame({
+            "time": [int(pd.Timestamp("2024-01-02", tz="Asia/Shanghai").timestamp() * 1000)],
+            "open": [10.0], "high": [10.0], "low": [10.0], "close": [10.0],
+            "volume": [500],          # 500 手
+            "amount": [500_000.0],    # 50万元 = 500手 × 100股 × 10元
+        })
+        df.to_parquet(feed._path("000001.SZSE", Interval.DAILY))
+
+        bar = feed.load_bars(["000001.SZSE"], "2024-01-01", "2024-12-31")[0]
+        assert bar.volume == 50_000, "500 手应转换为 50000 股"
+        # 转换正确后，成交额除以成交量应等于价格
+        assert bar.turnover / bar.volume == pytest.approx(10.0)
+
+    def test_vwap_consistent_with_price(self, feed):
+        """整条链路校验：均价必须与收盘价同量级"""
+        ts = int(pd.Timestamp("2024-01-02 09:31", tz="Asia/Shanghai").timestamp() * 1000)
+        df = pd.DataFrame({
+            "time": [ts], "open": [1430.0], "high": [1430.0],
+            "low": [1430.0], "close": [1430.0],
+            "volume": [895],           # 895 手
+            "amount": [132_656_900.0],
+        })
+        df.to_parquet(feed._path("600519.SSE", Interval.MINUTE))
+
+        bar = feed.load_bars(["600519.SSE"], "2024-01-01", "2024-12-31",
+                             Interval.MINUTE)[0]
+        vwap = bar.turnover / bar.volume
+        assert 1000 < vwap < 2000, f"均价 {vwap} 应与股价同量级，实际差了 100 倍"
+
+    def test_zero_volume_still_marks_suspended(self, feed):
+        df = pd.DataFrame({
+            "time": [int(pd.Timestamp("2024-01-02", tz="Asia/Shanghai").timestamp() * 1000)],
+            "open": [10.0], "high": [10.0], "low": [10.0], "close": [10.0],
+            "volume": [0], "amount": [0.0],
+        })
+        df.to_parquet(feed._path("000001.SZSE", Interval.DAILY))
+        bar = feed.load_bars(["000001.SZSE"], "2024-01-01", "2024-12-31")[0]
+        assert bar.suspended is True
+        assert bar.volume == 0

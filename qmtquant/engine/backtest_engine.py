@@ -17,7 +17,7 @@ from ..core.constants import Direction, OrderType, Status
 from ..core.objects import BarData, OrderData, OrderRequest, TradeData
 from ..gateway.sim_gateway import calc_cost
 from ..strategy.base import StrategyBase
-from ..utils.symbol import split_vt_symbol
+from ..utils.symbol import normalize, split_vt_symbol
 from .performance import PerformanceStats, calculate_stats
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,10 @@ class BacktestEngine:
 
     def add_strategy(self, strategy_class: type[StrategyBase],
                      vt_symbols: list[str], setting: dict | None = None) -> None:
+        # 必须归一化：策略普遍用 vt_symbol 作字典 key，而 BarData.vt_symbol
+        # 永远是 `600519.SSE` 格式。若调用方传入 `600519.SH`，key 对不上，
+        # 策略会静默地一根 Bar 都处理不到 —— 不报错，只是永远没有信号。
+        vt_symbols = [normalize(s) for s in vt_symbols]
         self.strategy = strategy_class(self, strategy_class.__name__, vt_symbols, setting)
 
     def set_universe(self, provider) -> None:

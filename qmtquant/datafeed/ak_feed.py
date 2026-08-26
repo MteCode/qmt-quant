@@ -18,6 +18,7 @@ from ..core.constants import Interval
 from ..core.objects import BarData
 from ..utils.symbol import normalize, split_vt_symbol
 from .base import BaseDataFeed
+from .xt_feed import LOT_SIZE
 
 logger = logging.getLogger(__name__)
 
@@ -186,14 +187,16 @@ class AkshareDataFeed(BaseDataFeed):
             symbol, exchange = split_vt_symbol(vt_symbol)
 
             for dt, row in df.iterrows():
-                volume = float(row.get("volume", 0) or 0)
+                # 东财的成交量同样以「手」计价，统一转成股
+                lots = float(row.get("volume", 0) or 0)
                 bars.append(BarData(
                     symbol=symbol, exchange=exchange, datetime=dt.to_pydatetime(),
                     interval=interval,
                     open_price=float(row["open"]), high_price=float(row["high"]),
                     low_price=float(row["low"]), close_price=float(row["close"]),
-                    volume=volume, turnover=float(row.get("amount", 0) or 0),
-                    suspended=(volume == 0),
+                    volume=lots * LOT_SIZE,
+                    turnover=float(row.get("amount", 0) or 0),
+                    suspended=(lots == 0),
                     gateway_name="AK",
                 ))
 
