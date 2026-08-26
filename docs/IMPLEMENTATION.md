@@ -27,32 +27,46 @@ pytest tests/ -q
 python scripts/run_backtest.py --mock
 ```
 
-### 1.2 接入 xtquant（关键，最容易踩坑）
+### 1.2 接入 xtquant
 
-`xtquant` **不能用 pip 安装** —— PyPI 上同名的第三方包不是券商官方的，版本对不上会导致下单行为异常。
+`xtquant` 是迅投官方的 Python 接口包。取得方式有两种，**取决于你的客户端有没有打包它**：
 
-正确做法，二选一：
+**方式 A：pip 安装（多数情况用这个）**
 
-**方式 A：复制到虚拟环境（推荐）**
-
-```
-从：<QMT安装目录>\bin.x64\Lib\site-packages\xtquant
-到：<项目>\.venv\Lib\site-packages\xtquant
-```
-
-**方式 B：加 PYTHONPATH**
+PyPI 上的 `xtquant` 是迅投官方发布的，版本号是发布日期（如 `250807.1.2`）：
 
 ```bash
-set PYTHONPATH=D:\国金QMT交易端模拟\bin.x64\Lib\site-packages;%PYTHONPATH%
+pip install xtquant
 ```
+
+**方式 B：从客户端目录复制**
+
+有些券商定制版会把包放在 `<QMT安装目录>\bin.x64\Lib\site-packages\xtquant`，
+若存在则优先用它（与客户端版本严格一致）：
+
+```bash
+cp -r "D:/qmtApp/bin.x64/Lib/site-packages/xtquant" .venv/Lib/site-packages/
+```
+
+> 注意：并非所有客户端都打包了 Python 端。实测国金 miniQMT（`D:\qmtApp`）的
+> `bin.x64` 下**没有** `Lib` 目录，只有 `XtQuantServer.dll` 服务端，此时必须走方式 A。
 
 验证：
 
 ```bash
-python -c "from xtquant import xtdata; print(xtdata.__file__)"
+python -c "from xtquant import xtdata; print(xtdata.__file__); import xtquant; print(xtquant.__version__)"
 ```
 
-> **每次 QMT 客户端升级后都要重新复制一遍**，否则会出现连接成功但下单静默失败的情况。
+连通性验证（客户端需已登录）：
+
+```bash
+python -c "from xtquant import xtdata; print(len(xtdata.get_trading_dates('SH','20240101','20240110')))"
+```
+
+看到 `xtdata连接成功` 和交易日数量即为正常。
+
+> 客户端大版本升级后建议 `pip install -U xtquant`，接口不匹配可能导致
+> 连接成功但下单静默失败。
 
 ### 1.3 位数必须匹配
 
@@ -104,6 +118,41 @@ python scripts/download_data.py --symbols 000001.SZ,600519.SH --start 2020-01-01
 ```
 
 数据落到 `data/{周期}/{交易所}/{代码}.parquet`，之后回测**不再依赖 QMT 客户端**。
+
+### 3.1.1 各周期的历史深度（实测）
+
+在国金 miniQMT + 迅投数据源上实测（2026-08）：
+
+| 周期 | 可回溯范围 | 说明 |
+|------|-----------|------|
+| 日线 / 周线 / 月线 | **到标的上市日** | 如 600519 可取到 2001-08-27 |
+| 1m / 5m / 15m / 30m / 1h | **仅最近约 1 年** | 无论请求多早的起始日期，都只返回近 1 年 |
+
+分钟级的限制是**券商/数据源侧**的，不是本项目的 bug。请求 2020 年起的 1 分钟线，
+实际只会拿到最近 1 年。需要更长分钟历史，得向券商申请更高数据权限或购买迅投数据包。
+
+**这对策略设计的影响**：分钟级策略的样本外验证窗口很短（1 年内），
+过拟合风险显著高于日线策略。建议分钟级策略先在日线上验证逻辑成立，再下沉到分钟级。
+
+实测磁盘占用（沪深300 全量，Parquet 压缩后）：
+
+| 周期 | 占用 | 下载耗时 |
+|------|------|---------|
+| 日线（6.7 年） | 25.6 MB | ~25 秒 |
+| 周线（合成） | 5.9 MB | ~3 秒 |
+| 1 分钟线（1 年） | 545.7 MB | ~9 分钟 |
+
+### 3.1.2 板块数据为空
+
+全新安装的客户端，`get_stock_list_in_sector("沪深300")` 会返回 **0 只** ——
+板块数据是本地缓存，需要先拉一次：
+
+```python
+from xtquant import xtdata
+xtdata.download_sector_data()
+```
+
+本项目的 `get_sector_stocks()` 已内置这一步，取到空列表时会自动下载后重试。
 
 ### 3.2 复权处理
 
@@ -240,6 +289,31 @@ risk_manager.activate_kill_switch("行情异常")
 | 收不到行情回调 | 未调 `subscribe_quote` / 非交易时段 | 检查订阅、检查时间 |
 | 回测收益好得离谱 | 大概率前视偏差或过拟合 | 对照 4.1、4.3 逐条排查 |
 | 终端中文乱码 | Windows 控制台代码页是 GBK | `chcp 65001`，或直接看 `logs/` 里的文件 |
+| K 线日期比实际早一天 | xtdata 时间戳时区处理错误 | 见下方「时区陷阱」 |
+| 分钟线只有 1 年 | 券商侧限制，非 bug | 见 3.1.1 |
+| 沪深300 成分股取到 0 只 | 板块缓存为空 | 见 3.1.2 |
+| `config.yaml` 报 `unknown escape character` | YAML 双引号里 `\q` `\u` 被当转义符 | 路径改用正斜杠 `D:/qmtApp/userdata_mini` |
+
+### 7.1 时区陷阱（严重，会静默污染回测）
+
+`xtdata` 返回的 `time` 字段是 **UTC 毫秒时间戳，但它表示的是北京时间的那一刻**。
+
+```python
+# 错误 —— 得到 UTC
+pd.to_datetime(df["time"], unit="ms")
+# 2020-01-02 的日线 → 2020-01-01（元旦，休市日）
+# 09:31 的分钟线 → 01:31
+
+# 正确
+(pd.to_datetime(df["time"], unit="ms", utc=True)
+   .dt.tz_convert("Asia/Shanghai").dt.tz_localize(None))
+```
+
+危害在于**它不报错**：日线整体前移一天，周线归错周，回测用错日期却看不出异常。
+本项目已在 `XtDataFeed._normalize_df()` 中修正，并有回归测试
+（`tests/test_datafeed.py::TestTimezone`）锁住。
+
+自查方法：日线的第一根不应落在节假日，且所有日期的 `weekday() < 5`。
 
 ---
 

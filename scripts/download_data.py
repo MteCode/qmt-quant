@@ -28,17 +28,23 @@ from qmtquant.core.constants import MINUTE_INTERVALS, Interval  # noqa: E402
 from qmtquant.utils.logger import setup_logging  # noqa: E402
 from qmtquant.utils.symbol import normalize  # noqa: E402
 
-#: 每只股票每种周期的粗略磁盘占用（MB），用于下载前预警
-SIZE_HINT_MB = {
-    Interval.MINUTE: 12.0,      # 1分钟线 5 年约 12MB/只
-    Interval.MINUTE_5: 2.5,
-    Interval.MINUTE_15: 0.9,
-    Interval.MINUTE_30: 0.5,
-    Interval.HOUR: 0.3,
-    Interval.DAILY: 0.05,
-    Interval.WEEKLY: 0.01,
-    Interval.MONTHLY: 0.005,
+#: 每只股票每年的实测磁盘占用（MB，Parquet 压缩后）
+#: 实测依据：沪深300 全量下载后 1m=545MB/300只/1年，1d=25.6MB/300只/6.7年
+SIZE_HINT_MB_PER_YEAR = {
+    Interval.MINUTE: 1.85,
+    Interval.MINUTE_5: 0.37,
+    Interval.MINUTE_15: 0.13,
+    Interval.MINUTE_30: 0.07,
+    Interval.HOUR: 0.04,
+    Interval.DAILY: 0.013,
+    Interval.WEEKLY: 0.003,
+    Interval.MONTHLY: 0.001,
 }
+
+#: 券商侧对分钟级历史数据的保留年限。
+#: 实测：1m/5m/15m/30m/1h 全部只返回最近约 1 年，无论请求多早的起始日期。
+#: 日线不受此限（可回溯到标的上市日）。需要更长分钟历史要向券商申请或购买数据包。
+MINUTE_HISTORY_YEARS = 1.0
 
 
 def make_progress(interval: Interval):
@@ -63,10 +69,19 @@ def make_progress(interval: Interval):
     return _progress
 
 
+def effective_years(interval: Interval, years: float) -> float:
+    """实际能拿到的历史年限。分钟级会被券商截断到最近 1 年。"""
+    if interval in MINUTE_INTERVALS:
+        return min(years, MINUTE_HISTORY_YEARS)
+    return years
+
+
 def estimate_disk(symbols: int, intervals: list[Interval], years: float) -> float:
     """估算磁盘占用（MB）"""
-    scale = years / 5.0
-    return sum(SIZE_HINT_MB.get(iv, 0.1) * symbols * max(scale, 0.2) for iv in intervals)
+    return sum(
+        SIZE_HINT_MB_PER_YEAR.get(iv, 0.1) * symbols * effective_years(iv, years)
+        for iv in intervals
+    )
 
 
 def main() -> int:
@@ -148,7 +163,11 @@ def main() -> int:
     if any(i in MINUTE_INTERVALS for i in intervals):
         print()
         print("[!] 包含分钟级数据，注意：")
-        print("    - 300 只股票的 1 分钟线下载通常需要 30~90 分钟，取决于网络与券商限速")
+        if years > MINUTE_HISTORY_YEARS:
+            print(f"    - 券商只保留最近约 {MINUTE_HISTORY_YEARS:.0f} 年的分钟线，"
+                  f"早于此的数据取不到（日线不受限）")
+            print(f"      你请求了 {years:.1f} 年，实际只会拿到最近 "
+                  f"{MINUTE_HISTORY_YEARS:.0f} 年")
         print("    - QMT 客户端必须全程保持登录，中途掉线会导致部分标的失败")
         print("    - 中断后可加 --resume 续传")
     print("=" * 60)
