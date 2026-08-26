@@ -28,27 +28,58 @@ from .base import BaseGateway
 
 logger = logging.getLogger(__name__)
 
-# xtquant 委托状态 → 内部状态。数值取自 xtconstant，用字面量避免 import 期依赖。
-STATUS_XT2VT: dict[int, Status] = {
-    48: Status.NOTTRADED,     # ORDER_UNREPORTED 未报
-    49: Status.SUBMITTING,    # ORDER_WAIT_REPORTING 待报
-    50: Status.NOTTRADED,     # ORDER_REPORTED 已报
-    51: Status.SUBMITTING,    # ORDER_REPORTED_CANCEL 已报待撤
-    52: Status.PARTTRADED,    # ORDER_PARTSUCC_CANCEL 部成待撤
-    53: Status.SUBMITTING,    # ORDER_PART_CANCEL 部撤
-    54: Status.CANCELLED,     # ORDER_CANCELED 已撤
-    55: Status.PARTTRADED,    # ORDER_PART_SUCC 部成
-    56: Status.ALLTRADED,     # ORDER_SUCCEEDED 已成
-    57: Status.REJECTED,      # ORDER_JUNK 废单
+
+def _load_xt_constants():
+    """从 xtconstant 读取枚举值。
+
+    这些值曾经在不同版本间变动过（例如深市限价一度用 101，新版统一为
+    FIX_PRICE=11），硬编码字面量会在 SDK 升级后静默失效 —— 报单返回 -1
+    但看不出原因。因此一律从 SDK 读，读不到再退回已知默认值。
+    """
+    try:
+        from xtquant import xtconstant as c
+    except ImportError:
+        return None
+
+    return {
+        "status": {
+            c.ORDER_UNREPORTED: Status.SUBMITTING,       # 48 未报
+            c.ORDER_WAIT_REPORTING: Status.SUBMITTING,   # 49 待报
+            c.ORDER_REPORTED: Status.NOTTRADED,          # 50 已报
+            c.ORDER_REPORTED_CANCEL: Status.NOTTRADED,   # 51 已报待撤
+            c.ORDER_PARTSUCC_CANCEL: Status.PARTTRADED,  # 52 部成待撤
+            c.ORDER_PART_CANCEL: Status.CANCELLED,       # 53 部撤
+            c.ORDER_CANCELED: Status.CANCELLED,          # 54 已撤
+            c.ORDER_PART_SUCC: Status.PARTTRADED,        # 55 部成
+            c.ORDER_SUCCEEDED: Status.ALLTRADED,         # 56 已成
+            c.ORDER_JUNK: Status.REJECTED,               # 57 废单
+        },
+        "direction": {Direction.LONG: c.STOCK_BUY, Direction.SHORT: c.STOCK_SELL},
+        # FIX_PRICE 沪深通用；旧版按交易所区分的做法已废弃
+        "limit": c.FIX_PRICE,
+        "market": getattr(c, "LATEST_PRICE", c.FIX_PRICE),
+    }
+
+
+_XT = _load_xt_constants()
+
+#: xtquant 委托状态 → 内部状态
+STATUS_XT2VT: dict[int, Status] = (_XT or {}).get("status") or {
+    48: Status.SUBMITTING, 49: Status.SUBMITTING, 50: Status.NOTTRADED,
+    51: Status.NOTTRADED, 52: Status.PARTTRADED, 53: Status.CANCELLED,
+    54: Status.CANCELLED, 55: Status.PARTTRADED, 56: Status.ALLTRADED,
+    57: Status.REJECTED,
 }
 
-#: 内部方向 → xtquant 委托类型（股票买入 23 / 卖出 24）
-DIRECTION_VT2XT = {Direction.LONG: 23, Direction.SHORT: 24}
+#: 内部方向 → xtquant 委托类型
+DIRECTION_VT2XT = (_XT or {}).get("direction") or {
+    Direction.LONG: 23, Direction.SHORT: 24,
+}
 DIRECTION_XT2VT = {v: k for k, v in DIRECTION_VT2XT.items()}
 
-#: 报价类型：限价（沪 11 / 深 101），市价这里统一用对手价最优
-PRICE_TYPE_LIMIT = {Exchange.SSE: 11, Exchange.SZSE: 101, Exchange.BSE: 101}
-PRICE_TYPE_MARKET = {Exchange.SSE: 4, Exchange.SZSE: 5, Exchange.BSE: 5}
+#: 限价 / 市价的报价类型
+PRICE_TYPE_LIMIT_VALUE = (_XT or {}).get("limit", 11)
+PRICE_TYPE_MARKET_VALUE = (_XT or {}).get("market", 5)
 
 
 class MiniQmtGateway(BaseGateway):
@@ -224,8 +255,8 @@ class MiniQmtGateway(BaseGateway):
         )
         self._orders[orderid] = order
 
-        price_type = (PRICE_TYPE_LIMIT if req.order_type == OrderType.LIMIT
-                      else PRICE_TYPE_MARKET)[req.exchange]
+        price_type = (PRICE_TYPE_LIMIT_VALUE if req.order_type == OrderType.LIMIT
+                      else PRICE_TYPE_MARKET_VALUE)
 
         try:
             broker_id = self._trader.order_stock(
@@ -244,7 +275,14 @@ class MiniQmtGateway(BaseGateway):
 
         if broker_id is None or broker_id < 0:
             order.status = Status.REJECTED
-            order.message = "报单被交易端拒绝"
+            # 带上返回码与入参：xtquant 报单失败只返回负数，不给原因，
+            # 不记下这些的话事后完全无从排查
+            order.message = (f"交易端拒绝 code={broker_id} "
+                             f"price_type={price_type} price={req.price} "
+                             f"volume={req.volume}")
+            logger.error("报单被拒 %s: %s。常见原因：非交易时段、"
+                         "无量化交易权限、价格超出涨跌停、资金/持仓不足",
+                         req.vt_symbol, order.message)
             self.on_order(order)
             return ""
 
