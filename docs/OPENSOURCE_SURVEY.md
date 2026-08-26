@@ -2,6 +2,32 @@
 
 > 目标：Windows 本地、A 股、已有国金 AMT 账号 + miniQMT / 大 QMT，选一个能二次开发的开源底座。
 
+## 0. GitHub 星标实况（2026-08-26 经 GitHub API 实测）
+
+| Stars | 项目 | 许可证 | 最近提交 | 语言 | 能否 A股实盘 |
+|------:|------|--------|---------|------|-------------|
+| 47,944 | [microsoft/qlib](https://github.com/microsoft/qlib) | MIT | 2026-07-23 | Python | ❌ 只做研究 |
+| 44,775 | [vnpy/vnpy](https://github.com/vnpy/vnpy) | MIT | 2026-08-10 | Python | ⚠ 期货强，miniQMT 需魔改 |
+| 22,969 | [mementum/backtrader](https://github.com/mementum/backtrader) | GPL-3.0 | **2024-08-19** | Python | ❌ 已停更 2 年 |
+| 22,243 | [akfamily/akshare](https://github.com/akfamily/akshare) | MIT | 2026-08-26 | Python | — 数据源 |
+| 21,355 | [QuantConnect/Lean](https://github.com/QuantConnect/Lean) | Apache-2.0 | 2026-08-25 | C# | ❌ 不支持 A股券商 |
+| 20,067 | [quantopian/zipline](https://github.com/quantopian/zipline) | Apache-2.0 | **2024-02-13** | Python | ❌ 项目已死 |
+| 18,391 | [UFund-Me/Qbot](https://github.com/UFund-Me/Qbot) | MIT | 2026-03-11 | Notebook | ⚠ 偏演示 |
+| 18,232 | [bbfamily/abu](https://github.com/bbfamily/abu) | GPL-3.0 | 2026-01-24 | Python | ❌ 无实盘通道 |
+| 16,105 | [AI4Finance/FinRL](https://github.com/AI4Finance-Foundation/FinRL) | MIT | 2026-07-13 | Notebook | ❌ 强化学习研究 |
+| 15,367 | [waditu/tushare](https://github.com/waditu/tushare) | BSD-3 | **2024-03-13** | Python | — 数据源 |
+| 10,643 | [StockSharp](https://github.com/StockSharp/StockSharp) | 自定义 | 2026-08-25 | C# | ❌ 不含 A股 |
+| 6,722 | [ricequant/rqalpha](https://github.com/ricequant/rqalpha) | 自定义 | 2026-08-24 | Python | ⚠ 绑定米筐生态 |
+| 6,297 | [wondertrader](https://github.com/wondertrader/wondertrader) | MIT | 2025-09-30 | C++ | ⚠ 重心在 CTP 期货 |
+| 3,468 | [fasiondog/hikyuu](https://github.com/fasiondog/hikyuu) | Apache-2.0 | 2026-08-26 | C++ | ❌ 回测研究为主 |
+| 1,537 | [khscience/OSkhQuant](https://github.com/khscience/OSkhQuant) | CC BY-NC | 2026-04-18 | Python | ❌ 官方明确不含实盘 |
+
+**关键观察：星数与「能否解决本项目的问题」几乎无关。**
+
+- 星数前两名（qlib 4.8w、vnpy 4.5w）都不能直接用 miniQMT 下 A 股单
+- 22.9k 的 backtrader 和 20k 的 zipline **都已停止维护两年以上**
+- 唯一 miniQMT 原生的 OSkhQuant 只有 1.5k 星，且明确不含实盘
+
 ## 1. 候选框架对比
 
 | 框架 | 语言 | 类型 | A股实盘 | QMT/miniQMT 对接 | 二开难度 | 结论 |
