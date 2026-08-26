@@ -42,14 +42,22 @@ class AkshareDataFeed(BaseDataFeed):
     """akshare 数据源，主要用于补齐 QMT 缺失的退市股行情"""
 
     def __init__(self, store_dir: str, dividend_type: str = "front",
-                 request_interval: float = 0.3) -> None:
+                 request_interval: float = 2.0, max_retry: int = 3,
+                 circuit_breaker: int = 15) -> None:
         """
-        :param request_interval: 请求间隔（秒）。太快容易被上游限流。
+        :param request_interval: 请求间隔（秒）。
+            实测 0.3s 跑 254 个标的后被东财限流，直连与代理均被拒，
+            且封禁持续存在。保守取 2.0s。
+        :param max_retry: 单标的重试次数，指数退避
+        :param circuit_breaker: 连续失败多少个就中止。
+            连续失败通常意味着被限流，继续打只会延长封禁时间。
         """
         self.store_dir = Path(store_dir)
         self.store_dir.mkdir(parents=True, exist_ok=True)
         self.dividend_type = dividend_type
         self.request_interval = request_interval
+        self.max_retry = max_retry
+        self.circuit_breaker = circuit_breaker
 
     def _path(self, vt_symbol: str, interval: Interval) -> Path:
         symbol, exchange = split_vt_symbol(vt_symbol)
@@ -83,6 +91,7 @@ class AkshareDataFeed(BaseDataFeed):
         s, e = start.replace("-", ""), end.replace("-", "")
         result = {"ok": [], "failed": [], "skipped": []}
         total = len(vt_symbols)
+        consecutive_failures = 0
 
         for i, raw in enumerate(vt_symbols, 1):
             vt_symbol = normalize(raw)
@@ -94,26 +103,24 @@ class AkshareDataFeed(BaseDataFeed):
                 continue
 
             symbol, _ = split_vt_symbol(vt_symbol)
-            try:
-                # akshare 偶发无限阻塞，用线程池强制超时
-                with cf.ThreadPoolExecutor(1) as ex:
-                    df = ex.submit(
-                        ak.stock_zh_a_hist, symbol=symbol, period=period,
-                        start_date=s, end_date=e, adjust=adjust,
-                    ).result(timeout=timeout)
-            except cf.TimeoutError:
-                logger.warning("下载超时(%.0fs): %s", timeout, vt_symbol)
-                result["failed"].append(vt_symbol)
-                continue
-            except Exception as exc:
-                logger.warning("下载失败 %s: %s", vt_symbol, exc)
-                result["failed"].append(vt_symbol)
-                continue
+            df = self._fetch_with_retry(ak, cf, symbol, period, s, e, adjust,
+                                        timeout, vt_symbol)
 
             if df is None or df.empty:
                 result["failed"].append(vt_symbol)
+                consecutive_failures += 1
+                # 连续失败基本等于被限流，继续打只会延长封禁
+                if consecutive_failures >= self.circuit_breaker:
+                    logger.error(
+                        "连续 %d 个标的失败，判定为上游限流，中止本次下载。"
+                        "建议等待 30~60 分钟后加 --resume 重跑",
+                        consecutive_failures)
+                    result["failed"].extend(
+                        normalize(x) for x in vt_symbols[i:])
+                    break
                 continue
 
+            consecutive_failures = 0
             df = self._normalize(df)
             df.to_parquet(self._path(vt_symbol, interval))
             result["ok"].append(vt_symbol)
@@ -122,6 +129,35 @@ class AkshareDataFeed(BaseDataFeed):
         logger.info("akshare 下载完成 %s：成功 %d 跳过 %d 失败 %d", interval.value,
                     len(result["ok"]), len(result["skipped"]), len(result["failed"]))
         return result
+
+    def _fetch_with_retry(self, ak, cf, symbol: str, period: str, s: str, e: str,
+                          adjust: str, timeout: float, vt_symbol: str):
+        """取单个标的，失败按指数退避重试。
+
+        注意：**退市股只有东财有数据**，新浪接口对退市代码返回空。
+        所以这里不做数据源回退，只能重试等限流解除。
+        """
+        last_err = None
+        for attempt in range(self.max_retry):
+            if attempt:
+                delay = self.request_interval * (2 ** attempt)
+                logger.debug("重试 %s（第 %d 次），等待 %.1fs", vt_symbol, attempt, delay)
+                time.sleep(delay)
+            try:
+                # akshare 偶发无限阻塞，用线程池强制超时
+                with cf.ThreadPoolExecutor(1) as ex:
+                    return ex.submit(
+                        ak.stock_zh_a_hist, symbol=symbol, period=period,
+                        start_date=s, end_date=e, adjust=adjust,
+                    ).result(timeout=timeout)
+            except cf.TimeoutError:
+                last_err = f"超时>{timeout:.0f}s"
+            except Exception as exc:
+                last_err = f"{type(exc).__name__}: {str(exc)[:80]}"
+
+        logger.warning("下载失败 %s（重试 %d 次）: %s",
+                       vt_symbol, self.max_retry, last_err)
+        return None
 
     @staticmethod
     def _normalize(df: pd.DataFrame) -> pd.DataFrame:
