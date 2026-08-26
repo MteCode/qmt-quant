@@ -7,8 +7,9 @@ log_level: INFO
 gateway:
   # sim = 本地模拟撮合（联调用）; miniqmt = 真实/模拟券商通道; amt = 国金算法通道
   name: sim
-  # miniQMT 数据目录，注意是 userdata_mini 而不是安装根目录
-  qmt_path: "D:\\国金QMT交易端模拟\\userdata_mini"
+  # miniQMT 数据目录，注意是 userdata_mini 而不是安装根目录。
+  # 用正斜杠 —— Windows 同样识别，且避免 YAML 双引号里 \q \u 被当成转义符报错。
+  qmt_path: 'D:/qmtApp/userdata_mini'
   account_id: ""            # 资金账号
   account_type: STOCK       # STOCK / CREDIT(两融)
   reconnect_max_retry: 10

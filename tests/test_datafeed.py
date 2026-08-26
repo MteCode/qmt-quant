@@ -119,6 +119,66 @@ class TestResampleWeekly:
         assert not feed._path("999999.SZSE", Interval.WEEKLY).exists()
 
 
+class TestTimezone:
+    """xtdata 的 time 是 UTC 毫秒戳但表示北京时间，处理不当会整体偏移。
+
+    这个 bug 很隐蔽：日线会前移一天，分钟线前移 8 小时，回测静默用错日期。
+    """
+
+    def test_daily_timestamp_not_shifted(self, feed):
+        # 1577894400000 = 2020-01-02 00:00 北京时间（= 2020-01-01 16:00 UTC）
+        df = pd.DataFrame({
+            "time": [1577894400000, 1577980800000],
+            "open": [10.0, 11.0], "high": [11.0, 12.0],
+            "low": [9.0, 10.0], "close": [10.5, 11.5],
+            "volume": [100, 200],
+        })
+        out = feed._normalize_df(df)
+        assert out.index[0] == pd.Timestamp("2020-01-02")
+        assert out.index[1] == pd.Timestamp("2020-01-03")
+
+    def test_minute_timestamp_not_shifted(self, feed):
+        # 2024-01-02 09:31:00 北京时间
+        ts = int(pd.Timestamp("2024-01-02 09:31:00", tz="Asia/Shanghai").timestamp() * 1000)
+        df = pd.DataFrame({
+            "time": [ts], "open": [10.0], "high": [10.0],
+            "low": [10.0], "close": [10.0], "volume": [100],
+        })
+        out = feed._normalize_df(df)
+        assert out.index[0] == pd.Timestamp("2024-01-02 09:31:00")
+        # 开盘分钟线必须落在交易时段内，不能是凌晨
+        assert out.index[0].hour == 9
+
+    def test_index_fallback_when_no_time_column(self, feed):
+        """没有 time 列时退回用 index（xtdata 的 index 是 'YYYYMMDD' 字符串）"""
+        df = pd.DataFrame({
+            "open": [10.0], "high": [10.0], "low": [10.0], "close": [10.0],
+        }, index=["20240102"])
+        out = feed._normalize_df(df)
+        assert out.index[0] == pd.Timestamp("2024-01-02")
+
+    def test_weekly_resample_uses_correct_dates(self, feed):
+        """时区错误会让周线归错周，这里验证整条链路"""
+        # 2024-01-02(二) ~ 2024-01-05(五)，同属一周
+        times = [int(pd.Timestamp(d, tz="Asia/Shanghai").timestamp() * 1000)
+                 for d in ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"]]
+        df = pd.DataFrame({
+            "time": times,
+            "open": [10.0, 11, 12, 11.5], "high": [11.0, 13, 12.5, 12],
+            "low": [9.5, 10.8, 11, 11], "close": [10.8, 12, 11.6, 11.9],
+            "volume": [100, 200, 300, 400],
+        })
+        df.to_parquet(feed._path("000001.SZSE", Interval.DAILY))
+        feed.resample_from_daily(["000001.SZSE"], Interval.WEEKLY)
+
+        out = pd.read_parquet(feed._path("000001.SZSE", Interval.WEEKLY))
+        # 若时区处理错误，2024-01-01(周一) 会被划到上一周，产出 2 根周线
+        assert len(out) == 1
+        assert out.index[0] == pd.Timestamp("2024-01-05")   # W-FRI 周终点
+        assert out.iloc[0]["open"] == 10.0
+        assert out.iloc[0]["close"] == 11.9
+
+
 class TestLoadBars:
     def test_load_and_filter_by_date(self, feed):
         df = make_daily(

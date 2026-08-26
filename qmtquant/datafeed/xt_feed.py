@@ -66,7 +66,8 @@ class XtDataFeed(BaseDataFeed):
 
     # ------------------------------------------------------------ 板块成分股
 
-    def get_sector_stocks(self, sector: str = SECTOR_HS300) -> list[str]:
+    def get_sector_stocks(self, sector: str = SECTOR_HS300,
+                          auto_download: bool = True) -> list[str]:
         """取板块成分股，返回 vt_symbol 列表。
 
         注意：xtdata 返回的是**当前**成分股，不是历史成分。
@@ -75,9 +76,19 @@ class XtDataFeed(BaseDataFeed):
         from xtquant import xtdata
 
         codes = xtdata.get_stock_list_in_sector(sector)
+
+        # 板块数据是本地缓存，全新安装的客户端为空，需要先拉一次
+        if not codes and auto_download:
+            logger.info("板块数据为空，正在下载板块列表（首次运行需要几十秒）...")
+            try:
+                xtdata.download_sector_data()
+                codes = xtdata.get_stock_list_in_sector(sector)
+            except Exception:
+                logger.exception("下载板块数据失败")
+
         if not codes:
             logger.warning("板块 %s 未取到成分股。请确认 QMT 客户端已登录，"
-                           "并在客户端「板块」中下载过该板块数据", sector)
+                           "且板块名称正确（可用 xtdata.get_sector_list() 查看）", sector)
             return []
 
         result = []
@@ -227,15 +238,23 @@ class XtDataFeed(BaseDataFeed):
 
     @staticmethod
     def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
-        """把 xtdata 的 DataFrame 统一成 DatetimeIndex + 小写列名"""
+        """把 xtdata 的 DataFrame 统一成 DatetimeIndex（北京时间）+ 小写列名。
+
+        坑：xtdata 的 `time` 是 UTC 毫秒戳，但它表示的是**北京时间**的那一刻。
+        直接 `to_datetime(unit="ms")` 得到 UTC，会让日线整体前移一天
+        （2020-01-02 的 K 线变成 2020-01-01），分钟线前移 8 小时
+        （09:31 变成 01:31）。必须显式转到 Asia/Shanghai 再去掉时区。
+        """
         df = df.copy()
         df.columns = [c.lower() for c in df.columns]
 
         if "time" in df.columns and df["time"].notna().any():
-            idx = pd.to_datetime(df["time"], unit="ms")
+            idx = (pd.to_datetime(df["time"], unit="ms", utc=True)
+                   .dt.tz_convert("Asia/Shanghai")
+                   .dt.tz_localize(None))
         else:
             idx = pd.to_datetime(df.index.astype(str), errors="coerce")
-        df.index = idx
+        df.index = pd.DatetimeIndex(idx)
         return df[~df.index.isna()].sort_index()
 
     # ------------------------------------------------------------ 读取
