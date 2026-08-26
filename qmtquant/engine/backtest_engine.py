@@ -43,6 +43,8 @@ class BacktestEngine:
         self.strategy: StrategyBase | None = None
         self.history: dict[datetime, dict[str, BarData]] = {}
         self.pending_orders: list[OrderRequest] = []
+        #: 标的池。为 None 时策略自行决定交易哪些标的
+        self.universe = None
 
         self.trades: list[TradeData] = []
         self.orders: list[OrderData] = []
@@ -68,6 +70,20 @@ class BacktestEngine:
     def add_strategy(self, strategy_class: type[StrategyBase],
                      vt_symbols: list[str], setting: dict | None = None) -> None:
         self.strategy = strategy_class(self, strategy_class.__name__, vt_symbols, setting)
+
+    def set_universe(self, provider) -> None:
+        """设置标的池。选股型策略通过 self.engine.get_universe(dt) 取当日可选标的。"""
+        self.universe = provider
+        report = provider.describe_bias()
+        logger.info("标的池已设置，%d 个标的", report.size)
+        if not report.is_clean:
+            logger.warning("标的池存在偏差，回测收益会被系统性高估：\n%s", report.summary())
+
+    def get_universe(self, dt=None) -> list[str]:
+        """取指定日期（默认当前回测时点）的可交易标的"""
+        if self.universe is None:
+            return list(self.strategy.vt_symbols) if self.strategy else []
+        return self.universe.get_universe(dt or self._current_dt)
 
     # ------------------------------------------------------------ 主循环
 
@@ -121,6 +137,11 @@ class BacktestEngine:
     def _match_pending(self, bars: dict[str, BarData]) -> None:
         """用当根 Bar 的开盘价撮合挂起委托；不可成交的直接作废（不留隔日单）"""
         pending, self.pending_orders = self.pending_orders, []
+
+        # 卖单必须排在买单之前：调仓时先卖出释放资金，买单才有钱成交。
+        # 否则同一批调仓指令会因「资金不足」大面积拒单，回测结果严重失真。
+        pending.sort(key=lambda r: 0 if r.direction == Direction.SHORT else 1)
+
         for req in pending:
             bar = bars.get(req.vt_symbol)
             if bar is None or bar.suspended:
