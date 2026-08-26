@@ -118,3 +118,63 @@ class TestHistoricalUniverse:
         pd.DataFrame({"d": ["2020-01-02"], "s": ["000001.SZ"]}).to_csv(p, index=False)
         with pytest.raises(ValueError, match="date"):
             HistoricalUniverse(p)
+
+
+class TestFullMarketUniverse:
+    """全市场 PIT 标的池：唯一同时消除幸存者偏差与成分股前视的实现"""
+
+    @pytest.fixture
+    def meta(self):
+        return pd.DataFrame({
+            "vt_symbol": ["000001.SZ", "600519.SH", "000004.SZ", "301999.SZ"],
+            "name": ["平安银行", "贵州茅台", "国华退", "次新股"],
+            "listing_date": [pd.Timestamp("1991-04-03"), pd.Timestamp("2001-08-27"),
+                             pd.Timestamp("1990-12-01"), pd.Timestamp("2025-12-03")],
+            "delist_date": [pd.NaT, pd.NaT, pd.Timestamp("2026-07-14"), pd.NaT],
+            "status": ["listed", "listed", "delisted", "listed"],
+        })
+
+    def test_delisted_included_before_delisting(self, meta):
+        """核心：退市股在退市**之前**必须留在标的池里。
+
+        它缺席正是幸存者偏差的来源 —— 当年能买到，回测就必须能选到。
+        """
+        from qmtquant.universe.providers import FullMarketUniverse
+        u = FullMarketUniverse(meta, min_days_since_ipo=0)
+        assert "000004.SZSE" in u.get_universe(pd.Timestamp("2024-01-02"))
+
+    def test_delisted_excluded_after_delisting(self, meta):
+        from qmtquant.universe.providers import FullMarketUniverse
+        u = FullMarketUniverse(meta, min_days_since_ipo=0)
+        assert "000004.SZSE" not in u.get_universe(pd.Timestamp("2026-08-01"))
+
+    def test_not_yet_listed_excluded(self, meta):
+        from qmtquant.universe.providers import FullMarketUniverse
+        u = FullMarketUniverse(meta, min_days_since_ipo=0)
+        assert "301999.SZSE" not in u.get_universe(pd.Timestamp("2021-01-04"))
+
+    def test_min_days_since_ipo(self, meta):
+        from qmtquant.universe.providers import FullMarketUniverse
+        u = FullMarketUniverse(meta, min_days_since_ipo=60)
+        assert "301999.SZSE" not in u.get_universe(pd.Timestamp("2025-12-20"))
+        assert "301999.SZSE" in u.get_universe(pd.Timestamp("2026-06-01"))
+
+    def test_bias_report_is_clean_with_delisted(self, meta):
+        from qmtquant.universe.providers import FullMarketUniverse
+        r = FullMarketUniverse(meta).describe_bias()
+        assert r.survivorship is False
+        assert r.membership_lookahead is False
+        assert r.is_clean is True
+
+    def test_bias_report_flags_missing_delisted(self, meta):
+        """名单里没有退市股时，必须如实报告幸存者偏差仍在"""
+        from qmtquant.universe.providers import FullMarketUniverse
+        live_only = meta[meta["status"] == "listed"]
+        r = FullMarketUniverse(live_only).describe_bias()
+        assert r.survivorship is True
+        assert r.is_clean is False
+
+    def test_missing_columns_rejected(self):
+        from qmtquant.universe.providers import FullMarketUniverse
+        with pytest.raises(ValueError, match="缺少列"):
+            FullMarketUniverse(pd.DataFrame({"vt_symbol": ["000001.SZ"]}))

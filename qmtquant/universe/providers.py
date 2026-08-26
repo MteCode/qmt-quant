@@ -104,6 +104,70 @@ class PointInTimeUniverse(UniverseProvider):
         return report
 
 
+class FullMarketUniverse(UniverseProvider):
+    """全市场 point-in-time 标的池（含已退市股票）。
+
+    这是本项目唯一**同时消除幸存者偏差与成分股前视偏差**的标的池：
+    - 不依赖任何指数成分名单 → 没有成分股前视
+    - 标的池含已退市股票，按退市日剔除 → 没有幸存者偏差
+
+    前提：`universe_full.parquet` 必须由 `scripts/build_history_universe.py`
+    生成（在市股票来自 QMT，退市股票来自 akshare —— QMT 中退市股不存在）。
+    """
+
+    def __init__(self, meta: pd.DataFrame, min_days_since_ipo: int = 60) -> None:
+        """
+        :param meta: 含 vt_symbol / listing_date / delist_date / status 列
+        """
+        required = {"vt_symbol", "listing_date", "delist_date"}
+        missing = required - set(meta.columns)
+        if missing:
+            raise ValueError(f"标的池缺少列: {missing}")
+
+        self.meta = meta.copy()
+        self.meta["vt_symbol"] = self.meta["vt_symbol"].map(normalize)
+        self.min_days_since_ipo = min_days_since_ipo
+
+        self._n_delisted = int((self.meta.get("status") == "delisted").sum())
+        # 预转成 numpy，避免每个调仓日都做一次 DataFrame 过滤
+        self._symbols = self.meta["vt_symbol"].to_numpy()
+        self._listing = pd.to_datetime(self.meta["listing_date"]).to_numpy()
+        self._delist = pd.to_datetime(self.meta["delist_date"]).to_numpy()
+
+    @classmethod
+    def from_parquet(cls, path: str | Path, min_days_since_ipo: int = 60):
+        return cls(pd.read_parquet(path), min_days_since_ipo)
+
+    def get_universe(self, dt) -> list[str]:
+        d = pd.Timestamp(_to_date(dt))
+        offset = pd.Timedelta(days=self.min_days_since_ipo)
+
+        listed_ok = self._listing <= (d - offset).to_datetime64()
+        # NaT 比较恒为 False，未退市的标的自然通过
+        not_delisted = ~(self._delist <= d.to_datetime64())
+        return sorted(self._symbols[listed_ok & not_delisted].tolist())
+
+    def all_symbols(self) -> list[str]:
+        return sorted(self._symbols.tolist())
+
+    def describe_bias(self) -> BiasReport:
+        has_delisted = self._n_delisted > 0
+        return BiasReport(
+            survivorship=not has_delisted,
+            membership_lookahead=False,
+            listing_filtered=True,
+            size=len(self._symbols),
+            notes=[
+                "全市场标的池，不依赖指数成分 → 无成分股前视偏差",
+                f"含已退市标的 {self._n_delisted} 只，按退市日剔除"
+                if has_delisted else "⚠ 不含退市标的，幸存者偏差未消除",
+                f"上市不足 {self.min_days_since_ipo} 个自然日的标的不纳入",
+                "注意：仍需确保退市标的的**行情数据**也已下载，"
+                "否则它们虽在名单中却无法被选中",
+            ],
+        )
+
+
 class HistoricalUniverse(UniverseProvider):
     """历史成分股标的池：从 CSV 读取每个日期的真实成分名单。
 
