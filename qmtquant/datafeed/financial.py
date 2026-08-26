@@ -215,6 +215,14 @@ class FinancialStore:
         这是本模块的核心接口：只返回公告日 <= date 的记录，
         因此回测中不可能用到当时尚未披露的数据。
 
+        排序必须是 (报告期, 公告日) 而非只按公告日 —— 财报存在**追溯重述**：
+        同一报告期会在多年后被重新披露。实测 000001 在 2009-03-20 同一天
+        公告了 2008 年报与 2007 年报的重述版；若只按公告日取最后一条，
+        `get_asof('2009-04-01')` 会返回 2007 年的重述数据（EPS 0.97）
+        而非当时最新的 2008 年报（EPS 0.20），因子值完全错误且不报错。
+
+        同一报告期有多个版本时取公告日最晚的，即当时已知的最新修订版。
+
         :return: 最新一期的 Series；无可用数据返回 None
         """
         df = self.load(vt_symbol, table)
@@ -226,6 +234,8 @@ class FinancialStore:
         if available.empty:
             return None
 
+        available = available.sort_values(["report_date", "announce_date"],
+                                          na_position="first")
         row = available.iloc[-1]
         return row[fields] if fields else row
 

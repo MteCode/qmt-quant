@@ -18,7 +18,13 @@ gateway:
 data:
   provider: xt              # xt / csv
   store_dir: "./data"
-  dividend_type: front      # front(前复权) / back / none
+  # 回测必须用 back(后复权)。
+  # 前复权是从当前价往回减累计分红，高分红股会算出负价格 ——
+  # 实测 601919 中远海控前复权最低 -5.14 元，300 只里有 7 只共 851 根 K 线为负，
+  # 负价格会让均线、收益率、仓位计算全部失效且不报错。
+  # 后复权从上市价往后累乘，永不为负，且收益率含分红再投，是回测的正确口径。
+  # 注意：实盘下单价格用行情推送的真实价（天然不复权），不受此项影响。
+  dividend_type: back       # back(后复权) / front(前复权) / none(不复权)
   default_interval: 1d
 
 cost:
