@@ -54,7 +54,16 @@ class Interval(Enum):
     MINUTE_30 = "30m"
     HOUR = "1h"
     DAILY = "1d"
+    WEEKLY = "1w"
+    MONTHLY = "1mon"
     TICK = "tick"
+
+
+#: 分钟级周期，数据量大，下载与存储需特别注意
+MINUTE_INTERVALS = {
+    Interval.MINUTE, Interval.MINUTE_5, Interval.MINUTE_15,
+    Interval.MINUTE_30, Interval.HOUR,
+}
 
 
 class Product(Enum):
