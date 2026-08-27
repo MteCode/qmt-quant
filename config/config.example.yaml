@@ -86,3 +86,12 @@ strategies:
       fast_window: 5
       slow_window: 20
       position_ratio: 0.95
+
+# Tushare Pro 数据源（2000 积分档 / 200 元每年）
+# 补 QMT 拿不到的两样东西：历史指数成分股、逐日估值因子
+tushare:
+  # 建议留空，改用环境变量 TUSHARE_TOKEN —— 这样即使误提交也不会泄露
+  token: ""
+  calls_per_minute: 200   # 本地限流，防止批量下载触发官方风控
+  max_retry: 3
+  retry_base_delay: 2.0

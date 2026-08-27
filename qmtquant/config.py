@@ -78,6 +78,24 @@ class BacktestConfig:
 
 
 @dataclass
+class TushareConfig:
+    """Tushare Pro 数据源。
+
+    token 是付费凭证，**绝不能进 git**。优先从环境变量 ``TUSHARE_TOKEN``
+    读取，其次才是 config.yaml（该文件已在 .gitignore 中）。
+    """
+    #: 留空则回退到环境变量 TUSHARE_TOKEN
+    token: str = ""
+    #: 每分钟调用上限。2000 积分档官方限制远高于此，
+    #: 设保守值是为了避免批量下载时触发风控被临时封禁
+    calls_per_minute: int = 200
+    #: 单次请求失败后的重试次数。网络抖动和偶发限流都靠它兜住
+    max_retry: int = 3
+    #: 重试退避基数（秒），实际等待为 base * 2**(n-1)
+    retry_base_delay: float = 2.0
+
+
+@dataclass
 class NotifyConfig:
     enabled: bool = False
     channel: str = "wecom"                   # wecom / dingtalk
@@ -92,6 +110,7 @@ class AppConfig:
     cost: CostConfig = field(default_factory=CostConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    tushare: TushareConfig = field(default_factory=TushareConfig)
     notify: NotifyConfig = field(default_factory=NotifyConfig)
     strategies: list[dict[str, Any]] = field(default_factory=list)
 
@@ -124,6 +143,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         cost=_fill(CostConfig, raw.get("cost")),
         risk=_fill(RiskConfig, raw.get("risk")),
         backtest=_fill(BacktestConfig, raw.get("backtest")),
+        tushare=_fill(TushareConfig, raw.get("tushare")),
         notify=_fill(NotifyConfig, raw.get("notify")),
         strategies=raw.get("strategies", []),
     )
