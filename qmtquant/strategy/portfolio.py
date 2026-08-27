@@ -107,9 +107,10 @@ class PortfolioStrategy(StrategyBase):
             bar = bars.get(vt_symbol)
             if bar is None or bar.suspended or bar.close_price <= 0:
                 continue
-            volume = int(budget_per_name / bar.close_price // 100) * 100
-            if volume <= 0:
-                continue
+            # 不在此处取整：整手约束由引擎统一处理，
+            # 策略自行取整会让「预算不足一手」的情况被静默丢弃，
+            # 引擎统计不到，报告里也就看不到标的被排除
+            volume = budget_per_name / bar.close_price
             self.buy(vt_symbol, bar.close_price * (1 + self.price_buffer), volume)
 
     def _estimate_total_value(self, bars: dict[str, BarData]) -> float:

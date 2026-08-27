@@ -76,7 +76,16 @@ def main() -> int:
     trades_df = engine.get_trades_df()
     if not trades_df.empty:
         trades_df.to_csv(out / "trades.csv", index=False, encoding="utf-8-sig")
+
+    from qmtquant.report.html_report import bars_to_frame, build_report
+    report = build_report(
+        engine, stats, out / "report.html",
+        title="双均线策略回测",
+        subtitle=f"{', '.join(vt_symbols)} · {start} ~ {end}",
+        bars=bars_to_frame(bars, vt_symbols),
+    )
     print(f"\n明细已输出到 {out.resolve()}")
+    print(f"可视化报告: {report.resolve()}")
     return 0
 
 

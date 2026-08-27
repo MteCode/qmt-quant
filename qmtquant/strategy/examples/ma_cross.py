@@ -68,7 +68,7 @@ class MaCrossStrategy(StrategyBase):
         # 金叉且空仓 → 买入
         if prev_diff <= 0 < diff and pos == 0:
             cash = self.get_cash() * self.position_ratio
-            volume = int(cash / bar.close_price // 100) * 100
+            volume = cash / bar.close_price   # 整手约束由引擎处理
             if volume > 0:
                 # 用略高于收盘的限价，提高次日开盘成交概率
                 # 只在委托真正发出后才记日志：预热期 trading=False、

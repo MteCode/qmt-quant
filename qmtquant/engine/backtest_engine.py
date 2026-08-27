@@ -28,7 +28,8 @@ class BacktestEngine:
 
     def __init__(self, initial_capital: float = 1_000_000,
                  cost: CostConfig | None = None,
-                 price_limit_ratio: float | None = None) -> None:
+                 price_limit_ratio: float | None = None,
+                 lot_size: int = 100) -> None:
         """
         :param price_limit_ratio: 强制统一的涨跌停幅度。
             默认 None = **按标的代码前缀自动判定**（主板 10%、
@@ -38,10 +39,18 @@ class BacktestEngine:
             创业板/科创板，它们涨跌超过 10% 的交易日会被误判为涨跌停而拒单，
             回测结果对这些标的系统性失真。仅在需要压制板块差异做对照实验时
             才显式传值。
+        :param lot_size: 一手股数，A 股为 100。
+
+            ⚠ 与后复权数据配合时需注意：后复权价高于真实价（茅台约 6 倍），
+            一手的**名义成本**因此被放大，会造成本不该有的资金闲置甚至完全买不进。
+            实测 100 万本金 / 10 只持仓时，沪深300 中有 36 只取整后为 0 股。
+            研究阶段可临时设为 1 以消除该假象，但那样得到的成交量不可实盘复现。
+            根本解法是按真实价取整（需复权因子），见 docs/TASKS.md。
         """
         self.initial_capital = initial_capital
         self.cost = cost or CostConfig()
         self.price_limit_ratio = price_limit_ratio
+        self.lot_size = lot_size
 
         self.cash: float = initial_capital
         #: vt_symbol -> {"volume": 总量, "available": 可卖, "price": 成本}
@@ -59,6 +68,10 @@ class BacktestEngine:
 
         self._order_count = 0
         self._trade_count = 0
+        #: 因取整后不足一手而未能下出的委托，按标的计数。
+        #: 后复权价被抬高后这类情况会激增（实测 100 万/10 只时有 36 只完全买不进），
+        #: 静默丢弃等于把这些标的悄悄剔出标的池，必须统计出来告警
+        self.undersized_orders: dict[str, int] = {}
         self._current_bars: dict[str, BarData] = {}
         self._prev_bars: dict[str, BarData] = {}
         self._current_dt: datetime | None = None
@@ -253,10 +266,15 @@ class BacktestEngine:
         """策略下单：不立即成交，挂到下一根 Bar 开盘撮合"""
         if volume <= 0:
             return ""
-        # 买入向下取整到 100 股
+        # 买入向下取整到一手
         if direction == Direction.LONG:
-            volume = int(volume // 100) * 100
+            volume = int(volume // self.lot_size) * self.lot_size
             if volume <= 0:
+                # 不足一手买不了。这在后复权数据上很常见 ——
+                # 价格被抬高后一手的成本可达实际的数倍，高价股会被静默排除。
+                # 计数以便在报告中告警，而不是无声地少一个候选标的。
+                self.undersized_orders[vt_symbol] = (
+                    self.undersized_orders.get(vt_symbol, 0) + 1)
                 return ""
 
         self._order_count += 1

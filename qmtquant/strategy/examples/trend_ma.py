@@ -125,9 +125,8 @@ class TrendMaStrategy(StrategyBase):
 
     def _open(self, vt_symbol: str, bar) -> None:
         cash = self.get_cash() * self.position_ratio
-        volume = int(cash / bar.close_price // 100) * 100
-        if volume <= 0:
-            return
+        # 整手约束交给引擎，见 PortfolioStrategy.rebalance 中的说明
+        volume = cash / bar.close_price
         if self.buy(vt_symbol, bar.close_price * (1 + self.price_buffer), volume):
             self.write_log(f"买入 {vt_symbol} {volume}股 @{bar.close_price:.2f} "
                            f"({self.mode})")
