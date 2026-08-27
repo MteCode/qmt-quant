@@ -57,8 +57,12 @@ def build_universe(args, cfg, feed: XtDataFeed):
                if pd.notna(r.listing_date)}
     delist = {r.vt_symbol: r.delist_date for r in meta.itertuples()
               if pd.notna(r.delist_date)}
+    inclusion = ({r.vt_symbol: r.inclusion_date for r in meta.itertuples()
+                  if pd.notna(getattr(r, "inclusion_date", None))}
+                 if "inclusion_date" in meta.columns else {})
     provider = PointInTimeUniverse(base, listing, delist,
-                                   min_days_since_ipo=args.min_ipo_days)
+                                   min_days_since_ipo=args.min_ipo_days,
+                                   inclusion_dates=inclusion)
     return provider, symbols
 
 

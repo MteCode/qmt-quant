@@ -39,8 +39,12 @@ def build_universe(sector: str, cfg, min_ipo_days: int):
                if pd.notna(r.listing_date)}
     delist = {r.vt_symbol: r.delist_date for r in meta.itertuples()
               if pd.notna(r.delist_date)}
+    inclusion = ({r.vt_symbol: r.inclusion_date for r in meta.itertuples()
+                  if pd.notna(getattr(r, "inclusion_date", None))}
+                 if "inclusion_date" in meta.columns else {})
     return PointInTimeUniverse(base, listing, delist,
-                               min_days_since_ipo=min_ipo_days), symbols
+                               min_days_since_ipo=min_ipo_days,
+                               inclusion_dates=inclusion), symbols
 
 
 def main() -> int:

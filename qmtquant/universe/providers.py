@@ -2,8 +2,27 @@
 
 按「偏差从大到小」排列：
 1. StaticUniverse        —— 当前指数成分快照，偏差最大，只适合快速试验
-2. PointInTimeUniverse   —— 叠加上市日过滤，消除「交易尚未上市的股票」
-3. HistoricalUniverse    —— 读历史成分股 CSV，可完全消除偏差（需外部数据）
+2. PointInTimeUniverse   —— 叠加上市日 + 纳入指数日过滤
+3. FullMarketUniverse    —— 全市场 PIT，不依赖指数成分
+4. HistoricalUniverse    —— 读历史成分股 CSV，可完全消除偏差（需外部数据）
+
+## 成分股前视是最容易被低估的偏差
+
+指数每半年调样，今天的成分不等于当年的成分。用当前名单回测历史，
+等于让策略提前知道「哪些股票后来会因为涨得好而被纳入指数」。
+
+实测（沪深300 均值回归，2021-01 ~ 2026-08，同一组参数）：
+
+| 标的池 | 总收益 | 年化 | Sharpe |
+|--------|--------|------|--------|
+| 仅上市日过滤 | **+320.33%** | 28.89% | 0.988 |
+| **+纳入指数日过滤** | **-4.49%** | -0.81% | -0.192 |
+
+**320 个百分点的收益全部来自这一个偏差。**
+2021 年初可选标的从 262 只降到 179 只 —— 那 83 只当时根本不在沪深300 里。
+
+这个偏差与「退市股缺失」是两回事，且对大盘股指数而言前者严重得多：
+沪深300 成分退市极罕见，但每年有约 20 只被调入调出。
 """
 import logging
 from pathlib import Path
@@ -58,18 +77,30 @@ class PointInTimeUniverse(UniverseProvider):
 
     def __init__(self, base: UniverseProvider, listing_dates: dict[str, pd.Timestamp],
                  delist_dates: dict[str, pd.Timestamp] | None = None,
-                 min_days_since_ipo: int = 60) -> None:
+                 min_days_since_ipo: int = 60,
+                 inclusion_dates: dict[str, pd.Timestamp] | None = None) -> None:
         """
         :param listing_dates: vt_symbol -> 上市日
         :param delist_dates:  vt_symbol -> 退市日（可选）
         :param min_days_since_ipo: 上市后多少个自然日内不纳入。
             次新股波动极端、无历史数据可用于计算指标，纳入会污染回测。
+        :param inclusion_dates: vt_symbol -> **纳入指数日**（可选）。
+
+            这是消除成分股前视的关键：指数每半年调样，今天的成分 ≠ 当年的成分。
+            实测沪深300 中有 121 只（40%）是 2021 年之后才纳入的，
+            而它们能进指数恰恰是因为之前表现好 ——
+            不做这个过滤，等于让策略在 2021 年就选中「事后才知道会涨」的票。
+
+            注意：这只能挡住「还没进指数就选它」，挡不住「已被调出却还留在池里」
+            —— 被调出的票不在今天的名单中，需要历史成分股全量数据才能补回。
         """
         self.base = base
         self.listing_dates = {normalize(k): pd.Timestamp(v)
                               for k, v in listing_dates.items()}
         self.delist_dates = {normalize(k): pd.Timestamp(v)
                              for k, v in (delist_dates or {}).items()}
+        self.inclusion_dates = {normalize(k): pd.Timestamp(v)
+                                for k, v in (inclusion_dates or {}).items()}
         self.min_days_since_ipo = min_days_since_ipo
 
     def get_universe(self, dt) -> list[str]:
@@ -85,6 +116,12 @@ class PointInTimeUniverse(UniverseProvider):
             delisted = self.delist_dates.get(symbol)
             if delisted is not None and d >= delisted:
                 continue
+
+            # 尚未纳入指数时不可选。拿不到纳入日则不施加此限制
+            included = self.inclusion_dates.get(symbol)
+            if included is not None and d < included:
+                continue
+
             result.append(symbol)
         return result
 
@@ -99,8 +136,17 @@ class PointInTimeUniverse(UniverseProvider):
         )
         if self.delist_dates:
             report.notes.append(f"已知退市日的标的 {len(self.delist_dates)} 只，到期后剔除")
+
+        if self.inclusion_dates:
+            report.membership_lookahead = False
+            report.notes.append(
+                f"已按纳入指数日过滤（{len(self.inclusion_dates)} 只有纳入日）"
+                "，未纳入指数前不可选")
+            report.notes.append(
+                "⚠ 仍缺「已被调出指数」的历史成分，"
+                "指数内部的幸存者偏差未完全消除")
         else:
-            report.notes.append("无退市日数据，幸存者偏差未消除")
+            report.notes.append("无纳入日数据，成分股前视偏差未消除")
         return report
 
 

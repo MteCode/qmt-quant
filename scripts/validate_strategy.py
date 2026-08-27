@@ -79,13 +79,17 @@ class Harness:
         meta = pd.read_parquet(meta_path)
         self.symbols = meta["vt_symbol"].tolist()
         base = StaticUniverse(self.symbols, source=f"{sector} 当前成分快照")
+        inclusion = ({r.vt_symbol: r.inclusion_date for r in meta.itertuples()
+                      if pd.notna(getattr(r, "inclusion_date", None))}
+                     if "inclusion_date" in meta.columns else {})
         self.universe = PointInTimeUniverse(
             base,
             {r.vt_symbol: r.listing_date for r in meta.itertuples()
              if pd.notna(r.listing_date)},
             {r.vt_symbol: r.delist_date for r in meta.itertuples()
              if pd.notna(r.delist_date)},
-            min_days_since_ipo=min_ipo_days)
+            min_days_since_ipo=min_ipo_days,
+            inclusion_dates=inclusion)
 
         feed = XtDataFeed(cfg.data.store_dir, cfg.data.dividend_type)
         t0 = time.time()

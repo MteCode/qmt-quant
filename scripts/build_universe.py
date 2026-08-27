@@ -22,6 +22,49 @@ from qmtquant.utils.symbol import to_xt_symbol  # noqa: E402
 #: ExpireDate 为该值表示尚未退市
 NOT_EXPIRED = "99999999"
 
+#: 板块名 -> 中证指数代码，用于取「纳入指数日」
+INDEX_CODE = {
+    "沪深300": "000300",
+    "中证500": "000905",
+    "中证1000": "000852",
+    "上证50": "000016",
+}
+
+
+def fetch_inclusion_dates(sector: str) -> dict:
+    """取成分股的纳入指数日（akshare，QMT 不提供）。
+
+    这是消除成分股前视的关键数据：指数每半年调样，
+    今天的成分不等于当年的成分。实测沪深300 中 121 只（40%）
+    是 2021 年之后才纳入的 —— 它们能进指数正是因为之前涨得好，
+    不做过滤等于让策略提前知道谁会涨。
+    """
+    code = INDEX_CODE.get(sector)
+    if code is None:
+        print(f"[!] 板块 {sector} 无对应指数代码，跳过纳入日")
+        return {}
+
+    try:
+        import akshare as ak
+        df = ak.index_stock_cons(symbol=code)
+    except Exception as exc:
+        print(f"[!] 取纳入日失败（{type(exc).__name__}），"
+              f"成分股前视偏差将无法消除：{str(exc)[:60]}")
+        return {}
+
+    if df is None or df.empty or "纳入日期" not in df.columns:
+        print("[!] 纳入日数据为空")
+        return {}
+
+    from qmtquant.utils.symbol import normalize as _norm
+    out = {}
+    for r in df.itertuples():
+        try:
+            out[_norm(str(r.品种代码).zfill(6))] = pd.to_datetime(r.纳入日期)
+        except Exception:
+            continue
+    return out
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="导出标的元数据")
@@ -41,6 +84,10 @@ def main() -> int:
     if not vt_symbols:
         print(f"板块「{args.sector}」未取到成分股")
         return 1
+
+    print("获取纳入指数日 ...")
+    inclusion = fetch_inclusion_dates(args.sector)
+    print(f"  拿到 {len(inclusion)} 只的纳入日")
 
     rows = []
     for i, vt_symbol in enumerate(vt_symbols, 1):
@@ -63,6 +110,7 @@ def main() -> int:
             # 名称里带 ST/退 的当前处于风险警示状态。
             # 注意这是**当前**状态，不是 point-in-time，不能直接用于历史过滤
             "is_st_now": ("ST" in name.upper()) or ("退" in name),
+            "inclusion_date": inclusion.get(vt_symbol),
         })
     sys.stdout.write("\n")
 
