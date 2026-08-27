@@ -16,6 +16,7 @@ from ..config import CostConfig
 from ..core.constants import Direction, OrderType, Status, get_price_limit
 from ..core.objects import BarData, OrderData, OrderRequest, TradeData
 from ..gateway.sim_gateway import calc_cost
+from ..risk.drawdown import DrawdownController
 from ..strategy.base import StrategyBase
 from ..utils.symbol import normalize, split_vt_symbol
 from .performance import PerformanceStats, calculate_stats
@@ -29,7 +30,8 @@ class BacktestEngine:
     def __init__(self, initial_capital: float = 1_000_000,
                  cost: CostConfig | None = None,
                  price_limit_ratio: float | None = None,
-                 lot_size: int = 100) -> None:
+                 lot_size: int = 100,
+                 drawdown: "DrawdownController | None" = None) -> None:
         """
         :param price_limit_ratio: 强制统一的涨跌停幅度。
             默认 None = **按标的代码前缀自动判定**（主板 10%、
@@ -46,11 +48,15 @@ class BacktestEngine:
             实测 100 万本金 / 10 只持仓时，沪深300 中有 36 只取整后为 0 股。
             研究阶段可临时设为 1 以消除该假象，但那样得到的成交量不可实盘复现。
             根本解法是按真实价取整（需复权因子），见 docs/TASKS.md。
+        :param drawdown: 回撤控制器。传入后回测与实盘走同一套判定逻辑，
+            否则回测会高估策略表现 —— 实盘被回撤控制拦下的仓位，
+            回测里却照买不误。
         """
         self.initial_capital = initial_capital
         self.cost = cost or CostConfig()
         self.price_limit_ratio = price_limit_ratio
         self.lot_size = lot_size
+        self.drawdown = drawdown
 
         self.cash: float = initial_capital
         #: vt_symbol -> {"volume": 总量, "available": 可卖, "price": 成本}
@@ -72,6 +78,8 @@ class BacktestEngine:
         #: 后复权价被抬高后这类情况会激增（实测 100 万/10 只时有 36 只完全买不进），
         #: 静默丢弃等于把这些标的悄悄剔出标的池，必须统计出来告警
         self.undersized_orders: dict[str, int] = {}
+        #: 被回撤控制拦下的买单数
+        self.drawdown_blocked: int = 0
         self._current_bars: dict[str, BarData] = {}
         self._prev_bars: dict[str, BarData] = {}
         self._current_dt: datetime | None = None
@@ -133,8 +141,11 @@ class BacktestEngine:
             self._match_pending(bars)
             # 3) 推送行情给策略，策略在此产生新信号
             self._push_bars(bars)
-            # 4) 按收盘价记录净值
-            self.equity_curve[dt] = self._calc_equity(bars)
+            # 4) 按收盘价记录净值，并推给回撤控制器
+            equity = self._calc_equity(bars)
+            self.equity_curve[dt] = equity
+            if self.drawdown is not None:
+                self.drawdown.update(equity)
 
         self.strategy.trading = False
         self.strategy.on_stop()
@@ -266,6 +277,12 @@ class BacktestEngine:
         """策略下单：不立即成交，挂到下一根 Bar 开盘撮合"""
         if volume <= 0:
             return ""
+        # 回撤控制：达到任一档位即停止开新仓，卖出始终放行
+        if (direction == Direction.LONG and self.drawdown is not None
+                and not self.drawdown.allow_open()):
+            self.drawdown_blocked += 1
+            return ""
+
         # 买入向下取整到一手
         if direction == Direction.LONG:
             volume = int(volume // self.lot_size) * self.lot_size

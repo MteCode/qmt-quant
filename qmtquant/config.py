@@ -36,6 +36,15 @@ class RiskConfig:
     forbid_st: bool = True
     blacklist: list[str] = field(default_factory=list)
 
+    # --- 回撤控制（从峰值算起的累计跌幅，覆盖「连续阴跌」盲区）
+    drawdown_enabled: bool = True
+    drawdown_close_only: float = 0.10    # 一档：停止开新仓
+    drawdown_reduce: float = 0.15        # 二档：强制减仓
+    drawdown_reduce_keep: float = 0.5    # 二档保留的仓位比例
+    drawdown_flat: float = 0.20          # 三档：全部平仓
+    drawdown_recovery_ratio: float = 0.7  # 降档迟滞系数
+    drawdown_min_observations: int = 20
+
 
 @dataclass
 class GatewayConfig:
@@ -51,7 +60,8 @@ class GatewayConfig:
 class DataConfig:
     provider: str = "xt"                     # xt / csv
     store_dir: str = str(DATA_DIR)
-    dividend_type: str = "front"             # front / back / none
+    # 必须 back：前复权对高分红股会算出负价格（601919 最低 -5.14）
+    dividend_type: str = "back"              # back / front / none
     default_interval: str = "1d"
 
 

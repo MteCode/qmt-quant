@@ -76,6 +76,8 @@ def main() -> int:
     parser.add_argument("--rebalance", type=int, default=20, help="调仓间隔（交易日）")
     parser.add_argument("--lookback", type=int, default=120)
     parser.add_argument("--report", default="reports")
+    parser.add_argument("--benchmark", default="000300.SH",
+                        help="基准指数代码，空字符串表示不对标")
     args = parser.parse_args()
 
     cfg = get_config()
@@ -120,11 +122,24 @@ def main() -> int:
     if not trades_df.empty:
         trades_df.to_csv(out / "portfolio_trades.csv", index=False, encoding="utf-8-sig")
 
+    from qmtquant.datafeed.xt_feed import BENCHMARKS, IndexFeed
     from qmtquant.report.html_report import build_report
+
+    bench = None
+    if args.benchmark:
+        bench = IndexFeed(cfg.data.store_dir).load_close(args.benchmark, start, end)
+        if bench.empty:
+            print(f"[!] 无基准数据 {args.benchmark}，"
+                  f"请先运行 scripts/download_index.py")
+            bench = None
+
+    bench_name = BENCHMARKS.get(args.benchmark, args.benchmark)
     report = build_report(
         engine, stats, out / "portfolio_report.html",
         title="选股组合回测",
-        subtitle=f"{args.sector} · 持仓 {args.holdings} 只 · {start} ~ {end}",
+        subtitle=(f"{args.sector} · 持仓 {args.holdings} 只 · {start} ~ {end}"
+                  + (f" · 基准 {bench_name}" if bench is not None else "")),
+        benchmark=bench,
     )
     print(f"\n明细已输出到 {out.resolve()}")
     print(f"可视化报告: {report.resolve()}")

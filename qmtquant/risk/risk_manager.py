@@ -11,6 +11,7 @@ from ..core.constants import Direction, RejectReason
 from ..core.objects import AccountData, OrderRequest, PositionData, TradeData
 from ..event.engine import EVENT_RISK_REJECT, Event, EventEngine
 from ..utils.logger import get_trade_logger
+from .drawdown import DrawdownConfig, DrawdownController
 
 logger = logging.getLogger(__name__)
 trade_logger = get_trade_logger()
@@ -22,6 +23,18 @@ class RiskManager:
     def __init__(self, config: RiskConfig, event_engine: EventEngine | None = None) -> None:
         self.config = config
         self.event_engine = event_engine
+
+        # 回撤控制：覆盖「连续阴跌」盲区 —— 每天亏 1% 连亏 20 天累计 18%，
+        # 却一次都不会触及 3% 的日亏线
+        self.drawdown = DrawdownController(DrawdownConfig(
+            enabled=config.drawdown_enabled,
+            close_only_threshold=config.drawdown_close_only,
+            reduce_threshold=config.drawdown_reduce,
+            reduce_keep_ratio=config.drawdown_reduce_keep,
+            flat_threshold=config.drawdown_flat,
+            recovery_ratio=config.drawdown_recovery_ratio,
+            min_observations=config.drawdown_min_observations,
+        ))
 
         #: 全局急停：True 时拒绝一切下单
         self.kill_switch: bool = False
@@ -44,6 +57,7 @@ class RiskManager:
         if not self._day_start_balance:
             self._day_start_balance = account.balance
         self._check_daily_loss()
+        self.drawdown.update(account.balance)
 
     def update_position(self, position: PositionData) -> None:
         if position.volume <= 0:
@@ -109,6 +123,9 @@ class RiskManager:
             return RejectReason.KILL_SWITCH
         if self.close_only and is_buy:
             return RejectReason.DAILY_LOSS_LIMIT
+        # 回撤达到任一档位即停止开新仓；卖出始终放行，否则无法减仓自救
+        if is_buy and not self.drawdown.allow_open():
+            return RejectReason.DRAWDOWN_LIMIT
 
         # --- 数量合法性：买入必须 100 股整数倍，卖出允许零股（清仓场景）
         if req.volume <= 0:
@@ -166,4 +183,7 @@ class RiskManager:
             "turnover_limit": self.config.max_turnover_per_day,
             "kill_switch": self.kill_switch,
             "close_only": self.close_only,
+            "drawdown": round(self.drawdown.drawdown, 4),
+            "drawdown_level": self.drawdown.level.label,
+            "target_position_ratio": self.drawdown.target_position_ratio(),
         }

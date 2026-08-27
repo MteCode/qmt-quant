@@ -329,3 +329,69 @@ class XtDataFeed(BaseDataFeed):
                 "占用(MB)": round(size_mb, 1),
             })
         return pd.DataFrame(rows)
+
+
+#: 常用基准指数。指数代码在 xtdata 中统一挂在上交所
+BENCHMARKS = {
+    "000300.SH": "沪深300",
+    "000905.SH": "中证500",
+    "000852.SH": "中证1000",
+    "000001.SH": "上证指数",
+    "399006.SZ": "创业板指",
+}
+
+
+class IndexFeed:
+    """指数数据源。
+
+    指数不参与复权（本就没有分红送股），且 vt_symbol 归一化规则与个股不同，
+    因此单独一个类，避免污染个股的复权与整手逻辑。
+    """
+
+    def __init__(self, store_dir: str) -> None:
+        self.dir = Path(store_dir) / "index"
+        self.dir.mkdir(parents=True, exist_ok=True)
+
+    def _path(self, xt_code: str) -> Path:
+        return self.dir / f"{xt_code.replace('.', '_')}.parquet"
+
+    def download(self, xt_codes: list[str], start: str = "2015-01-01",
+                 end: str = "2030-12-31") -> dict:
+        from xtquant import xtdata
+
+        s, e = start.replace("-", ""), end.replace("-", "")
+        result = {"ok": [], "failed": []}
+        for code in xt_codes:
+            try:
+                xtdata.download_history_data(code, period="1d",
+                                             start_time=s, end_time=e)
+                df = xtdata.get_market_data_ex(
+                    field_list=[], stock_list=[code], period="1d",
+                    start_time=s, end_time=e,
+                    dividend_type="none", fill_data=False).get(code)
+                if df is None or df.empty:
+                    result["failed"].append(code)
+                    continue
+                df.to_parquet(self._path(code))
+                result["ok"].append(code)
+            except Exception:
+                logger.exception("下载指数失败: %s", code)
+                result["failed"].append(code)
+        return result
+
+    def load_close(self, xt_code: str, start: str | None = None,
+                   end: str | None = None) -> pd.Series:
+        """读取指数收盘价序列，索引为北京时间"""
+        path = self._path(xt_code)
+        if not path.exists():
+            logger.warning("本地无指数数据，请先运行 scripts/download_index.py: %s",
+                           xt_code)
+            return pd.Series(dtype=float)
+
+        df = XtDataFeed._normalize_df(pd.read_parquet(path))
+        s = df["close"].astype(float)
+        if start:
+            s = s[s.index >= pd.Timestamp(start)]
+        if end:
+            s = s[s.index <= pd.Timestamp(end)]
+        return s

@@ -119,6 +119,7 @@ class RejectReason(Enum):
     ORDER_COUNT_LIMIT = "当日下单笔数超限"
     TURNOVER_LIMIT = "当日成交金额超限"
     DAILY_LOSS_LIMIT = "当日亏损触及阈值，只平不开"
+    DRAWDOWN_LIMIT = "回撤触及阈值，只平不开"
     BLACKLIST = "标的在黑名单中"
     INSUFFICIENT_CASH = "可用资金不足"
     INSUFFICIENT_POSITION = "可卖数量不足"
