@@ -201,7 +201,7 @@ class TestTradingBehaviour:
     def test_sells_on_downtrend(self):
         up = [10 * 1.01 ** i for i in range(30)]
         down = [up[-1] * 0.99 ** i for i in range(1, 30)]
-        engine = run(prices := up + down, BASE)
+        engine = run(up + down, BASE)
         sells = [t for t in engine.trades if t.direction == Direction.SHORT]
         assert sells, "跌破均线应清仓"
 
