@@ -79,7 +79,7 @@ notify:
 
 strategies:
   - name: MaCrossDemo
-    class: qmtquant.strategy.examples.ma_cross.MaCrossStrategy
+    class: qmtquant.strategy.ma_cross.MaCrossStrategy
     vt_symbols:
       - "000001.SZSE"
     setting:

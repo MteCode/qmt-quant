@@ -88,8 +88,22 @@ class CrossDetector:
 class IntradayVwap:
     """日内分时均价线（KMCP / VWAP）。
 
-    计算方式与看盘软件的分时黄线一致：当日累计成交额 ÷ 当日累计成交量。
+    含义与看盘软件的分时黄线一致：当日累计成交额 ÷ 当日累计成交量。
     **每个交易日开盘必须重置**，否则会把昨天的成交混进来。
+
+    ## 为什么不直接用行情里的成交额字段
+
+    踩过的坑：本地存的价格是**后复权**的，而成交额字段是**未复权**的原始值。
+    用 ``turnover / volume`` 算出来的均价落在未复权价格空间，
+    与后复权的收盘价根本不可比 —— 实测茅台收盘价 8137、
+    ``turnover/volume`` 只有 1300，比值恒为 6.26（正是复权因子）。
+
+    后果是收盘价永远"在均价线之上"，穿越永远不会发生，
+    策略**静默零成交**：不报错、不告警，回测结果一片空白还看不出原因。
+
+    因此本类改为累加 ``价格 × 成交量``，价格由调用方传入 ——
+    传什么价格空间，算出来就是什么价格空间，与收盘价天然一致。
+    分钟 Bar 内价格波动极小，用收盘价近似该 Bar 的成交均价误差可忽略。
     """
 
     def __init__(self) -> None:
@@ -97,11 +111,12 @@ class IntradayVwap:
         self._amount: float = 0.0
         self._volume: float = 0.0
 
-    def update(self, dt, amount: float, volume: float,
-               fallback_price: float = 0.0) -> float | None:
-        """推入一根分钟 Bar。
+    def update(self, dt, price: float, volume: float) -> float | None:
+        """推入一根 Bar。
 
-        :param fallback_price: 成交额字段缺失时用它 × 成交量近似
+        :param price: 该 Bar 的代表价格，**必须与后续比较用的价格同一复权口径**。
+            通常传 ``bar.close_price``。
+        :param volume: 该 Bar 成交量（股）
         """
         day = dt.date()
         if self._date != day:
@@ -109,11 +124,10 @@ class IntradayVwap:
             self._amount = 0.0
             self._volume = 0.0
 
-        if volume <= 0:
+        if volume <= 0 or price <= 0:
             return self.value
 
-        # 有些数据源不给成交额，用收盘价近似
-        self._amount += amount if amount > 0 else fallback_price * volume
+        self._amount += price * volume
         self._volume += volume
         return self.value
 

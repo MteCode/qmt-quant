@@ -53,6 +53,18 @@ class PerformanceStats:
         ])
 
 
+def _to_daily(equity: pd.Series) -> pd.Series:
+    """把任意频率的净值曲线折成日频（取每日最后一个观测）。
+
+    日线回测下这是恒等变换；分钟回测下它把每根 Bar 一个点压成每天一个点，
+    使 TRADING_DAYS=252 的年化口径重新成立。
+    """
+    idx = pd.DatetimeIndex(equity.index)
+    daily = equity.groupby(idx.normalize()).last()
+    daily.index = pd.DatetimeIndex(daily.index)
+    return daily
+
+
 def calculate_stats(equity: pd.Series, trades: list, initial_capital: float,
                     risk_free_rate: float = 0.02) -> PerformanceStats:
     """从净值曲线与成交明细计算绩效指标。
@@ -67,9 +79,15 @@ def calculate_stats(equity: pd.Series, trades: list, initial_capital: float,
     equity = equity.sort_index()
     stats.start_date = str(equity.index[0])[:10]
     stats.end_date = str(equity.index[-1])[:10]
-    stats.trading_days = len(equity)
     stats.final_capital = float(equity.iloc[-1])
     stats.total_return = stats.final_capital / initial_capital - 1
+
+    # 收益类指标一律在**日频**上算。分钟回测的 equity 每根 Bar 一个点，
+    # 直接用 len(equity) 会把 58,434 根分钟 Bar 当成 58,434 个交易日 ——
+    # 年化被开了 232 年的根号（-6.70% 显示成 -0.03%），
+    # 波动率、Sharpe、回撤天数同样全部失真，且不报错
+    daily_equity = _to_daily(equity)
+    stats.trading_days = len(daily_equity)
 
     years = max(stats.trading_days / TRADING_DAYS, 1e-9)
     # 期末资金可能为负（理论上不该发生），此时年化无意义，直接取总收益
@@ -78,19 +96,19 @@ def calculate_stats(equity: pd.Series, trades: list, initial_capital: float,
     else:
         stats.annual_return = -1.0
 
-    # 回撤
-    running_max = equity.cummax()
-    drawdown = equity / running_max - 1
+    # 最大回撤用**全分辨率**序列：日内那一下真实发生过，抹平会低估风险
+    drawdown = equity / equity.cummax() - 1
     stats.max_drawdown = float(drawdown.min())
-    # 最长回撤持续天数：连续处于水下的最长长度
-    underwater = (drawdown < 0).astype(int)
+
+    # 回撤「天数」必须在日频上数，否则分钟回测会数出几万天
+    daily_dd = daily_equity / daily_equity.cummax() - 1
     longest, cur = 0, 0
-    for v in underwater:
+    for v in (daily_dd < 0).astype(int):
         cur = cur + 1 if v else 0
         longest = max(longest, cur)
     stats.max_drawdown_duration = longest
 
-    daily_return = equity.pct_change().dropna()
+    daily_return = daily_equity.pct_change().dropna()
     if len(daily_return) > 1:
         stats.volatility = float(daily_return.std() * np.sqrt(TRADING_DAYS))
         excess = daily_return.mean() * TRADING_DAYS - risk_free_rate

@@ -7,8 +7,8 @@ import pytest
 from qmtquant.core.constants import Direction, Exchange, Interval
 from qmtquant.core.objects import BarData
 from qmtquant.engine.backtest_engine import BacktestEngine
-from qmtquant.strategy.examples.intraday_vwap import IntradayVwapStrategy
-from qmtquant.strategy.examples.trend_ma import TrendMaStrategy
+from qmtquant.strategy.intraday_vwap import IntradayVwapStrategy
+from qmtquant.strategy.trend_ma import TrendMaStrategy
 from qmtquant.strategy.indicators import CrossDetector, IntradayVwap, MovingAverage
 
 
@@ -77,29 +77,50 @@ class TestIntradayVwap:
     def test_vwap_calculation(self):
         v = IntradayVwap()
         dt = datetime(2024, 1, 2, 9, 31)
-        v.update(dt, amount=1000.0, volume=100)      # 均价 10
+        v.update(dt, price=10.0, volume=100)
         assert v.value == pytest.approx(10.0)
-        v.update(dt, amount=3000.0, volume=100)      # 累计 4000/200
+        v.update(dt, price=30.0, volume=100)      # (1000+3000)/200
         assert v.value == pytest.approx(20.0)
+
+    def test_volume_weighted_not_simple_average(self):
+        """成交量加权，不是简单平均 —— 大单必须占更大权重"""
+        v = IntradayVwap()
+        dt = datetime(2024, 1, 2, 9, 31)
+        v.update(dt, price=10.0, volume=900)
+        v.update(dt, price=20.0, volume=100)
+        assert v.value == pytest.approx(11.0)     # 非 15.0
 
     def test_resets_on_new_day(self):
         """跨日必须重置，否则昨天的成交会污染今天的均价线"""
         v = IntradayVwap()
-        v.update(datetime(2024, 1, 2, 14, 59), amount=10000.0, volume=100)
+        v.update(datetime(2024, 1, 2, 14, 59), price=100.0, volume=100)
         assert v.value == pytest.approx(100.0)
 
-        v.update(datetime(2024, 1, 3, 9, 31), amount=1000.0, volume=100)
+        v.update(datetime(2024, 1, 3, 9, 31), price=10.0, volume=100)
         assert v.value == pytest.approx(10.0)
-
-    def test_fallback_price_when_amount_missing(self):
-        v = IntradayVwap()
-        v.update(datetime(2024, 1, 2, 9, 31), amount=0, volume=100,
-                 fallback_price=12.0)
-        assert v.value == pytest.approx(12.0)
 
     def test_zero_volume_ignored(self):
         v = IntradayVwap()
-        assert v.update(datetime(2024, 1, 2, 9, 31), amount=0, volume=0) is None
+        assert v.update(datetime(2024, 1, 2, 9, 31), price=10.0, volume=0) is None
+
+    def test_zero_price_ignored(self):
+        v = IntradayVwap()
+        assert v.update(datetime(2024, 1, 2, 9, 31), price=0.0, volume=100) is None
+
+    def test_same_price_space_as_close(self):
+        """真 bug 回归：均价线必须与收盘价同一复权口径。
+
+        本地价格是后复权的，而行情里的成交额字段是未复权原始值。
+        曾用 turnover/volume 算均价，结果落在未复权空间 ——
+        实测茅台收盘价 8137、turnover/volume 只有 1300（比值 6.26 = 复权因子），
+        收盘价永远"在均价线之上"，穿越永不发生，策略静默零成交。
+        """
+        v = IntradayVwap()
+        dt = datetime(2024, 1, 2, 9, 31)
+        adjusted_close = 8137.23
+        v.update(dt, price=adjusted_close, volume=1000)
+        # 单根 Bar 时均价必须等于该 Bar 价格，量级不能偏移
+        assert v.value == pytest.approx(adjusted_close)
 
 
 # ---------------------------------------------------------------- 策略
@@ -244,3 +265,111 @@ class TestIntradayVwapStrategy:
         # 最后处理的是 01-03，日内计数应已重置为当日根数
         assert s._day["000001.SZSE"].isoformat() == "2024-01-03"
         assert s._bar_count["000001.SZSE"] == 5
+
+
+# ============================================================
+# 以下为「升级为正式模块」后新增的校验与状态测试
+# ============================================================
+
+SYM = "600519.SSE"
+
+
+def _make_trend(setting=None) -> TrendMaStrategy:
+    return TrendMaStrategy(BacktestEngine(), "T", [SYM], setting or {})
+
+
+def _make_vwap(setting=None) -> IntradayVwapStrategy:
+    return IntradayVwapStrategy(BacktestEngine(), "T", [SYM], setting or {})
+
+
+class TestTrendMaValidation:
+    def test_unknown_mode(self):
+        with pytest.raises(ValueError, match="未知 mode"):
+            _make_trend({"mode": "whatever"})
+
+    def test_slow_must_exceed_fast(self):
+        with pytest.raises(ValueError, match="slow_window"):
+            _make_trend({"fast_window": 250, "slow_window": 5})
+
+    def test_fast_window_minimum(self):
+        with pytest.raises(ValueError, match="fast_window"):
+            _make_trend({"fast_window": 1, "slow_window": 20})
+
+    def test_position_ratio_range(self):
+        with pytest.raises(ValueError, match="position_ratio"):
+            _make_trend({"position_ratio": 0})
+
+    def test_exit_buffer_must_not_be_smaller(self):
+        """错过卖出是实亏，错过买入只是少赚 —— 缓冲天然不对称"""
+        with pytest.raises(ValueError, match="卖出缓冲"):
+            _make_trend({"price_buffer": 0.05, "exit_price_buffer": 0.02})
+
+    def test_default_exit_buffer_wider(self):
+        s = _make_trend()
+        assert s.exit_price_buffer > s.price_buffer
+
+    def test_float_params_coerced(self):
+        s = _make_trend({"fast_window": 5.0, "slow_window": 250.0})
+        assert isinstance(s.fast_window, int)
+        assert isinstance(s.slow_window, int)
+
+    def test_trade_count_persisted(self):
+        s = _make_trend()
+        assert "trade_count" in s.variables
+        s.restore_variables({"trade_count": 7, "pos": {SYM: 100}})
+        assert s.trade_count == 7
+
+
+class TestIntradayVwapValidation:
+    def test_unknown_mode(self):
+        with pytest.raises(ValueError, match="未知 mode"):
+            _make_vwap({"mode": "nope"})
+
+    def test_unknown_role(self):
+        with pytest.raises(ValueError, match="未知 role"):
+            _make_vwap({"role": "nope"})
+
+    def test_trade_ratio_range(self):
+        with pytest.raises(ValueError, match="trade_ratio"):
+            _make_vwap({"trade_ratio": 1.5})
+
+    def test_min_bars_minimum(self):
+        with pytest.raises(ValueError, match="min_bars"):
+            _make_vwap({"min_bars": 0})
+
+    def test_stop_must_be_after_start(self):
+        with pytest.raises(ValueError, match="stop_minute"):
+            _make_vwap({"start_minute": 1400, "stop_minute": 1000})
+
+    def test_t0_stop_minute_capped(self):
+        """T0 卖出后必须留出买回时间，否则底仓永久减少一块"""
+        with pytest.raises(ValueError, match="stop_minute"):
+            _make_vwap({"role": "t0_rotation", "stop_minute": 1455})
+
+    def test_entry_role_allows_late_stop(self):
+        """entry_timing 不涉及买回，尾盘限制不适用"""
+        s = _make_vwap({"role": "entry_timing", "stop_minute": 1455})
+        assert s.stop_minute == 1455
+
+    def test_float_params_coerced(self):
+        s = _make_vwap({"min_bars": 15.0, "start_minute": 945.0,
+                        "stop_minute": 1450.0})
+        for name in ("min_bars", "start_minute", "stop_minute"):
+            assert isinstance(getattr(s, name), int), name
+
+    def test_failed_buyback_counted(self):
+        """T0 卖出没买回 = 底仓永久少一块，必须能统计到"""
+        s = _make_vwap({"role": "t0_rotation"})
+        s._pending_buyback[SYM] = 500
+        s.on_stop_day(SYM)
+        assert s.failed_buyback_count == 1
+
+    def test_no_false_alarm_when_bought_back(self):
+        s = _make_vwap({"role": "t0_rotation"})
+        s._pending_buyback[SYM] = 0
+        s.on_stop_day(SYM)
+        assert s.failed_buyback_count == 0
+
+    def test_trade_count_persisted(self):
+        s = _make_vwap()
+        assert "trade_count" in s.variables

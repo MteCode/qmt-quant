@@ -17,7 +17,7 @@ from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.core.constants import Interval  # noqa: E402
 from qmtquant.datafeed.csv_feed import generate_random_bars  # noqa: E402
 from qmtquant.engine.backtest_engine import BacktestEngine  # noqa: E402
-from qmtquant.strategy.examples.ma_cross import MaCrossStrategy  # noqa: E402
+from qmtquant.strategy.ma_cross import MaCrossStrategy  # noqa: E402
 from qmtquant.utils.logger import setup_logging  # noqa: E402
 from qmtquant.utils.symbol import normalize  # noqa: E402
 

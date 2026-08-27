@@ -22,7 +22,7 @@ from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.core.constants import Interval  # noqa: E402
 from qmtquant.datafeed.xt_feed import XtDataFeed  # noqa: E402
 from qmtquant.engine.backtest_engine import BacktestEngine  # noqa: E402
-from qmtquant.strategy.examples.momentum_rotation import (  # noqa: E402
+from qmtquant.strategy.momentum import (  # noqa: E402
     MomentumRotationStrategy,
 )
 from qmtquant.universe.providers import (  # noqa: E402
@@ -79,6 +79,12 @@ def main() -> int:
     parser.add_argument("--holdings", type=int, default=10, help="持仓只数")
     parser.add_argument("--rebalance", type=int, default=20, help="调仓间隔（交易日）")
     parser.add_argument("--lookback", type=int, default=120)
+    parser.add_argument("--skip-recent", type=int, default=20,
+                        help="跳过最近 N 日，规避短期反转效应污染动量")
+    parser.add_argument("--reverse", action="store_true",
+                        help="反向模式：选跌得最惨的。"
+                             "实测动量 IC 显著为负（-0.0575, t=-4.6），"
+                             "反着做在逻辑上值得一试")
     parser.add_argument("--report", default="reports")
     parser.add_argument("--benchmark", default="000300.SH",
                         help="基准指数代码，空字符串表示不对标")
@@ -108,6 +114,8 @@ def main() -> int:
     engine.set_universe(provider)
     engine.add_strategy(MomentumRotationStrategy, symbols, {
         "lookback": args.lookback,
+        "skip_recent": args.skip_recent,
+        "reverse": args.reverse,
         "max_holdings": args.holdings,
         "rebalance_days": args.rebalance,
     })
@@ -141,7 +149,8 @@ def main() -> int:
     report = build_report(
         engine, stats, out / "portfolio_report.html",
         title="选股组合回测",
-        subtitle=(f"{args.sector} · 持仓 {args.holdings} 只 · {start} ~ {end}"
+        subtitle=(f"{args.sector} · {'反向' if args.reverse else '正向'}动量 · "
+                  f"持仓 {args.holdings} 只 · {start} ~ {end}"
                   + (f" · 基准 {bench_name}" if bench is not None else "")),
         benchmark=bench,
     )

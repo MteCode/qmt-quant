@@ -21,8 +21,8 @@ from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.core.constants import Interval  # noqa: E402
 from qmtquant.datafeed.xt_feed import XtDataFeed  # noqa: E402
 from qmtquant.engine.backtest_engine import BacktestEngine  # noqa: E402
-from qmtquant.strategy.examples.intraday_vwap import IntradayVwapStrategy  # noqa: E402
-from qmtquant.strategy.examples.trend_ma import TrendMaStrategy  # noqa: E402
+from qmtquant.strategy.intraday_vwap import IntradayVwapStrategy  # noqa: E402
+from qmtquant.strategy.trend_ma import TrendMaStrategy  # noqa: E402
 from qmtquant.utils.logger import setup_logging  # noqa: E402
 from qmtquant.utils.symbol import normalize  # noqa: E402
 
