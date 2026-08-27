@@ -1,0 +1,305 @@
+"""策略稳健性验证：四道检验。
+
+回答的不是「哪组参数收益最高」，而是「这个策略是否只在某个特定参数点上有效」。
+只在一个点有效的策略是拟合噪声的产物，实盘必然失效。
+
+用法：
+    python scripts/validate_strategy.py --sector 沪深300
+    python scripts/validate_strategy.py --skip walkforward   # 跳过耗时的滚动验证
+    python scripts/validate_strategy.py --quick              # 小网格快速跑
+"""
+import argparse
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import pandas as pd  # noqa: E402
+
+from qmtquant.config import CostConfig, LOG_DIR, get_config  # noqa: E402
+from qmtquant.core.constants import Interval  # noqa: E402
+from qmtquant.datafeed.xt_feed import XtDataFeed  # noqa: E402
+from qmtquant.engine.backtest_engine import BacktestEngine  # noqa: E402
+from qmtquant.research.validation import (  # noqa: E402
+    SplitReport,
+    _to_result,
+    cost_sensitivity,
+    grid_search,
+    parameter_plateau,
+    summarize_verdict,
+    walk_forward,
+)
+from qmtquant.strategy.mean_reversion import MeanReversionStrategy  # noqa: E402
+from qmtquant.universe.providers import PointInTimeUniverse, StaticUniverse  # noqa: E402
+from qmtquant.utils.logger import setup_logging  # noqa: E402
+
+#: 完整网格。参数取值刻意覆盖「明显偏松」到「明显偏紧」，
+#: 这样才看得出最优点周围是平原还是孤峰
+FULL_GRID = {
+    "lookback": [10, 15, 20, 30],
+    "entry_z": [-1.2, -1.5, -2.0, -2.5],
+    "exit_z": [-0.5, 0.0, 0.5],
+    "max_holding_days": [10, 20, 40],
+}
+
+QUICK_GRID = {
+    "lookback": [10, 20, 30],
+    "entry_z": [-1.2, -1.5, -2.0],
+    "exit_z": [-0.5, 0.5],
+}
+
+#: walk-forward 用更小的网格 —— 每个窗口都要跑一遍完整网格，
+#: 组合数乘以窗口数会爆炸
+WF_GRID = {
+    "lookback": [10, 20, 30],
+    "entry_z": [-1.2, -1.5, -2.0],
+}
+
+
+class Harness:
+    """把数据装载一次、复用到所有回测。
+
+    单次回测 2.1 秒，装载 399k 根 K 线要 11.6 秒 ——
+    每次重新装载会让 100 组网格从 4 分钟变成 23 分钟。
+    """
+
+    def __init__(self, cfg, sector: str, start: str, end: str,
+                 min_ipo_days: int, holdings: int) -> None:
+        self.cfg = cfg
+        self.holdings = holdings
+
+        meta_path = (Path(cfg.data.store_dir) / "universe"
+                     / f"universe_{sector}.parquet")
+        if not meta_path.exists():
+            raise FileNotFoundError(
+                f"缺少标的元数据 {meta_path}，"
+                f"请先运行 scripts/build_universe.py --sector {sector}")
+
+        meta = pd.read_parquet(meta_path)
+        self.symbols = meta["vt_symbol"].tolist()
+        base = StaticUniverse(self.symbols, source=f"{sector} 当前成分快照")
+        self.universe = PointInTimeUniverse(
+            base,
+            {r.vt_symbol: r.listing_date for r in meta.itertuples()
+             if pd.notna(r.listing_date)},
+            {r.vt_symbol: r.delist_date for r in meta.itertuples()
+             if pd.notna(r.delist_date)},
+            min_days_since_ipo=min_ipo_days)
+
+        feed = XtDataFeed(cfg.data.store_dir, cfg.data.dividend_type)
+        t0 = time.time()
+        self.bars = feed.load_bars(self.symbols, start, end, Interval.DAILY)
+        if not self.bars:
+            raise RuntimeError("没有可用数据，请先运行 scripts/download_data.py")
+        print(f"装载 {len(self.bars):,} 根 K 线（{time.time() - t0:.1f}s，"
+              f"后续回测复用）")
+
+    def _slice(self, start: str | None, end: str | None):
+        if start is None and end is None:
+            return self.bars
+        lo = pd.Timestamp(start) if start else None
+        hi = pd.Timestamp(end) if end else None
+        return [b for b in self.bars
+                if (lo is None or b.datetime >= lo)
+                and (hi is None or b.datetime <= hi)]
+
+    def run(self, params: dict, start: str | None = None,
+            end: str | None = None, cost_multiplier: float = 1.0,
+            warmup_days: int = 0):
+        """回测一个区间。
+
+        :param warmup_days: 在 start 之前额外装载多少个自然日用于预热，
+            但**绩效只从 start 起算**。
+
+            不预热的话，短窗口测出来的是「策略来不及热身」而不是
+            「参数不泛化」—— 趋势过滤要 120 根 Bar 才能算出第一个值，
+            6 个月的测试窗口约 120 个交易日，等热身完窗口就结束了，
+            结果全是 0 成交。
+        """
+        load_start = start
+        if start and warmup_days > 0:
+            load_start = (pd.Timestamp(start)
+                          - pd.Timedelta(days=warmup_days)).strftime("%Y-%m-%d")
+
+        bars = self._slice(load_start, end)
+        if len(bars) < 100:
+            raise RuntimeError("区间内 K 线过少")
+
+        base = self.cfg.cost
+        cost = CostConfig(
+            commission_rate=base.commission_rate * cost_multiplier,
+            commission_min=base.commission_min * cost_multiplier,
+            stamp_tax_rate=base.stamp_tax_rate * cost_multiplier,
+            transfer_fee_rate=base.transfer_fee_rate * cost_multiplier,
+            slippage_tick=max(1, int(base.slippage_tick * cost_multiplier)),
+        )
+
+        engine = BacktestEngine(
+            initial_capital=self.cfg.backtest.initial_capital, cost=cost)
+        engine.load_data(bars)
+        engine.set_universe(self.universe)
+        engine.add_strategy(MeanReversionStrategy, self.symbols,
+                            dict(params, max_holdings=self.holdings))
+        stats = engine.run()
+
+        if warmup_days > 0 and start:
+            stats = self._restat_from(engine, start)
+        return stats
+
+    @staticmethod
+    def _restat_from(engine, start: str):
+        """只用 start 之后的净值与成交重算绩效，剔除预热期"""
+        from qmtquant.engine.performance import calculate_stats
+
+        lo = pd.Timestamp(start)
+        equity = pd.Series(engine.equity_curve).sort_index()
+        equity = equity[equity.index >= lo]
+        if len(equity) < 2:
+            raise RuntimeError("预热后剩余区间过短")
+
+        trades = [t for t in engine.trades if t.datetime >= lo]
+        # 基准资金用预热期末的净值，否则收益率会把预热期的盈亏算进去
+        return calculate_stats(equity, trades, float(equity.iloc[0]))
+
+
+def make_progress(label: str):
+    t0 = time.time()
+
+    def _p(done: int, total: int, _info=None) -> None:
+        elapsed = time.time() - t0
+        eta = (total - done) / (done / elapsed) if done and elapsed else 0
+        filled = int(24 * done / total) if total else 0
+        sys.stdout.write(f"\r  {label} [{'#' * filled}{'-' * (24 - filled)}] "
+                         f"{done}/{total}  ETA {eta / 60:4.1f}min ")
+        sys.stdout.flush()
+        if done == total:
+            sys.stdout.write("\n")
+    return _p
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(description="策略稳健性验证")
+    p.add_argument("--sector", default="沪深300")
+    p.add_argument("--start", default="2021-01-01")
+    p.add_argument("--end", default="2026-08-26")
+    p.add_argument("--split", default="2024-09-01",
+                   help="样本内/外的分界日")
+    p.add_argument("--holdings", type=int, default=10)
+    p.add_argument("--min-ipo-days", type=int, default=60)
+    p.add_argument("--metric", default="Sharpe")
+    p.add_argument("--warmup", type=int, default=260,
+                   help="测试窗口的预热自然日数。趋势过滤需 120 个交易日，"
+                        "约合 180 自然日，留足余量")
+    p.add_argument("--quick", action="store_true", help="用小网格快速跑")
+    p.add_argument("--skip", nargs="*", default=[],
+                   choices=["grid", "split", "walkforward", "cost"])
+    p.add_argument("--out", default="reports")
+    args = p.parse_args()
+
+    cfg = get_config()
+    setup_logging(LOG_DIR, cfg.log_level)
+
+    try:
+        h = Harness(cfg, args.sector, args.start, args.end,
+                    args.min_ipo_days, args.holdings)
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(exc)
+        return 1
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    grid = QUICK_GRID if args.quick else FULL_GRID
+    sections = []
+
+    # ---- 1. 参数网格与平原检验
+    plateau = None
+    best_params = {"lookback": 20, "entry_z": -2.0, "exit_z": -0.5}
+    if "grid" not in args.skip:
+        n = 1
+        for v in grid.values():
+            n *= len(v)
+        print(f"\n>>> 1/4 参数网格（{n} 组组合，约 {n * 2.1 / 60:.0f} 分钟）")
+        df = grid_search(lambda p: h.run(p), grid,
+                         progress=make_progress("网格"))
+        if df.empty:
+            print("  网格全部失败")
+            return 1
+
+        df.to_csv(out / "validation_grid.csv", index=False,
+                  encoding="utf-8-sig")
+        plateau = parameter_plateau(df, list(grid), args.metric)
+        best_params = plateau.best_params
+        print()
+        print(plateau.summary())
+        sections.append(plateau.summary())
+
+        print("\n  网格中表现最好的 5 组：")
+        cols = list(grid) + ["总收益", "年化", "最大回撤", "Sharpe", "成交数"]
+        top = df.nlargest(5, args.metric)[cols]
+        print(top.to_string(index=False,
+                            formatters={"总收益": "{:.2%}".format,
+                                        "年化": "{:.2%}".format,
+                                        "最大回撤": "{:.2%}".format,
+                                        "Sharpe": "{:.3f}".format}))
+
+    # ---- 2. 样本外
+    split = SplitReport(params=best_params)
+    if "split" not in args.skip:
+        print(f"\n>>> 2/4 样本外检验（分界 {args.split}）")
+        split.in_sample = _to_result(
+            best_params, h.run(best_params, args.start, args.split))
+        split.out_sample = _to_result(
+            best_params,
+            h.run(best_params, args.split, args.end, warmup_days=args.warmup))
+        print(split.summary())
+        sections.append(split.summary())
+
+    # ---- 3. Walk-forward
+    from qmtquant.research.validation import WalkForwardReport
+    wf = WalkForwardReport()
+    if "walkforward" not in args.skip:
+        wf_n = 1
+        for v in WF_GRID.values():
+            wf_n *= len(v)
+        print(f"\n>>> 3/4 Walk-forward（每窗口 {wf_n} 组组合）")
+        # 训练窗口够长不必预热；测试窗口必须预热，否则测的是热身速度
+        wf = walk_forward(
+            lambda p, s, e: h.run(p, s, e, warmup_days=args.warmup), WF_GRID,
+            args.start, args.end, train_months=24, test_months=6,
+            metric=args.metric, progress=make_progress("窗口"))
+        print(wf.summary())
+        sections.append(wf.summary())
+        if wf.windows:
+            wf.to_frame().to_csv(out / "validation_walkforward.csv",
+                                 index=False, encoding="utf-8-sig")
+
+    # ---- 4. 成本敏感性
+    cost_df = pd.DataFrame()
+    if "cost" not in args.skip:
+        print("\n>>> 4/4 成本敏感性")
+        cost_df = cost_sensitivity(
+            lambda m: h.run(best_params, cost_multiplier=m))
+        print(cost_df.to_string(
+            index=False,
+            formatters={"总收益": "{:.2%}".format, "年化": "{:.2%}".format,
+                        "最大回撤": "{:.2%}".format, "Sharpe": "{:.3f}".format,
+                        "费率": "{:.1%}".format}))
+        cost_df.to_csv(out / "validation_cost.csv", index=False,
+                       encoding="utf-8-sig")
+
+    # ---- 综合结论
+    if plateau is not None:
+        print()
+        verdict = summarize_verdict(plateau, split, wf, cost_df)
+        print(verdict)
+        sections.append(verdict)
+
+    (out / "validation_report.txt").write_text(
+        "\n\n".join(sections), encoding="utf-8")
+    print(f"\n明细已输出到 {out.resolve()}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

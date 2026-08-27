@@ -111,6 +111,7 @@ class MeanReversionStrategy(StrategyBase):
 
     def __init__(self, engine, strategy_name, vt_symbols, setting=None):
         super().__init__(engine, strategy_name, vt_symbols, setting)
+        self._coerce_types()
         self._validate()
 
         window = max(self.lookback, self.trend_filter_window) + 5
@@ -123,6 +124,21 @@ class MeanReversionStrategy(StrategyBase):
         self._bar_count: int = 0
         #: 最近一次计算的 z-score，供报告与调试查看
         self.zscores: dict[str, float] = {}
+
+    def _coerce_types(self) -> None:
+        """整数参数强制转型。
+
+        参数来源多样：YAML 配置、命令行、参数寻优的 DataFrame。
+        pandas 会把混合类型的行统一成 float64，此时 lookback=20.0
+        用作切片下标会抛 TypeError，且错误发生在策略深处，
+        整轮参数扫描会静默跑空却看不出原因。
+        """
+        for name in ("lookback", "max_holding_days",
+                     "trend_filter_window", "max_holdings"):
+            setattr(self, name, int(getattr(self, name)))
+        for name in ("entry_z", "exit_z", "stop_z", "min_turnover",
+                     "position_ratio", "price_buffer"):
+            setattr(self, name, float(getattr(self, name)))
 
     def _validate(self) -> None:
         if not (self.stop_z < self.entry_z < self.exit_z):

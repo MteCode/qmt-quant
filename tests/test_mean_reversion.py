@@ -338,3 +338,34 @@ class TestTrendFilterDisable:
                                   trend_filter_window=0))
         buys = [t for t in engine.trades if t.direction == Direction.LONG]
         assert buys, "关闭过滤后应能在下跌趋势中买入（用于对照实验）"
+
+
+class TestParamTypeCoercion:
+    """参数寻优会从 DataFrame 取参数，pandas 把整行统一成 float64。
+
+    真实 bug：lookback=20.0 用作切片下标抛 TypeError，
+    错误发生在策略深处、被引擎的 try/except 吞掉，
+    整轮参数扫描静默跑空（全部 0 成交）却看不出原因。
+    """
+
+    def test_float_lookback_accepted(self):
+        s = MeanReversionStrategy(BacktestEngine(), "S", ["000001.SZSE"],
+                                  dict(BASE, lookback=20.0))
+        assert s.lookback == 20
+        assert isinstance(s.lookback, int)
+
+    def test_all_int_params_coerced(self):
+        s = MeanReversionStrategy(
+            BacktestEngine(), "S", ["000001.SZSE"],
+            {"lookback": 20.0, "max_holding_days": 15.0,
+             "trend_filter_window": 120.0, "max_holdings": 10.0})
+        for name in ("lookback", "max_holding_days",
+                     "trend_filter_window", "max_holdings"):
+            assert isinstance(getattr(s, name), int), name
+
+    def test_zscore_works_with_float_params(self):
+        s = MeanReversionStrategy(BacktestEngine(), "S", ["000001.SZSE"],
+                                  dict(BASE, lookback=10.0))
+        for c in [10.0, 11, 12, 11, 10, 9, 10, 11, 12, 8]:
+            s.closes["000001.SZSE"].append(float(c))
+        assert s.compute_zscore("000001.SZSE") is not None
