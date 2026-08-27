@@ -256,3 +256,69 @@ class TestFloatBoundary:
         ctrl = make()
         feed(ctrl, [1_000_000.0, 900_001.0])   # 回撤 9.9999%
         assert ctrl.level is DrawdownLevel.NORMAL
+
+
+class TestFreezeTimeout:
+    """最长冻结期：避免单次深回撤把策略永久锁死。
+
+    关键点是重置必须**同时重置峰值** —— 只降档不动峰值的话，
+    下一次 update() 算出的回撤依然超标，会立刻重新触发。
+    """
+
+    def test_disabled_by_default(self):
+        ctrl = make()
+        feed(ctrl, [100.0] + [80.0] * 200)
+        assert ctrl.level is DrawdownLevel.FLAT
+        assert ctrl.state.peak_resets == 0
+
+    def test_resets_after_freeze_limit(self):
+        ctrl = make(max_freeze_observations=10)
+        feed(ctrl, [100.0] + [80.0] * 12)
+        assert ctrl.level is DrawdownLevel.NORMAL
+        assert ctrl.state.peak_resets == 1
+
+    def test_peak_reset_to_current(self):
+        """峰值必须重置为当前净值，否则回撤依旧超标会立刻重新触发"""
+        ctrl = make(max_freeze_observations=5)
+        feed(ctrl, [100.0] + [80.0] * 7)
+        assert ctrl.state.peak == pytest.approx(80.0)
+        assert ctrl.drawdown == pytest.approx(0.0)
+
+    def test_does_not_retrigger_immediately_after_reset(self):
+        """重置后继续横盘不应再次触发 —— 这正是只降档不重置峰值的失败模式"""
+        ctrl = make(max_freeze_observations=5)
+        feed(ctrl, [100.0] + [80.0] * 7)
+        assert ctrl.level is DrawdownLevel.NORMAL
+        feed(ctrl, [80.0] * 3)
+        assert ctrl.level is DrawdownLevel.NORMAL
+
+    def test_can_trigger_again_from_new_peak(self):
+        """重置后若继续下跌，应基于新峰值重新触发"""
+        ctrl = make(max_freeze_observations=5)
+        feed(ctrl, [100.0] + [80.0] * 7)
+        assert ctrl.level is DrawdownLevel.NORMAL
+        feed(ctrl, [63.0])               # 相对新峰值 80 回撤 21%
+        assert ctrl.level is DrawdownLevel.FLAT
+
+    def test_counter_resets_on_level_change(self):
+        """档位正常变化时冻结计数应清零，不能累积到无关的档位上"""
+        ctrl = make(max_freeze_observations=100)
+        feed(ctrl, [100.0, 89.0])
+        assert ctrl.level is DrawdownLevel.CLOSE_ONLY
+        feed(ctrl, [95.0])               # 恢复到 NORMAL
+        assert ctrl.level is DrawdownLevel.NORMAL
+        assert ctrl.state.observations_at_level == 0
+
+    def test_repeated_resets_counted(self):
+        """反复重置次数要能被观测到 —— 次数多说明策略本身有问题"""
+        ctrl = make(max_freeze_observations=5)
+        equity = [100.0]
+        for _ in range(4):
+            equity += [equity[-1] * 0.75] * 6
+        feed(ctrl, equity)
+        assert ctrl.state.peak_resets >= 3
+        assert "峰值重置" in ctrl.summary()
+
+    def test_negative_limit_rejected(self):
+        with pytest.raises(ValueError, match="max_freeze_observations"):
+            DrawdownController(DrawdownConfig(max_freeze_observations=-1))

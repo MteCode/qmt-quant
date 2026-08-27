@@ -27,8 +27,27 @@
 该策略年化波动 27.72%，10% 的一档线在它身上属于常态波动。
 
 **选参数的经验法则**：一档阈值不应低于策略年化波动率的 0.5 倍，
-否则正常波动就会触发。用 `--dd-close-only` 等参数按策略实测调整，
-或先关掉回撤控制看清策略本身的回撤形态再定阈值。
+否则正常波动就会触发。先关掉回撤控制看清策略本身的回撤形态再定阈值。
+
+## 最长冻结期：解决了停摆，但把保护交还了回去
+
+`max_freeze_observations` 在非 NORMAL 档位停留过久后重置峰值并恢复交易。
+同一段行情实测：
+
+| 配置 | 收益 | 最大回撤 | 成交笔数 | 峰值重置 |
+|------|------|---------|---------|---------|
+| 无回撤控制 | 18.14% | -50.83% | 438 | — |
+| 严控制、无冻结期 | 2.05% | **-19.97%** | **26**（停摆） | 0 |
+| 冻结期 60 | 3.82% | -41.77% | 292 | 4 |
+| 阈值放宽 15/22/30 + 冻结 60 | 8.89% | -43.09% | 354 | 4 |
+
+停摆问题解决了（成交 26 → 292），但最大回撤从 -19.97% 退回 -41.77% ——
+每次重置都等于承认亏损、重新开始，策略于是有机会再亏一个完整阈值幅度。
+
+**这不是参数没调好，是回撤控制的能力边界**：
+5.7 年内峰值重置 4 次，说明该策略反复跑不出回撤。
+风控只能限制单次下跌的深度，救不了策略本身没有正期望。
+`peak_resets` 频繁增长时，该做的是检视策略而不是继续放宽阈值。
 """
 import logging
 from dataclasses import dataclass, field
@@ -84,6 +103,19 @@ class DrawdownConfig:
     #: 刚启动时峰值就是当前净值，任何下跌都算回撤，会误触发。
     min_observations: int = 20
 
+    #: 最长冻结期（观测点数）。在非 NORMAL 档位停留超过该数量后，
+    #: **重置峰值为当前净值**并回到 NORMAL，相当于承认旧峰值已不可及、
+    #: 以当前净值为新起点重新计算回撤。0 表示禁用。
+    #:
+    #: 为什么必须同时重置峰值：只降档不动峰值的话，下一次 update()
+    #: 算出的回撤依然超标，会立刻重新触发，等于什么都没做。
+    #:
+    #: ⚠ 这会削弱保护：持续亏损的策略会不断获得「新起点」，
+    #: 每次重置都让它有机会再亏一个完整的阈值幅度。
+    #: 因此该值应设得足够长（建议 >= 60 个观测点），
+    #: 它是「避免永久停摆」与「限制累计亏损」之间的取舍，不是免费的。
+    max_freeze_observations: int = 0
+
     def validate(self) -> None:
         if not (0 < self.close_only_threshold < self.reduce_threshold
                 < self.flat_threshold < 1):
@@ -95,6 +127,8 @@ class DrawdownConfig:
             raise ValueError("recovery_ratio 必须在 (0, 1] 之间")
         if not 0 <= self.reduce_keep_ratio < 1:
             raise ValueError("reduce_keep_ratio 必须在 [0, 1) 之间")
+        if self.max_freeze_observations < 0:
+            raise ValueError("max_freeze_observations 不能为负")
 
 
 @dataclass
@@ -105,6 +139,11 @@ class DrawdownState:
     drawdown: float = 0.0
     level: DrawdownLevel = DrawdownLevel.NORMAL
     observations: int = 0
+    #: 在当前档位已停留的观测点数，用于判定是否冻结过久
+    observations_at_level: int = 0
+    #: 峰值被强制重置的次数。次数多说明策略长期跑不出回撤，
+    #: 是策略本身有问题的信号，而非风控参数问题
+    peak_resets: int = 0
     #: 档位变化历史 [(净值, 回撤, 旧档, 新档)]
     transitions: list = field(default_factory=list)
 
@@ -145,6 +184,9 @@ class DrawdownController:
         if s.observations < self.config.min_observations:
             return s.level
 
+        if self._check_freeze_timeout(equity):
+            return s.level
+
         new_level = self._resolve_level(s.drawdown, s.level)
         if new_level != s.level:
             old = s.level
@@ -155,7 +197,45 @@ class DrawdownController:
                 "回撤档位 %s -> %s（当前回撤 %.2f%%，峰值 %.2f，现值 %.2f）",
                 old.label, new_level.label, s.drawdown * 100, s.peak, equity)
             s.level = new_level
+            # 档位一变，冻结计时必须重来。否则计数会跨档位累积，
+            # 在新档位刚待几个点就被误判为「冻结过久」而重置峰值
+            s.observations_at_level = 0
         return s.level
+
+    def _check_freeze_timeout(self, equity: float) -> bool:
+        """冻结过久则重置峰值并回到 NORMAL。
+
+        只降档而不动峰值是无效的：回撤幅度没变，下一次 update()
+        会立刻重新触发。因此必须同时把峰值重置为当前净值 ——
+        承认旧峰值已不可及，以当前净值为新起点。
+
+        :return: 是否发生了重置
+        """
+        s = self.state
+        limit = self.config.max_freeze_observations
+        if limit <= 0 or s.level == DrawdownLevel.NORMAL:
+            s.observations_at_level = (0 if s.level == DrawdownLevel.NORMAL
+                                       else s.observations_at_level + 1)
+            return False
+
+        s.observations_at_level += 1
+        if s.observations_at_level < limit:
+            return False
+
+        old_peak, old_level, old_dd = s.peak, s.level, s.drawdown
+        s.peak = equity
+        s.drawdown = 0.0
+        s.level = DrawdownLevel.NORMAL
+        s.observations_at_level = 0
+        s.peak_resets += 1
+        s.transitions.append((equity, old_dd, old_level, DrawdownLevel.NORMAL))
+
+        logger.error(
+            "回撤冻结超过 %d 个观测点，重置峰值 %.2f -> %.2f 并恢复交易"
+            "（原回撤 %.2f%%，累计第 %d 次重置）。"
+            "重置次数偏多说明策略长期跑不出回撤，应检视策略而非放宽阈值",
+            limit, old_peak, equity, old_dd * 100, s.peak_resets)
+        return True
 
     def _resolve_level(self, dd: float, current: DrawdownLevel) -> DrawdownLevel:
         """由回撤幅度决定档位，降档需满足迟滞条件"""
@@ -223,6 +303,7 @@ class DrawdownController:
             f"当前回撤   : {s.drawdown:.2%}",
             f"当前档位   : {s.level.label}",
             f"档位变化   : {len(s.transitions)} 次",
+            f"峰值重置   : {s.peak_resets} 次",
         ]
         for equity, dd, old, new in s.transitions[-5:]:
             lines.append(f"  {old.label} -> {new.label} "

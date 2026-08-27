@@ -34,6 +34,7 @@ class RiskManager:
             flat_threshold=config.drawdown_flat,
             recovery_ratio=config.drawdown_recovery_ratio,
             min_observations=config.drawdown_min_observations,
+            max_freeze_observations=config.drawdown_max_freeze,
         ))
 
         #: 全局急停：True 时拒绝一切下单

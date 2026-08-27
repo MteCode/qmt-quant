@@ -22,6 +22,7 @@ from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.engine.live_engine import LiveEngine  # noqa: E402
 from qmtquant.event.engine import EventEngine  # noqa: E402
 from qmtquant.risk.risk_manager import RiskManager  # noqa: E402
+from qmtquant.store.database import StateStore  # noqa: E402
 from qmtquant.utils.logger import setup_logging  # noqa: E402
 
 
@@ -49,6 +50,8 @@ def main() -> int:
     parser.add_argument("--gateway", default=None, help="sim / miniqmt")
     parser.add_argument("--dry-run", action="store_true",
                         help="启动后立即开启急停，只跑行情不下单")
+    parser.add_argument("--no-store", action="store_true",
+                        help="不持久化状态（策略状态、成交流水不落库）")
     args = parser.parse_args()
 
     cfg = get_config()
@@ -65,7 +68,14 @@ def main() -> int:
 
     gateway = build_gateway(gateway_name, event_engine, cfg)
     risk_manager = RiskManager(cfg.risk, event_engine)
-    engine = LiveEngine(event_engine, gateway, risk_manager)
+
+    store = None
+    if not args.no_store:
+        from qmtquant.config import DATA_DIR
+        store = StateStore(DATA_DIR / "state.db")
+        print(f"状态库: {store.path}  {store.summary()}")
+
+    engine = LiveEngine(event_engine, gateway, risk_manager, store=store)
 
     setting = {
         "qmt_path": cfg.gateway.qmt_path,

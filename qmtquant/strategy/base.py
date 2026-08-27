@@ -48,6 +48,20 @@ class StrategyBase(ABC):
     def get_variables(self) -> dict:
         return {n: getattr(self, n, None) for n in self.variables}
 
+    def restore_variables(self, data: dict) -> None:
+        """从持久化状态恢复运行时变量。
+
+        只恢复 `variables` 中声明过的字段，且**不恢复 inited/trading** ——
+        这两个是生命周期标志，必须由引擎按当前实际情况设置，
+        从磁盘读一个 trading=True 会让策略在未初始化时就开始交易。
+        """
+        skip = {"inited", "trading"}
+        for name in self.variables:
+            if name in skip or name not in data:
+                continue
+            setattr(self, name, data[name])
+        self.write_log(f"已恢复运行时状态：{sorted(set(self.variables) - skip)}")
+
     # ------------------------------------------------------------ 生命周期回调（子类覆写）
 
     def on_init(self) -> None:

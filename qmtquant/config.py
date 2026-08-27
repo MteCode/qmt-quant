@@ -44,6 +44,9 @@ class RiskConfig:
     drawdown_flat: float = 0.20          # 三档：全部平仓
     drawdown_recovery_ratio: float = 0.7  # 降档迟滞系数
     drawdown_min_observations: int = 20
+    # 最长冻结期（观测点数），0=禁用。超时后重置峰值并恢复交易，
+    # 避免单次深回撤把策略永久锁死。会削弱保护，建议 >= 60
+    drawdown_max_freeze: int = 0
 
 
 @dataclass

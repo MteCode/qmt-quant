@@ -46,15 +46,27 @@ trade_logger = get_trade_logger()
 #: 行情停推多久算异常（秒）
 TICK_TIMEOUT = 60
 
+#: 策略状态定时落库间隔（秒）。
+#: 只在成交与优雅退出时保存是不够的 —— 进程被强杀（SIGTERM/断电）时
+#: finally 不会执行，自上次成交以来的状态全部丢失。定时保存把损失
+#: 上限压到这个间隔内。
+STATE_SAVE_INTERVAL = 60
+
 
 class LiveEngine:
     """实盘/模拟盘交易引擎"""
 
     def __init__(self, event_engine: EventEngine, gateway: BaseGateway,
-                 risk_manager: RiskManager) -> None:
+                 risk_manager: RiskManager, store=None) -> None:
+        """
+        :param store: StateStore。传入后策略状态、回撤记忆、成交流水会落库，
+            重启可恢复。**持仓与资金不从这里恢复** —— 券商是唯一真相来源，
+            信本地会导致重复下单或以为持有已被卖出的仓位。
+        """
         self.event_engine = event_engine
         self.gateway = gateway
         self.risk_manager = risk_manager
+        self.store = store
 
         self.strategies: dict[str, StrategyBase] = {}
         #: vt_orderid -> 策略名，用于回报路由
@@ -68,6 +80,7 @@ class LiveEngine:
 
         self._last_tick_time: datetime | None = None
         self._tick_warned: bool = False
+        self._last_state_save: float = time.time()
 
         self._register_handlers()
 
@@ -91,6 +104,18 @@ class LiveEngine:
         strategy = strategy_class(self, strategy_name, vt_symbols, setting)
         self.strategies[strategy_name] = strategy
         logger.info("已添加策略 %s，标的 %s", strategy_name, vt_symbols)
+
+        if self.store is not None:
+            saved = self.store.load_state(strategy_name)
+            if saved:
+                ts = self.store.state_updated_at(strategy_name)
+                logger.info("发现 %s 的持久化状态（保存于 %s），正在恢复",
+                            strategy_name, ts)
+                try:
+                    strategy.restore_variables(saved)
+                except Exception:
+                    logger.exception("恢复策略状态失败，将以全新状态启动: %s",
+                                     strategy_name)
         return strategy
 
     def init_all(self) -> None:
@@ -117,6 +142,20 @@ class LiveEngine:
             except Exception:
                 logger.exception("策略启动失败: %s", strategy.strategy_name)
 
+    def save_all_states(self) -> None:
+        """把所有策略的运行时状态落库。
+
+        在成交后与停止时调用 —— 成交会改变持仓，此时不存的话
+        崩溃重启就会丢掉这次变化。
+        """
+        if self.store is None:
+            return
+        for name, strategy in self.strategies.items():
+            try:
+                self.store.save_state(name, strategy.get_variables())
+            except Exception:
+                logger.exception("保存策略状态失败: %s", name)
+
     def stop_all(self) -> None:
         """停止所有策略，先撤单再停，避免留下孤儿挂单"""
         for strategy in self.strategies.values():
@@ -129,6 +168,7 @@ class LiveEngine:
                 logger.info("策略已停止: %s", strategy.strategy_name)
             except Exception:
                 logger.exception("策略停止失败: %s", strategy.strategy_name)
+        self.save_all_states()
 
     # ------------------------------------------------------------ 策略调用的接口
 
@@ -274,6 +314,7 @@ class LiveEngine:
     def _on_order(self, event: Event) -> None:
         order: OrderData = event.data
         self.orders[order.vt_orderid] = order
+        self._persist(lambda s: s.save_order(order), "委托")
 
         if order.status in (Status.REJECTED, Status.CANCELLED):
             trade_logger.warning("委托%s orderid=%s symbol=%s msg=%s",
@@ -303,9 +344,24 @@ class LiveEngine:
             except Exception:
                 logger.exception("策略处理成交回报异常: %s", strategy.strategy_name)
 
+        # 成交后立刻落库：成交改变了持仓，此时不存的话崩溃重启会丢掉这次变化
+        self._persist(lambda s: s.save_trade(trade), "成交")
+        self.save_all_states()
+
         # 成交后刷新资金与持仓，保证风控用的是最新状态
         self.gateway.query_account()
         self.gateway.query_position()
+
+    def _persist(self, fn, what: str) -> None:
+        """落库失败不能影响交易 —— 持久化是辅助能力，
+        为了记账而中断实盘是本末倒置。失败只记日志。
+        """
+        if self.store is None:
+            return
+        try:
+            fn(self.store)
+        except Exception:
+            logger.exception("持久化%s失败", what)
 
     def _route(self, vt_orderid: str) -> StrategyBase | None:
         """按委托号找回归属策略。找不到说明是手工单或重启前的遗留单。"""
@@ -319,6 +375,9 @@ class LiveEngine:
     def _on_account(self, event: Event) -> None:
         self.account = event.data
         self.risk_manager.update_account(event.data)
+        self._persist(
+            lambda s: s.save_equity(event.data.balance, event.data.available,
+                                    event.data.market_value), "净值")
 
     def _on_position(self, event: Event) -> None:
         pos: PositionData = event.data
@@ -347,6 +406,12 @@ class LiveEngine:
         qsize = self.event_engine.qsize
         if qsize > 1000:
             logger.warning("事件队列积压 %d 条，处理速度跟不上推送", qsize)
+
+        # 定时落库：进程被强杀时 finally 不会执行，靠这个兜底
+        if (self.store is not None
+                and time.time() - self._last_state_save >= STATE_SAVE_INTERVAL):
+            self._last_state_save = time.time()
+            self.save_all_states()
 
     @staticmethod
     def _is_trading_time(now: datetime | None = None) -> bool:
