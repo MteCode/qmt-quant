@@ -4,6 +4,9 @@
     python scripts/run_mean_reversion.py --sector 沪深300 --start 2021-01-01
     python scripts/run_mean_reversion.py --entry-z -1.2 --holdings 10
     python scripts/run_mean_reversion.py --no-trend-filter   # 观察去掉趋势过滤的后果
+
+    # 用 Tushare 拉到的历史成分股，完全消除幸存者偏差与成分股前视
+    python scripts/run_mean_reversion.py         --universe-csv data/universe/index_weight_000300.SH.csv
 """
 import argparse
 import sys
@@ -20,11 +23,22 @@ from qmtquant.engine.backtest_engine import BacktestEngine  # noqa: E402
 from qmtquant.report.html_report import build_report  # noqa: E402
 from qmtquant.risk.drawdown import DrawdownConfig, DrawdownController  # noqa: E402
 from qmtquant.strategy.mean_reversion import MeanReversionStrategy  # noqa: E402
-from qmtquant.universe.providers import PointInTimeUniverse, StaticUniverse  # noqa: E402
+from qmtquant.universe.providers import (  # noqa: E402
+    HistoricalUniverse,
+    PointInTimeUniverse,
+    StaticUniverse,
+)
 from qmtquant.utils.logger import setup_logging  # noqa: E402
 
 
-def build_universe(sector: str, cfg, min_ipo_days: int):
+def build_universe(sector: str, cfg, min_ipo_days: int,
+                   universe_csv: str | None = None):
+    # 历史成分 CSV 优先：它同时消除幸存者偏差与成分股前视，
+    # 而 PointInTimeUniverse 只能挡住「还没进指数就选它」
+    if universe_csv:
+        provider = HistoricalUniverse(universe_csv)
+        return provider, provider.all_symbols()
+
     meta_path = (Path(cfg.data.store_dir) / "universe"
                  / f"universe_{sector}.parquet")
     if not meta_path.exists():
@@ -54,6 +68,8 @@ def main() -> int:
     p.add_argument("--end", default=None)
     p.add_argument("--capital", type=float, default=None)
     p.add_argument("--min-ipo-days", type=int, default=60)
+    p.add_argument("--universe-csv", default=None,
+                   help="历史成分股 CSV（scripts/download_index_weight.py 产出）")
 
     p.add_argument("--lookback", type=int, default=20)
     p.add_argument("--entry-z", type=float, default=-2.0)
@@ -78,7 +94,8 @@ def main() -> int:
     end = args.end or cfg.backtest.end
     capital = args.capital or cfg.backtest.initial_capital
 
-    provider, symbols = build_universe(args.sector, cfg, args.min_ipo_days)
+    provider, symbols = build_universe(args.sector, cfg, args.min_ipo_days,
+                                       args.universe_csv)
     if provider is None:
         return 1
 
@@ -116,6 +133,8 @@ def main() -> int:
 
     print()
     print(stats.summary())
+    print()
+    print(provider.describe_bias().summary())
     print()
     print("--- 退出原因归因 ---")
     if strategy.exit_stats:
