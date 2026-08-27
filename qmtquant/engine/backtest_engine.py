@@ -13,7 +13,7 @@ from datetime import datetime
 import pandas as pd
 
 from ..config import CostConfig
-from ..core.constants import Direction, OrderType, Status
+from ..core.constants import Direction, OrderType, Status, get_price_limit
 from ..core.objects import BarData, OrderData, OrderRequest, TradeData
 from ..gateway.sim_gateway import calc_cost
 from ..strategy.base import StrategyBase
@@ -28,9 +28,16 @@ class BacktestEngine:
 
     def __init__(self, initial_capital: float = 1_000_000,
                  cost: CostConfig | None = None,
-                 price_limit_ratio: float = 0.10) -> None:
+                 price_limit_ratio: float | None = None) -> None:
         """
-        :param price_limit_ratio: 涨跌停幅度，主板 10%，创业板/科创板需按标的调整
+        :param price_limit_ratio: 强制统一的涨跌停幅度。
+            默认 None = **按标的代码前缀自动判定**（主板 10%、
+            创业板/科创板 20%、北交所 30%）。
+
+            曾经这里硬编码全局 10%，而沪深300 中有 53 只（18%）是 20% 的
+            创业板/科创板，它们涨跌超过 10% 的交易日会被误判为涨跌停而拒单，
+            回测结果对这些标的系统性失真。仅在需要压制板块差异做对照实验时
+            才显式传值。
         """
         self.initial_capital = initial_capital
         self.cost = cost or CostConfig()
@@ -154,8 +161,9 @@ class BacktestEngine:
 
             prev = self._prev_bars.get(req.vt_symbol)
             pre_close = prev.close_price if prev else bar.open_price
-            limit_up = round(pre_close * (1 + self.price_limit_ratio), 2)
-            limit_down = round(pre_close * (1 - self.price_limit_ratio), 2)
+            ratio = self._limit_ratio(req.vt_symbol)
+            limit_up = round(pre_close * (1 + ratio), 2)
+            limit_down = round(pre_close * (1 - ratio), 2)
 
             # 一字涨停买不进，一字跌停卖不出
             if req.direction == Direction.LONG and bar.open_price >= limit_up:
@@ -179,6 +187,12 @@ class BacktestEngine:
             price = bar.open_price + (slip if req.direction == Direction.LONG else -slip)
             price = max(min(price, limit_up), limit_down)
             self._fill(req, price)
+
+    def _limit_ratio(self, vt_symbol: str) -> float:
+        """该标的的涨跌停幅度。显式指定时用指定值，否则按板块自动判定。"""
+        if self.price_limit_ratio is not None:
+            return self.price_limit_ratio
+        return get_price_limit(vt_symbol)
 
     def _fill(self, req: OrderRequest, price: float) -> None:
         volume = req.volume

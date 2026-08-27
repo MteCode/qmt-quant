@@ -73,6 +73,43 @@ class Product(Enum):
     INDEX = "指数"
 
 
+#: 各板块涨跌停幅度，按代码前缀判定。
+#: 主板 10%，创业板(300/301)/科创板(688) 20%，北交所(4/8/92) 30%。
+#: 放在 core 而非 datafeed，是因为**回测撮合与数据校验必须用同一份定义** ——
+#: 曾经回测引擎硬编码全局 10%，而沪深300 中有 53 只（18%）是 20% 的创业板/科创板，
+#: 导致这些标的涨跌超 10% 的交易日被误判为涨跌停而拒单。
+PRICE_LIMIT_BY_PREFIX: dict[str, float] = {
+    "688": 0.20,   # 科创板
+    "300": 0.20,   # 创业板
+    "301": 0.20,   # 创业板
+    "92": 0.30,    # 北交所
+    "8": 0.30,     # 北交所
+    "4": 0.30,     # 北交所
+}
+DEFAULT_PRICE_LIMIT = 0.10
+
+#: ST 股涨跌停 5%。历史 ST 状态无法从 QMT 取得，故不参与自动判定，
+#: 仅作为已知常量供上层显式指定。
+ST_PRICE_LIMIT = 0.05
+
+
+def get_price_limit(symbol: str) -> float:
+    """按代码前缀返回涨跌停幅度。
+
+    :param symbol: 6 位代码或 vt_symbol，两者皆可
+
+    注意：拿不到历史 ST 状态，ST 期间实际为 5%，本函数会高估。
+    用于回测撮合时会略微放宽限制（把本该拒单的放行），
+    用于数据校验时只作上界判断（超过它一定是数据错误）。
+    """
+    code = symbol.split(".")[0]
+    # 先匹配长前缀，避免 "8" 抢先匹配到 "688"
+    for prefix in sorted(PRICE_LIMIT_BY_PREFIX, key=len, reverse=True):
+        if code.startswith(prefix):
+            return PRICE_LIMIT_BY_PREFIX[prefix]
+    return DEFAULT_PRICE_LIMIT
+
+
 class RejectReason(Enum):
     """风控拒单原因，用于告警与统计"""
     KILL_SWITCH = "全局急停已开启"

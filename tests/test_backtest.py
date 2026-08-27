@@ -44,6 +44,24 @@ class BuyOnceStrategy(StrategyBase):
                       self.get_pos(bar.vt_symbol))
 
 
+class BuyHighLimitStrategy(StrategyBase):
+    """只在第一根 Bar 买入，限价给足 25% 缓冲。
+
+    用于测涨跌停逻辑：限价必须高于次日开盘价，否则会先被
+    「限价低于开盘价」拒掉，测不到涨跌停判断。
+    """
+    parameters = []
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.bar_count = 0
+
+    def on_bar(self, bar):
+        self.bar_count += 1
+        if self.bar_count == 1:
+            self.buy(bar.vt_symbol, bar.close_price * 1.25, 100)
+
+
 class TestBacktestRules:
     def test_no_lookahead_fill_on_next_open(self):
         """T 日下的单必须在 T+1 开盘成交，不能在 T 日成交"""
@@ -139,3 +157,53 @@ class TestPerformance:
     def test_empty_equity(self):
         stats = calculate_stats(pd.Series(dtype=float), [], 100.0)
         assert stats.trading_days == 0
+
+
+class TestPriceLimitByBoard:
+    """涨跌停必须按板块区分。
+
+    真实 bug：引擎曾硬编码全局 10%，而沪深300 中 53 只（18%）是 20% 的
+    创业板/科创板，它们涨跌超 10% 的交易日被误判为涨跌停而拒单。
+    """
+
+    def _run(self, symbol, exchange, closes, opens, ratio=None):
+        engine = BacktestEngine(initial_capital=1_000_000,
+                                price_limit_ratio=ratio)
+        engine.load_data(make_bars(closes, symbol=symbol,
+                                   exchange=exchange, opens=opens))
+        # 限价必须高于次日开盘，否则会先被「限价低于开盘价」拒掉，
+        # 测不到涨跌停判断本身
+        engine.add_strategy(BuyHighLimitStrategy, [f"{symbol}.{exchange.value}"])
+        engine.run()
+        return engine
+
+    def test_chinext_allows_15pct_gap(self):
+        """创业板 20% 涨跌停，次日开盘涨 15% 应可成交"""
+        engine = self._run("300750", Exchange.SZSE,
+                           closes=[10.0, 11.5], opens=[10.0, 11.5])
+        assert engine.trades, "创业板涨 15% 未触及 20% 涨停，应能成交"
+
+    def test_main_board_blocks_15pct_gap(self):
+        """主板 10% 涨跌停，同样涨 15% 必须被拒"""
+        engine = self._run("600000", Exchange.SSE,
+                           closes=[10.0, 11.5], opens=[10.0, 11.5])
+        assert not engine.trades
+        assert any("涨停" in o.message for o in engine.orders)
+
+    def test_star_market_uses_20pct(self):
+        engine = self._run("688981", Exchange.SSE,
+                           closes=[10.0, 11.5], opens=[10.0, 11.5])
+        assert engine.trades, "科创板同样是 20% 涨跌停"
+
+    def test_explicit_ratio_overrides_board(self):
+        """显式指定时压制板块判定，用于对照实验"""
+        engine = self._run("300750", Exchange.SZSE,
+                           closes=[10.0, 11.5], opens=[10.0, 11.5], ratio=0.10)
+        assert not engine.trades, "显式传 10% 时创业板也应按 10% 判定"
+
+    def test_limit_ratio_lookup(self):
+        engine = BacktestEngine()
+        assert engine._limit_ratio("600519.SSE") == 0.10
+        assert engine._limit_ratio("300750.SZSE") == 0.20
+        assert engine._limit_ratio("688981.SSE") == 0.20
+        assert engine._limit_ratio("830799.BSE") == 0.30

@@ -16,6 +16,8 @@ from enum import Enum
 
 import pandas as pd
 
+from ..core.constants import get_price_limit
+
 logger = logging.getLogger(__name__)
 
 
@@ -46,34 +48,6 @@ class Issue:
             preview = ", ".join(str(x) for x in self.samples[:3])
             s += f" (样例: {preview})"
         return s
-
-
-#: 各板块涨跌停幅度。代码前缀 -> 幅度
-#: 主板 10%，创业板(30)/科创板(688) 20%，北交所 30%
-PRICE_LIMIT_BY_PREFIX = {
-    "688": 0.20,   # 科创板
-    "300": 0.20,   # 创业板
-    "301": 0.20,   # 创业板
-    "8": 0.30,     # 北交所
-    "4": 0.30,     # 北交所
-    "92": 0.30,    # 北交所
-}
-DEFAULT_PRICE_LIMIT = 0.10
-
-#: ST 股涨跌停 5%，但历史 ST 状态拿不到，这里只作为判定阈值的下限参考
-ST_PRICE_LIMIT = 0.05
-
-
-def get_price_limit(symbol: str) -> float:
-    """按代码前缀返回涨跌停幅度。
-
-    注意：拿不到历史 ST 状态，ST 期间实际是 5%，本函数会高估。
-    因此异常涨跌幅检测只用它做**上界**判断（超过它一定是数据错误）。
-    """
-    for prefix, limit in PRICE_LIMIT_BY_PREFIX.items():
-        if symbol.startswith(prefix):
-            return limit
-    return DEFAULT_PRICE_LIMIT
 
 
 class BarValidator:
