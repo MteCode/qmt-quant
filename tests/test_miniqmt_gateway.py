@@ -132,3 +132,46 @@ class TestQueryInterfaces:
 
         status = STATUS_XT2VT[xtconstant.ORDER_REPORTED_CANCEL]
         assert OrderData(status=status).is_active()
+
+
+class TestOrderStateMachine:
+    """实盘验证过的状态迁移（2026-08-27 模拟盘 62221162）。
+
+    A 组 报单->撤单: 提交中 -> 未成交 -> 已撤销
+    B 组 报单->成交: 提交中 -> 未成交 -> 全部成交
+    这两条路径必须始终可达，且终态不可再被当作活动委托。
+    """
+
+    def test_cancel_path_states(self):
+        from qmtquant.core.constants import Status
+        from qmtquant.core.objects import OrderData
+        from qmtquant.gateway.miniqmt_gateway import STATUS_XT2VT
+
+        path = [xtconstant.ORDER_WAIT_REPORTING,
+                xtconstant.ORDER_REPORTED,
+                xtconstant.ORDER_CANCELED]
+        states = [STATUS_XT2VT[c] for c in path]
+        assert states == [Status.SUBMITTING, Status.NOTTRADED, Status.CANCELLED]
+        # 前两态活动、终态非活动
+        assert all(OrderData(status=s).is_active() for s in states[:2])
+        assert not OrderData(status=states[-1]).is_active()
+
+    def test_fill_path_states(self):
+        from qmtquant.core.constants import Status
+        from qmtquant.core.objects import OrderData
+        from qmtquant.gateway.miniqmt_gateway import STATUS_XT2VT
+
+        path = [xtconstant.ORDER_WAIT_REPORTING,
+                xtconstant.ORDER_REPORTED,
+                xtconstant.ORDER_SUCCEEDED]
+        states = [STATUS_XT2VT[c] for c in path]
+        assert states == [Status.SUBMITTING, Status.NOTTRADED, Status.ALLTRADED]
+        assert not OrderData(status=states[-1]).is_active()
+
+    def test_partial_fill_still_active(self):
+        """部成仍是活动委托 —— 剩余部分还可能继续成交或被撤"""
+        from qmtquant.core.objects import OrderData
+        from qmtquant.gateway.miniqmt_gateway import STATUS_XT2VT
+
+        s = STATUS_XT2VT[xtconstant.ORDER_PART_SUCC]
+        assert OrderData(status=s).is_active()
