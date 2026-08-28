@@ -40,6 +40,9 @@ from qmtquant.utils.logger import setup_logging  # noqa: E402
 #: 取倒数的理由：PE=10 比 PE=20 便宜，但 PE=-5（亏损）不是"最便宜"。
 #: 取倒数后 EP=0.1 > EP=0.05 > EP=-0.2，排序才有经济含义
 FACTORS = {
+    # 价格派生因子用 __price__ 标记，由 close 矩阵现算，不来自 daily_basic
+    "低波动": ("__vol20__", False, "20 日已实现波动率的负值"),
+    "低波动60": ("__vol60__", False, "60 日已实现波动率的负值"),
     "EP": ("pe_ttm", True, "盈利收益率（PE_TTM 倒数）"),
     "BP": ("pb", True, "账面市值比（PB 倒数）"),
     "SP": ("ps_ttm", True, "销售收益率（PS_TTM 倒数）"),
@@ -140,12 +143,20 @@ def main() -> int:
 
     all_reports = []
     for name, (col, invert, desc) in FACTORS.items():
-        if col not in df.columns:
+        if col.startswith("__vol"):
+            # 已实现波动率 = 日收益率的滚动标准差。**取负值**使「越大越好」，
+            # 与其他因子方向统一 —— IC 为正即支持「低波动股后续表现更好」
+            window = int(col.strip("_").replace("vol", ""))
+            m = -prices.pct_change().rolling(window).std()
+        elif col not in df.columns:
             print(f"\n[!] 缺少列 {col}，跳过 {name}")
             continue
+        else:
+            m = build_matrix(df, col)
 
-        m = build_matrix(df, col)
-        if invert:
+        if col.startswith("__vol"):
+            pass    # 已取负，不再变换
+        elif invert:
             # 取倒数前先剔除 <=0：负 PE 是亏损股，倒数后会排到最前面，
             # 变成「专挑亏损最惨的买」，与因子本意完全相反
             m = m.where(m > 0)

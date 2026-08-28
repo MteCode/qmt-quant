@@ -16,7 +16,7 @@ from ..config import CostConfig
 from ..core.constants import Direction, OrderType, Status, get_price_limit
 from ..core.objects import BarData, OrderData, OrderRequest, TradeData
 from ..gateway.sim_gateway import calc_cost
-from ..risk.drawdown import DrawdownController
+from ..risk.drawdown import DrawdownController, DrawdownLevel
 from ..strategy.base import StrategyBase
 from ..utils.symbol import normalize, split_vt_symbol
 from .performance import PerformanceStats, calculate_stats
@@ -82,6 +82,8 @@ class BacktestEngine:
         self.drawdown_blocked: int = 0
         #: 回撤控制强制发出的减仓委托笔数
         self.risk_exit_orders: int = 0
+        #: 上一次执行过强制减仓的档位，防止同一档位反复卖出
+        self._last_enforced_level = DrawdownLevel.NORMAL
         self._current_bars: dict[str, BarData] = {}
         self._prev_bars: dict[str, BarData] = {}
         self._current_dt: datetime | None = None
@@ -283,6 +285,20 @@ class BacktestEngine:
         不引入前视偏差。限价给足缓冲 ——
         **风控要出场就必须出得去**，挂不上单的止损等于没有止损。
         """
+        level = self.drawdown.level
+        # **只在档位升高的那一根 Bar 执行一次减仓。**
+        #
+        # 真 bug：原本每根 Bar 都重算「卖到 volume * ratio」，
+        # 而 volume 已经是上次卖完之后的值 —— 于是指数衰减地反复卖，
+        # 实测在低换手策略上制造出 6556 笔成交、胜率 2.25%
+        # （正常应为 610 笔、49.66%），全是被反复切割出来的微亏平仓。
+        #
+        # 「削减到该比例」是一次性动作，不是每根 Bar 的目标。
+        if level <= self._last_enforced_level:
+            self._last_enforced_level = level   # 档位下降时同步，允许再次触发
+            return
+        self._last_enforced_level = level
+
         ratio = self.drawdown.target_position_ratio()
         if ratio >= 1.0:
             return

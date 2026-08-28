@@ -437,3 +437,72 @@ class TestNonMonotonicTightening:
         回撤反而从 -18.35% 升到 -21.55%"""
         from qmtquant.config import RiskConfig
         assert RiskConfig().drawdown_max_freeze > 0
+
+
+class TestNoRepeatedReduction:
+    """同一档位内不得反复减仓。
+
+    真 bug：原本每根 Bar 都重算「卖到 volume × ratio」，
+    而 volume 已经是上次卖完之后的值 —— 指数衰减地反复卖。
+    实测在低换手策略上制造出 6556 笔成交、胜率 2.25%
+    （正常应为 610 笔、49.66%），全是被反复切割出来的微亏平仓。
+    """
+
+    def _run(self, dd_cfg):
+        import pandas as pd
+        from qmtquant.core.constants import Exchange, Interval
+        from qmtquant.core.objects import BarData
+        from qmtquant.engine.backtest_engine import BacktestEngine
+        from qmtquant.strategy.base import StrategyBase
+
+        # 长期缓跌：档位升上去后长时间停留，正是复现该 bug 的场景
+        prices = [10 * 1.01 ** i for i in range(20)]
+        prices += [prices[-1] * 0.995 ** i for i in range(1, 120)]
+        dates = pd.bdate_range("2023-01-02", periods=len(prices))
+        bars = [BarData(symbol="600519", exchange=Exchange.SSE,
+                        datetime=d.to_pydatetime(), interval=Interval.DAILY,
+                        open_price=p, high_price=p * 1.001,
+                        low_price=p * 0.999, close_price=p,
+                        volume=1_000_000, turnover=p * 1_000_000)
+                for d, p in zip(dates, prices)]
+
+        class BuyAndHold(StrategyBase):
+            parameters: list[str] = []
+
+            def on_bar(self, bar):
+                if self.trading and self.get_pos(bar.vt_symbol) == 0:
+                    self.buy(bar.vt_symbol, bar.close_price * 1.05,
+                             self.get_cash() * 0.95 / bar.close_price)
+
+        engine = BacktestEngine(initial_capital=1_000_000,
+                                drawdown=DrawdownController(dd_cfg))
+        engine.load_data(bars)
+        engine.add_strategy(BuyAndHold, ["600519.SSE"], {})
+        engine.run()
+        return engine
+
+    def test_reduce_fires_once_per_level(self):
+        """REDUCE 档停留 100 根 Bar，减仓委托不该有几十笔"""
+        engine = self._run(DrawdownConfig(
+            close_only_threshold=0.03, reduce_threshold=0.05,
+            reduce_keep_ratio=0.3, flat_threshold=0.60,
+            min_observations=5, max_freeze_observations=0))
+        assert engine.risk_exit_orders <= 3, (
+            f"同一档位内反复减仓：发出 {engine.risk_exit_orders} 笔")
+
+    def test_still_reduces_at_all(self):
+        """修复不能把功能修没了"""
+        engine = self._run(DrawdownConfig(
+            close_only_threshold=0.03, reduce_threshold=0.05,
+            reduce_keep_ratio=0.3, flat_threshold=0.60,
+            min_observations=5, max_freeze_observations=0))
+        assert engine.risk_exit_orders >= 1, "达到 REDUCE 档必须减仓"
+
+    def test_escalation_triggers_again(self):
+        """档位继续升高（REDUCE -> FLAT）时应再次减仓"""
+        engine = self._run(DrawdownConfig(
+            close_only_threshold=0.03, reduce_threshold=0.05,
+            reduce_keep_ratio=0.5, flat_threshold=0.10,
+            min_observations=5, max_freeze_observations=0))
+        assert engine.risk_exit_orders >= 2, "升档应触发新一轮减仓"
+        assert engine.get_pos("600519.SSE") == 0, "FLAT 档应清空"

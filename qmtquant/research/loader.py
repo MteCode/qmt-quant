@@ -20,6 +20,7 @@ BUILTIN = {
     "ma_cross": "qmtquant.strategy.ma_cross.MaCrossStrategy",
     "intraday_vwap": "qmtquant.strategy.intraday_vwap.IntradayVwapStrategy",
     "breakout": "qmtquant.strategy.breakout.BreakoutStrategy",
+    "low_turnover": "qmtquant.strategy.low_turnover.LowTurnoverStrategy",
 }
 
 
