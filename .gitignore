@@ -40,3 +40,6 @@ desktop.ini
 
 # 研究脚本产出
 research/__pycache__/
+
+# Qlib / mlflow 实验产物
+mlruns/
