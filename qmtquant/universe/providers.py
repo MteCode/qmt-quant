@@ -43,9 +43,19 @@ class StaticUniverse(UniverseProvider):
     - 成分股前视：2020 年就用上了 2026 年才知道的成分名单
     """
 
-    def __init__(self, symbols: list[str], source: str = "静态名单") -> None:
+    def __init__(self, symbols: list[str], source: str = "静态名单",
+                 from_index_snapshot: bool = True) -> None:
+        """
+        :param from_index_snapshot: 名单是否来自「当前指数成分快照」。
+
+            为 False 表示标的是使用者直接点名的（如指定某只 ETF）——
+            此时不存在「从幸存者里挑出来」的问题：ETF 是先验选定的
+            交易标的，不是被某个筛选规则选中的。
+            把这种情况也报成幸存者偏差属于误报，会让真正的偏差警告失去分量。
+        """
         self.symbols = [normalize(s) for s in symbols]
         self.source = source
+        self.from_index_snapshot = from_index_snapshot
 
     def get_universe(self, dt) -> list[str]:
         return list(self.symbols)
@@ -54,6 +64,19 @@ class StaticUniverse(UniverseProvider):
         return list(self.symbols)
 
     def describe_bias(self) -> BiasReport:
+        if not self.from_index_snapshot:
+            return BiasReport(
+                survivorship=False,
+                membership_lookahead=False,
+                listing_filtered=False,
+                size=len(self.symbols),
+                notes=[
+                    f"名单来源：{self.source}（使用者直接指定）",
+                    "标的为先验选定，不涉及成分股筛选，故无幸存者偏差",
+                    "⚠ 但「为什么选这几只」本身可能带有事后视角 —— "
+                    "挑一只十年涨十倍的票回测，偏差在选择动作里而非数据里",
+                ],
+            )
         return BiasReport(
             survivorship=True,
             membership_lookahead=True,

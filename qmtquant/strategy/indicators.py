@@ -140,3 +140,89 @@ class IntradayVwap:
     @property
     def is_new_day(self) -> bool:
         return self._volume == 0
+
+
+class AverageTrueRange:
+    """ATR（平均真实波幅）。
+
+    ## 为什么止损要用 ATR 而不是固定百分比
+
+    「跌 5% 止损」对不同标的含义完全不同：某只票日常波动就有 4%，
+    5% 止损等于每周被扫两次；另一只日波动 0.8%，5% 止损形同虚设。
+
+    ATR 把止损距离统一到「几倍日常波动」这个尺度上，
+    跨标的、跨时期才可比。海龟交易法则用的就是 2×ATR。
+
+    ## 真实波幅而非当日振幅
+
+    TR = max(今日最高−今日最低, |今日最高−昨收|, |今日最低−昨收|)
+
+    后两项是为了把**跳空**算进去 —— 只看当日振幅的话，
+    低开 5% 然后横盘一天，波幅会被算成接近 0，而实际风险极大。
+    """
+
+    def __init__(self, window: int = 14) -> None:
+        if window < 1:
+            raise ValueError(f"window 至少为 1，实际 {window}")
+        self.window = int(window)
+        self._trs: deque = deque(maxlen=self.window)
+        self._prev_close: float | None = None
+
+    def update(self, high: float, low: float, close: float) -> float | None:
+        """推入一根 Bar，返回当前 ATR（数据不足时 None）"""
+        if self._prev_close is None:
+            tr = high - low
+        else:
+            tr = max(high - low,
+                     abs(high - self._prev_close),
+                     abs(low - self._prev_close))
+        self._prev_close = close
+        self._trs.append(tr)
+        return self.value
+
+    @property
+    def value(self) -> float | None:
+        if len(self._trs) < self.window:
+            return None
+        return sum(self._trs) / self.window
+
+    @property
+    def ready(self) -> bool:
+        return len(self._trs) >= self.window
+
+    def reset(self) -> None:
+        self._trs.clear()
+        self._prev_close = None
+
+
+class Donchian:
+    """唐奇安通道：过去 N 根 Bar 的最高价与最低价。
+
+    突破策略的入场信号来源。注意**不含当根 Bar** ——
+    含了的话「突破 N 日新高」会变成恒真（今天的最高价当然
+    是包含今天在内的最高价之一），信号永远触发。
+    """
+
+    def __init__(self, window: int = 20) -> None:
+        if window < 2:
+            raise ValueError(f"window 至少为 2，实际 {window}")
+        self.window = int(window)
+        self._highs: deque = deque(maxlen=self.window)
+        self._lows: deque = deque(maxlen=self.window)
+
+    def update(self, high: float, low: float) -> None:
+        """推入一根 Bar。**先取值再 update**，否则通道会含入当根"""
+        self._highs.append(high)
+        self._lows.append(low)
+
+    @property
+    def upper(self) -> float | None:
+        return max(self._highs) if len(self._highs) >= self.window else None
+
+    @property
+    def lower(self) -> float | None:
+        return min(self._lows) if len(self._lows) >= self.window else None
+
+    @property
+    def ready(self) -> bool:
+        return len(self._highs) >= self.window

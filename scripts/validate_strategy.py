@@ -117,7 +117,8 @@ class Harness:
         # 择时类策略只交易一两个标的，不需要也不该走成分股那套
         if symbols:
             self.symbols = symbols
-            self.universe = StaticUniverse(symbols, source="命令行指定")
+            self.universe = StaticUniverse(symbols, source="命令行指定",
+                                          from_index_snapshot=False)
             self._load_bars(cfg, start, end)
             return
 

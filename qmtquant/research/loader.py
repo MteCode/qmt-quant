@@ -19,6 +19,7 @@ BUILTIN = {
     "trend_ma": "qmtquant.strategy.trend_ma.TrendMaStrategy",
     "ma_cross": "qmtquant.strategy.ma_cross.MaCrossStrategy",
     "intraday_vwap": "qmtquant.strategy.intraday_vwap.IntradayVwapStrategy",
+    "breakout": "qmtquant.strategy.breakout.BreakoutStrategy",
 }
 
 

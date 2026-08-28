@@ -178,3 +178,37 @@ class TestFullMarketUniverse:
         from qmtquant.universe.providers import FullMarketUniverse
         with pytest.raises(ValueError, match="缺少列"):
             FullMarketUniverse(pd.DataFrame({"vt_symbol": ["000001.SZ"]}))
+
+
+class TestNamedSymbolsBias:
+    """使用者直接点名的标的不该被报成幸存者偏差。
+
+    误报会让真正的偏差警告失去分量 —— 每次回测都亮红灯，
+    用户就不看了，而选股回测里那个警告是致命的。
+    """
+
+    def test_named_symbols_no_survivorship(self):
+        from qmtquant.universe.providers import StaticUniverse
+        r = StaticUniverse(["510300.SH"], source="命令行指定",
+                           from_index_snapshot=False).describe_bias()
+        assert not r.survivorship
+        assert not r.membership_lookahead
+        assert r.is_clean
+
+    def test_still_warns_about_selection_bias(self):
+        """数据里没有偏差，不代表「为什么选这几只」没有偏差"""
+        from qmtquant.universe.providers import StaticUniverse
+        r = StaticUniverse(["600519.SH"], from_index_snapshot=False
+                           ).describe_bias()
+        assert any("选择动作" in n for n in r.notes)
+
+    def test_index_snapshot_still_flagged(self):
+        from qmtquant.universe.providers import StaticUniverse
+        r = StaticUniverse(["600519.SH"], source="沪深300 当前成分快照"
+                           ).describe_bias()
+        assert r.survivorship and r.membership_lookahead
+
+    def test_default_assumes_snapshot(self):
+        """默认必须是「有偏差」—— 安全的方向是宁可误报也不漏报"""
+        from qmtquant.universe.providers import StaticUniverse
+        assert StaticUniverse(["600519.SH"]).describe_bias().survivorship

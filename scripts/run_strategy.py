@@ -63,7 +63,8 @@ def build_universe(args, cfg):
 
     if args.symbols:
         syms = [normalize(s.strip()) for s in args.symbols.split(",") if s.strip()]
-        return StaticUniverse(syms, source="命令行指定"), syms
+        return StaticUniverse(syms, source="命令行指定",
+                               from_index_snapshot=False), syms
 
     meta_path = (Path(cfg.data.store_dir) / "universe"
                  / f"universe_{args.sector}.parquet")
