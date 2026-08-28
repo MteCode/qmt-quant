@@ -289,6 +289,27 @@ class TushareFeed:
         df["symbol"] = normalize(vt_symbol)
         return df
 
+    def index_daily(self, ts_code: str, start: str, end: str) -> pd.DataFrame:
+        """指数日线。用于取**全收益指数**做基准。
+
+        为什么必须用全收益：价格指数不含股息再投资，
+        而策略持有成分股是实际收到股息的。用价格指数做基准
+        会把成分股的股息率（沪深300 约 2%/年）算成策略的超额收益 ——
+        一个纯指数复制组合会凭空显示出 2% 的年化 alpha。
+
+        沪深300 全收益代码是 ``H00300.CSI``（名称"300收益"），
+        价格指数是 ``000300.SH``。
+        """
+        df = self.client.query(
+            "index_daily", ts_code=ts_code,
+            start_date=pd.Timestamp(start).strftime("%Y%m%d"),
+            end_date=pd.Timestamp(end).strftime("%Y%m%d"))
+        if df.empty:
+            return df
+        df = df.copy()
+        df["trade_date"] = pd.to_datetime(df["trade_date"], format="%Y%m%d")
+        return df.sort_values("trade_date").reset_index(drop=True)
+
     def stock_basic(self) -> pd.DataFrame:
         """全市场股票基础信息，含**行业分类**。
 

@@ -33,9 +33,12 @@ turnover      ``daily_basic.turnover_rate_f``              逐日快照
 行业标签错几个，好过完全不做中性化（实测不中性化时低换手因子
 选出 20 只里 15 只是银行，所谓「因子显著」实为行业暴露）。
 
-**3. 基准收益用的是价格指数，不是全收益指数。** 沪深300 全收益
-（000300.CSI）本地没有，用价格指数会**高估超额收益约 2%/年**
-（成分股股息率约 2%）。跑出来的年化超额要在心里扣掉这一块。
+**3. 基准必须用全收益指数。** 价格指数不含股息再投资，而策略
+持有成分股是**实际收到股息的**。用价格指数做基准等于把成分股的
+股息率算成策略的超额 —— 一个纯指数复制组合会凭空显示出约 2%/年 alpha。
+
+本模块优先读 ``{代码}_tr.parquet``（Tushare H00300.CSI 全收益），
+读不到才退回价格指数并**显式告警**。
 """
 from __future__ import annotations
 
@@ -266,6 +269,34 @@ def _ffill_by_ann(s: pd.Series, dates: pd.DatetimeIndex) -> pd.Series:
     return s.reindex(s.index.union(dates)).ffill().reindex(dates)
 
 
+def load_benchmark(store_dir: str, index_code: str,
+                   dates: pd.DatetimeIndex, start: str,
+                   end: str) -> tuple[pd.Series, str]:
+    """基准日收益。**全收益指数优先**。
+
+    价格指数不含股息再投资。用它做基准，成分股 2% 的股息率
+    会被整个算进策略的「超额收益」—— 一个纯指数复制组合
+    会凭空显示出 2%/年的 alpha。这是指数增强研究里最常见的口径错误。
+    """
+    from qmtquant.datafeed.xt_feed import IndexFeed
+
+    tr_path = Path(store_dir) / "index" / f"{index_code}_tr.parquet"
+    if tr_path.exists():
+        df = pd.read_parquet(tr_path)
+        s = (df.assign(trade_date=pd.to_datetime(df["trade_date"]))
+               .set_index("trade_date")["close"].sort_index())
+        s = s[(s.index >= start) & (s.index <= end)]
+        if not s.empty:
+            ret = s.reindex(dates).ffill().pct_change().fillna(0.0)
+            return ret, f"{index_code} **全收益**（{tr_path.name}）"
+
+    close = IndexFeed(store_dir).load_close(index_code, start, end)
+    ret = close.reindex(dates).ffill().pct_change().fillna(0.0)
+    return ret, (f"⚠ {index_code} **价格指数**（无全收益数据）—— "
+                 "超额被高估约 2%/年，请先运行 "
+                 "scripts/download_total_return_index.py")
+
+
 # ============================================================================
 # 主装配
 # ============================================================================
@@ -281,7 +312,6 @@ def build_bundle(index_code: str = "000300.SH",
         否则说明本地行情覆盖不足，直接报错而不是跑出一条无意义的曲线
     """
     from qmtquant.config import get_config
-    from qmtquant.datafeed.xt_feed import IndexFeed
 
     from hs300_multifactor import DataBundle
 
@@ -335,11 +365,10 @@ def build_bundle(index_code: str = "000300.SH",
         {c: (dates - listing[c]).days if pd.notna(listing[c]) else 9999
          for c in codes}, index=dates)
 
-    # ---- 基准
-    bench_close = IndexFeed(store_dir).load_close(index_code, start, end)
-    bench_ret = bench_close.reindex(dates).ffill().pct_change().fillna(0.0)
-    print("⚠ 基准用的是**价格指数**，非全收益指数 —— "
-          "超额收益被高估约 2%/年（成分股股息率）")
+    # ---- 基准：全收益优先
+    bench_ret, bench_kind = load_benchmark(store_dir, index_code, dates,
+                                           start, end)
+    print(f"基准：{bench_kind}")
 
     return DataBundle(
         close=close, ret=ret, mktcap=mktcap,

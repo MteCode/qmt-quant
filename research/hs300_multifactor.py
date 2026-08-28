@@ -250,11 +250,21 @@ def build_sue(fin_q: pd.DataFrame,
     return pd.DataFrame(out).T.reindex(index=dates, columns=codes)
 
 
+#: 默认因子分组。
+#:
+#: ⚠ **SUE 已从 growth 大类移除。** 真实数据实测 t=-0.64，
+#: 完全无效，却因为独占 growth 大类而拿到 1/4 的合成权重 ——
+#: 等于把 25% 的信号预算分配给了噪声。
+#: 需要对照时用 FACTOR_GROUPS_WITH_SUE。
 FACTOR_GROUPS: Dict[str, List[str]] = {
     "value":   ["EP", "BP"],
     "quality": ["ROE", "ACCRUAL"],
-    "growth":  ["SUE"],
     "pv":      ["IVOL", "REV20", "TURN20"],
+}
+
+#: 含 SUE 的原始分组，仅供对照
+FACTOR_GROUPS_WITH_SUE: Dict[str, List[str]] = {
+    **FACTOR_GROUPS, "growth": ["SUE"],
 }
 
 
@@ -416,13 +426,16 @@ def backtest(w_target: pd.DataFrame,
     for d in tdays:
         r = ret.loc[d].fillna(0.0)
 
-        # 先结算今天的收益（用昨天收盘后的持仓）
+        # 先结算今天的收益（用昨天收盘后的持仓）。
+        # cur 之和可以小于 1 —— 差额是现金，收益按 0 计
         pr = float((cur * r).sum())
-        # 权重漂移
+        # 权重漂移：新权重 = 个股增长 / 组合整体增长。
+        #
+        # ⚠ 这里**不能归一化到和为 1**。原实现用 grown/grown.sum()，
+        # 那会把「半仓」在次日强行拉回满仓，
+        # 使择时给出的仓位缩放当天就失效（实测 exposure 参数完全不起作用）。
         if cur.abs().sum() > 0:
-            grown = cur * (1.0 + r)
-            tot = grown.sum()
-            cur = grown / tot if tot != 0 else cur
+            cur = cur * (1.0 + r) / (1.0 + pr) if (1.0 + pr) != 0 else cur
 
         cost = 0.0
         buy = sell = 0.0
@@ -499,7 +512,15 @@ def month_end_dates(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
 def run_strategy(b: DataBundle,
                  top_pct: float = 0.30,
                  min_listed: int = 250,
+                 groups: Dict[str, List[str]] = None,
+                 exposure: pd.Series = None,
                  verbose: bool = True):
+    """
+    :param groups: 因子分组。默认已剔除 SUE（实测 t=-0.64 无效）
+    :param exposure: 择时层给出的**总仓位比例**（index 与调仓日对齐）。
+        指数增强满仓持有、beta≈1，不躲系统性下跌 —— 实测最大回撤 -33.5%。
+        传入 exposure 后目标权重整体缩放，未投部分视为现金（不计收益）。
+    """
     dates = month_end_dates(b.ret.index)
     dates = dates[dates >= b.ret.index[max(260, 0)]]  # 留足因子窗口
 
@@ -520,9 +541,14 @@ def run_strategy(b: DataBundle,
     fwd = fwd.where(universe)
 
     ic = ic_report(proc, fwd)
-    score = combine_factors(proc)
+    score = combine_factors(proc, groups)
     score = score.where(universe)
     w = build_weights(score, b, universe, top_pct=top_pct)
+    if exposure is not None:
+        # 按择时信号缩放总仓位。行业内部的相对权重不变，
+        # 只改变「投多少钱进去」—— 择时与选股职责分离
+        scale = exposure.reindex(w.index).ffill().fillna(1.0).clip(0.0, 1.0)
+        w = w.mul(scale, axis=0)
     bt = backtest(w, b.ret, b.bench_ret)
 
     if verbose:
