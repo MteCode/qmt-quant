@@ -117,6 +117,10 @@ def grid_search(runner: Callable[[dict], Any], grid: dict[str, Iterable],
 class PlateauReport:
     """参数平原检验结果"""
     metric: str
+    #: 满足回撤硬约束的组合数
+    eligible: int = 0
+    #: 网格总组合数
+    total: int = 0
     best_params: dict = field(default_factory=dict)
     best_value: float = 0.0
     #: 邻域内该指标的中位数
@@ -140,6 +144,8 @@ class PlateauReport:
         verdict = "参数平原（稳健）" if self.is_plateau else "参数孤峰（疑似过拟合）"
         lines = [
             f"--- 参数平原检验（{self.metric}）---",
+            (f"合规组合     : {self.eligible}/{self.total}"
+             " 组满足回撤上限" if self.total else "合规组合     : —"),
             f"最优参数     : {self.best_params}",
             f"最优值       : {self.best_value:.4f}",
             f"邻域中位数   : {self.neighbor_median:.4f}（{self.neighbors} 个邻居）",
@@ -147,21 +153,58 @@ class PlateauReport:
             f"全网格为正   : {self.positive_ratio:.1%}",
             f"结论         : {verdict}",
         ]
-        if not self.is_plateau:
+        if self.total and self.eligible == 0:
+            lines.append("  ⚠ **没有任何参数组合满足回撤上限** —— "
+                         "该策略在此网格上不存在可上实盘的参数")
+        elif not self.is_plateau:
             lines.append("  最优点周围迅速变差，参数稍有偏离收益就消失，"
                          "不应据此上实盘")
         return "\n".join(lines)
 
 
+def filter_by_drawdown(df: pd.DataFrame,
+                       max_drawdown_limit: float = 0.20) -> pd.DataFrame:
+    """剔除违反回撤上限的参数组合。
+
+    **硬约束必须在寻优之前生效，而不是选完再看。**
+    只按 Sharpe 挑最优，挑出来的很可能是一组回撤 -27% 的参数 ——
+    它在约束下根本不可用，却被当成「最优点」去做平原检验，
+    整个结论都建立在一个不能上实盘的点上。
+    """
+    if df.empty or "最大回撤" not in df.columns:
+        return df
+    keep = df["最大回撤"].abs() <= max_drawdown_limit + 1e-9
+    dropped = int((~keep).sum())
+    if dropped:
+        logger.info("回撤约束剔除 %d/%d 组参数（上限 %.0f%%）",
+                    dropped, len(df), max_drawdown_limit * 100)
+    return df[keep]
+
+
 def parameter_plateau(df: pd.DataFrame, param_cols: list[str],
-                      metric: str = "Sharpe") -> PlateauReport:
+                      metric: str = "Sharpe",
+                      max_drawdown_limit: float | None = 0.20) -> PlateauReport:
     """检验最优点是否落在参数平原上。
 
     做法：找到最优点，取网格上每个参数相差不超过一档的邻居，
     比较邻居的表现中位数与最优值。
+
+    :param max_drawdown_limit: 回撤硬约束。**先剔除违规组合再找最优点** ——
+        否则会拿一个不能上实盘的参数点去做平原检验。
+        传 None 则不施加约束。
     """
     if df.empty:
         return PlateauReport(metric=metric)
+
+    full = df
+    if max_drawdown_limit is not None:
+        df = filter_by_drawdown(df, max_drawdown_limit)
+        if df.empty:
+            # 全部违规也是一个明确结论：这个策略在该网格上不存在合规参数
+            return PlateauReport(
+                metric=metric,
+                positive_ratio=float((full[metric] > 0).mean()),
+                eligible=0, total=len(full))
 
     best_idx = df[metric].idxmax()
     best = df.loc[best_idx]
@@ -195,6 +238,8 @@ def parameter_plateau(df: pd.DataFrame, param_cols: list[str],
         retention=max(retention, 0.0),
         positive_ratio=float((df[metric] > 0).mean()),
         neighbors=len(neighbors),
+        eligible=len(df),
+        total=len(full),
     )
 
 

@@ -37,10 +37,12 @@ from qmtquant.config import CostConfig, LOG_DIR, get_config  # noqa: E402
 from qmtquant.core.constants import Interval  # noqa: E402
 from qmtquant.datafeed.xt_feed import XtDataFeed  # noqa: E402
 from qmtquant.engine.backtest_engine import BacktestEngine  # noqa: E402
+from qmtquant.risk.drawdown import DrawdownConfig, DrawdownController  # noqa: E402
 from qmtquant.research.validation import (  # noqa: E402
     SplitReport,
     _to_result,
     cost_sensitivity,
+    filter_by_drawdown as _eligible,
     grid_search,
     parameter_plateau,
     summarize_verdict,
@@ -108,8 +110,13 @@ class Harness:
     def __init__(self, cfg, strategy_cls, sector: str, start: str, end: str,
                  min_ipo_days: int, extra_params: dict | None = None,
                  universe_csv: str | None = None,
-                 symbols: list[str] | None = None) -> None:
+                 symbols: list[str] | None = None,
+                 use_drawdown: bool = True) -> None:
         self.cfg = cfg
+        # 验证必须带上回撤控制：不带的话验的是「另一套系统」，
+        # 而实盘要跑的是带风控的那套。两者的参数最优区往往不同 ——
+        # 风控会把深回撤的参数组直接砍掉
+        self.use_drawdown = use_drawdown
         self.strategy_cls = strategy_cls
         #: 网格之外的固定参数（如 max_holdings），每次回测都会带上
         self.extra_params = extra_params or {}
@@ -200,8 +207,10 @@ class Harness:
             slippage_tick=max(1, int(base.slippage_tick * cost_multiplier)),
         )
 
+        drawdown = self._make_drawdown()
         engine = BacktestEngine(
-            initial_capital=self.cfg.backtest.initial_capital, cost=cost)
+            initial_capital=self.cfg.backtest.initial_capital, cost=cost,
+            drawdown=drawdown)
         engine.load_data(bars)
         engine.set_universe(self.universe)
         engine.add_strategy(self.strategy_cls, self.symbols,
@@ -211,6 +220,20 @@ class Harness:
         if warmup_days > 0 and start:
             stats = self._restat_from(engine, start)
         return stats
+
+    def _make_drawdown(self):
+        """每次回测都要新建控制器 —— 复用会把上一次的峰值带进来"""
+        if not self.use_drawdown:
+            return None
+        r = self.cfg.risk
+        return DrawdownController(DrawdownConfig(
+            close_only_threshold=r.drawdown_close_only,
+            reduce_threshold=r.drawdown_reduce,
+            reduce_keep_ratio=r.drawdown_reduce_keep,
+            flat_threshold=r.drawdown_flat,
+            recovery_ratio=r.drawdown_recovery_ratio,
+            min_observations=r.drawdown_min_observations,
+            max_freeze_observations=r.drawdown_max_freeze))
 
     @staticmethod
     def _restat_from(engine, start: str):
@@ -265,9 +288,15 @@ def main() -> int:
     p.add_argument("--holdings", type=int, default=10)
     p.add_argument("--min-ipo-days", type=int, default=60)
     p.add_argument("--metric", default="Sharpe")
+    p.add_argument("--max-drawdown", type=float, default=0.20,
+                   help="回撤硬约束。违规的参数组合在寻优阶段就被剔除，"
+                        "而不是选完再看")
     p.add_argument("--warmup", type=int, default=260,
                    help="测试窗口的预热自然日数。趋势过滤需 120 个交易日，"
                         "约合 180 自然日，留足余量")
+    p.add_argument("--no-drawdown", action="store_true",
+                   help="验证时关闭回撤控制。**默认开启** —— "
+                        "不带风控验出来的是另一套系统")
     p.add_argument("--quick", action="store_true", help="用小网格快速跑")
     p.add_argument("--skip", nargs="*", default=[],
                    choices=["grid", "split", "walkforward", "cost"])
@@ -311,7 +340,8 @@ def main() -> int:
         syms = ([normalize(x.strip()) for x in args.symbols.split(",")
                  if x.strip()] if args.symbols else None)
         h = Harness(cfg, cls, args.sector, args.start, args.end,
-                    args.min_ipo_days, fixed, args.universe_csv, syms)
+                    args.min_ipo_days, fixed, args.universe_csv, syms,
+                    use_drawdown=not args.no_drawdown)
     except (FileNotFoundError, RuntimeError) as exc:
         print(exc)
         return 1
@@ -337,15 +367,29 @@ def main() -> int:
 
         df.to_csv(out / "validation_grid.csv", index=False,
                   encoding="utf-8-sig")
-        plateau = parameter_plateau(df, list(grid), args.metric)
+        plateau = parameter_plateau(df, list(grid), args.metric,
+                                    max_drawdown_limit=args.max_drawdown)
+        if not plateau.best_params:
+            print()
+            print(plateau.summary())
+            print()
+            print("  网格中回撤最小的 5 组（均不合规）：")
+            cols = list(grid) + ["总收益", "最大回撤", "Sharpe", "成交数"]
+            print(df.reindex(df["最大回撤"].abs().nsmallest(5).index)[cols]
+                  .to_string(index=False,
+                             formatters={"总收益": "{:.2%}".format,
+                                         "最大回撤": "{:.2%}".format,
+                                         "Sharpe": "{:.3f}".format}))
+            return 1
         best_params = plateau.best_params
         print()
         print(plateau.summary())
         sections.append(plateau.summary())
 
-        print("\n  网格中表现最好的 5 组：")
+        print("\n  网格中表现最好的 5 组（仅合规组合）：")
         cols = list(grid) + ["总收益", "年化", "最大回撤", "Sharpe", "成交数"]
-        top = df.nlargest(5, args.metric)[cols]
+        # 只列合规组合 —— 列出违规的「最优」会让人误以为它可用
+        top = _eligible(df, args.max_drawdown).nlargest(5, args.metric)[cols]
         print(top.to_string(index=False,
                             formatters={"总收益": "{:.2%}".format,
                                         "年化": "{:.2%}".format,
