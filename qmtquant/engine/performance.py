@@ -14,6 +14,8 @@ class PerformanceStats:
     start_date: str = ""
     end_date: str = ""
     trading_days: int = 0
+    #: 最大回撤上限。超过即判定不合格 —— 这是硬约束，不是参考值
+    max_drawdown_limit: float = 0.20
     initial_capital: float = 0
     final_capital: float = 0
     total_return: float = 0
@@ -32,6 +34,11 @@ class PerformanceStats:
     def to_dict(self) -> dict:
         return dict(self.__dict__)
 
+    @property
+    def drawdown_ok(self) -> bool:
+        """最大回撤是否在上限之内"""
+        return abs(self.max_drawdown) <= self.max_drawdown_limit + 1e-9
+
     def summary(self) -> str:
         return "\n".join([
             "=" * 46,
@@ -40,7 +47,9 @@ class PerformanceStats:
             f"期末资金      : {self.final_capital:,.2f}",
             f"总收益率      : {self.total_return * 100:.2f}%",
             f"年化收益率    : {self.annual_return * 100:.2f}%",
-            f"最大回撤      : {self.max_drawdown * 100:.2f}%",
+            f"最大回撤      : {self.max_drawdown * 100:.2f}%"
+            + ("" if self.drawdown_ok
+               else f"   ✗ 超过上限 {self.max_drawdown_limit:.0%}"),
             f"最长回撤天数  : {self.max_drawdown_duration}",
             f"年化波动率    : {self.volatility * 100:.2f}%",
             f"Sharpe        : {self.sharpe_ratio:.3f}",
@@ -49,6 +58,11 @@ class PerformanceStats:
             f"胜率          : {self.win_rate * 100:.2f}%",
             f"盈亏比        : {self.profit_factor:.3f}",
             f"累计手续费    : {self.total_commission:,.2f}",
+            "-" * 46,
+            ("回撤合规      : ✓ 通过"
+             if self.drawdown_ok else
+             f"回撤合规      : ✗ **不通过**（{abs(self.max_drawdown):.2%} > "
+             f"{self.max_drawdown_limit:.0%}），不得上实盘"),
             "=" * 46,
         ])
 

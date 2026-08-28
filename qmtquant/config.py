@@ -37,16 +37,34 @@ class RiskConfig:
     blacklist: list[str] = field(default_factory=list)
 
     # --- 回撤控制（从峰值算起的累计跌幅，覆盖「连续阴跌」盲区）
+    #
+    # 目标：把实际最大回撤压在 20% 以内（硬约束）。
+    #
+    # 三档不能直接照着 20% 设 —— 信号在收盘产生、次日开盘才成交，
+    # 加上 T+1 当日买入不可卖，从触发到出清有滞后。
+    # 清仓线设 12% 才能让实际回撤落在 18% 左右。
+    #
+    # ⚠ **收紧档位不是单调变好的。** 实测（突破策略 · 沪深300 · 2016-2026）：
+    #
+    #   一档/二档/清仓    最大回撤    总收益
+    #      8/11/15       -22.67%    +95.38%
+    #      6/ 9/12       -18.35%    +22.91%   ← 当前默认
+    #      5/ 8/11       -32.42%    -22.12%   ← 收得更紧反而更差
+    #
+    # 阈值低于策略常态波动时会被反复触发，在局部低点被迫卖出，
+    # 峰值重置后再吃一轮完整回撤。改这几个数之前务必重跑扫描。
     drawdown_enabled: bool = True
-    drawdown_close_only: float = 0.10    # 一档：停止开新仓
-    drawdown_reduce: float = 0.15        # 二档：强制减仓
-    drawdown_reduce_keep: float = 0.5    # 二档保留的仓位比例
-    drawdown_flat: float = 0.20          # 三档：全部平仓
+    drawdown_close_only: float = 0.06    # 一档：停止开新仓
+    drawdown_reduce: float = 0.09        # 二档：强制减仓
+    drawdown_reduce_keep: float = 0.3    # 二档保留的仓位比例
+    drawdown_flat: float = 0.12          # 三档：全部平仓
     drawdown_recovery_ratio: float = 0.7  # 降档迟滞系数
     drawdown_min_observations: int = 20
     # 最长冻结期（观测点数），0=禁用。超时后重置峰值并恢复交易，
-    # 避免单次深回撤把策略永久锁死。会削弱保护，建议 >= 60
-    drawdown_max_freeze: int = 0
+    # 避免单次深回撤把策略永久锁死。
+    # 实测设 0（不解冻）时策略会停摆，成交从 3742 掉到 1184，
+    # 回撤反而升到 -21.55%；120 是扫描出来的可行值
+    drawdown_max_freeze: int = 120
 
 
 @dataclass

@@ -80,6 +80,8 @@ class BacktestEngine:
         self.undersized_orders: dict[str, int] = {}
         #: 被回撤控制拦下的买单数
         self.drawdown_blocked: int = 0
+        #: 回撤控制强制发出的减仓委托笔数
+        self.risk_exit_orders: int = 0
         self._current_bars: dict[str, BarData] = {}
         self._prev_bars: dict[str, BarData] = {}
         self._current_dt: datetime | None = None
@@ -146,6 +148,10 @@ class BacktestEngine:
             self.equity_curve[dt] = equity
             if self.drawdown is not None:
                 self.drawdown.update(equity)
+                # 5) 触发减仓/清仓档位时**真的卖出**。
+                # 只挡住开新仓是压不住回撤的：持仓不动的话，
+                # 行情继续跌，回撤照样往下走
+                self._enforce_drawdown(bars)
 
         self.strategy.trading = False
         self.strategy.on_stop()
@@ -257,6 +263,64 @@ class BacktestEngine:
             self.strategy.on_trade(trade)
         except Exception:
             logger.exception("策略处理成交回报异常")
+
+    #: 风控强制平仓的委托标记，用于区分策略主动交易与被动减仓
+    RISK_REFERENCE = "__RISK_DRAWDOWN__"
+    #: 风控减仓的限价缓冲。给得深是有意的 ——
+    #: 风控要出场就必须出得去，挂不上单的止损等于没有止损。
+    #: 撮合价取开盘价而非限价，放宽不恶化成交价
+    RISK_EXIT_BUFFER = 0.09
+
+    def _enforce_drawdown(self, bars: dict[str, BarData]) -> None:
+        """按回撤档位强制削减持仓。
+
+        这一段之前是缺失的：控制器有 CLOSE_ONLY/REDUCE/FLAT 三档，
+        但引擎只调用了 ``allow_open()`` —— 后两档从未被执行。
+        结果是回撤中「不开新仓但也不卖」，行情继续跌则回撤继续深，
+        20% 的上限根本压不住。
+
+        委托挂到下一根 Bar 开盘撮合，与策略下单走同一条路径，
+        不引入前视偏差。限价给足缓冲 ——
+        **风控要出场就必须出得去**，挂不上单的止损等于没有止损。
+        """
+        ratio = self.drawdown.target_position_ratio()
+        if ratio >= 1.0:
+            return
+
+        for vt_symbol, pos in list(self.positions.items()):
+            volume = pos["volume"]
+            if volume <= 0:
+                continue
+            # T+1：当日买入的部分卖不掉，只能减 available 那部分
+            sellable = min(pos.get("available", volume), volume)
+            if sellable <= 0:
+                continue
+
+            target = volume * ratio
+            excess = volume - target
+            if excess <= 0:
+                continue
+            sell_volume = min(excess, sellable)
+            if sell_volume <= 0:
+                continue
+
+            bar = bars.get(vt_symbol)
+            if bar is None or bar.suspended or bar.close_price <= 0:
+                continue   # 停牌卖不掉，下一根 Bar 再试
+
+            self._order_count += 1
+            symbol, exchange = split_vt_symbol(vt_symbol)
+            self.pending_orders.append(OrderRequest(
+                symbol=symbol, exchange=exchange, direction=Direction.SHORT,
+                order_type=OrderType.LIMIT,
+                # 深度限价：等价于实盘「跌停价挂单」，成交价仍取开盘价，
+                # 放宽缓冲不恶化成交价，只提高成交概率
+                price=bar.close_price * (1 - self.RISK_EXIT_BUFFER),
+                volume=sell_volume, reference=self.RISK_REFERENCE))
+            self.risk_exit_orders += 1
+            logger.debug("回撤 %s：强制减仓 %s %.0f 股（目标比例 %.0f%%）",
+                         self.drawdown.level.label, vt_symbol, sell_volume,
+                         ratio * 100)
 
     def _reject(self, req: OrderRequest, msg: str) -> None:
         symbol, exchange = split_vt_symbol(req.vt_symbol)

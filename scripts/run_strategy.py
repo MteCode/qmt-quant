@@ -110,7 +110,11 @@ def main() -> int:
     p.add_argument("--end", default=None)
     p.add_argument("--capital", type=float, default=None)
     p.add_argument("--interval", default="1d", choices=["1d", "1w", "1m"])
-    p.add_argument("--drawdown", action="store_true", help="启用回撤控制")
+    p.add_argument("--no-drawdown", action="store_true",
+                   help="关闭回撤控制。**默认是开启的** —— "
+                        "最大回撤 20% 是硬约束，关掉只用于观察策略本身的回撤形态")
+    p.add_argument("--max-drawdown", type=float, default=0.20,
+                   help="最大回撤上限，超过即判定不合格")
     p.add_argument("--benchmark", default="000300.SH",
                    help="基准指数，空字符串表示不对标")
     p.add_argument("--report", default="reports",
@@ -145,8 +149,17 @@ def main() -> int:
         return 1
     print(f"共 {len(bars):,} 根 K 线\n")
 
-    drawdown = (DrawdownController(DrawdownConfig(min_observations=20))
-                if args.drawdown else None)
+    drawdown = None
+    if not args.no_drawdown:
+        r = cfg.risk
+        drawdown = DrawdownController(DrawdownConfig(
+            close_only_threshold=r.drawdown_close_only,
+            reduce_threshold=r.drawdown_reduce,
+            reduce_keep_ratio=r.drawdown_reduce_keep,
+            flat_threshold=r.drawdown_flat,
+            recovery_ratio=r.drawdown_recovery_ratio,
+            min_observations=r.drawdown_min_observations,
+            max_freeze_observations=r.drawdown_max_freeze))
     engine = BacktestEngine(initial_capital=capital, cost=cfg.cost,
                             drawdown=drawdown)
     engine.load_data(bars)
@@ -154,8 +167,12 @@ def main() -> int:
     engine.add_strategy(cls, symbols, params)
 
     stats = engine.run()
+    stats.max_drawdown_limit = args.max_drawdown
 
     print(stats.summary())
+    if engine.risk_exit_orders:
+        print(f"回撤控制强制减仓 {engine.risk_exit_orders} 笔，"
+              f"拦截买单 {engine.drawdown_blocked} 笔")
     print()
     print(provider.describe_bias().summary())
     if drawdown:

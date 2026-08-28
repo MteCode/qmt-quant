@@ -322,3 +322,118 @@ class TestFreezeTimeout:
     def test_negative_limit_rejected(self):
         with pytest.raises(ValueError, match="max_freeze_observations"):
             DrawdownController(DrawdownConfig(max_freeze_observations=-1))
+
+
+class TestForcedReduction:
+    """回撤档位必须**真的卖出**。
+
+    真 bug：控制器有 CLOSE_ONLY/REDUCE/FLAT 三档，
+    但引擎只调用了 allow_open() —— 后两档从未被执行。
+    结果是回撤中「不开新仓但也不卖」，行情继续跌则回撤继续深，
+    20% 的上限根本压不住。
+    """
+
+    def _crash_bars(self, n_up=30, n_down=60):
+        import pandas as pd
+        from qmtquant.core.constants import Exchange, Interval
+        from qmtquant.core.objects import BarData
+        prices = [10 * 1.02 ** i for i in range(n_up)]
+        prices += [prices[-1] * 0.97 ** i for i in range(1, n_down)]
+        dates = pd.bdate_range("2023-01-02", periods=len(prices))
+        return [BarData(symbol="600519", exchange=Exchange.SSE,
+                        datetime=d.to_pydatetime(), interval=Interval.DAILY,
+                        open_price=p, high_price=p * 1.001,
+                        low_price=p * 0.999, close_price=p,
+                        volume=1_000_000, turnover=p * 1_000_000)
+                for d, p in zip(dates, prices)]
+
+    def _run(self, dd_cfg):
+        from qmtquant.engine.backtest_engine import BacktestEngine
+        from qmtquant.strategy.base import StrategyBase
+
+        class BuyAndHold(StrategyBase):
+            """买入后死不撒手 —— 只有风控能让它出场"""
+            parameters: list[str] = []
+
+            def on_bar(self, bar):
+                if self.trading and self.get_pos(bar.vt_symbol) == 0:
+                    self.buy(bar.vt_symbol, bar.close_price * 1.05,
+                             self.get_cash() * 0.95 / bar.close_price)
+
+        ctrl = DrawdownController(dd_cfg) if dd_cfg else None
+        engine = BacktestEngine(initial_capital=1_000_000, drawdown=ctrl)
+        engine.load_data(self._crash_bars())
+        engine.add_strategy(BuyAndHold, ["600519.SSE"], {})
+        stats = engine.run()
+        return engine, stats
+
+    def test_reduces_drawdown_versus_none(self):
+        _, no_ctrl = self._run(None)
+        engine, with_ctrl = self._run(
+            DrawdownConfig(close_only_threshold=0.05, reduce_threshold=0.08,
+                           flat_threshold=0.12, min_observations=5))
+        assert with_ctrl.max_drawdown > no_ctrl.max_drawdown, (
+            f"回撤控制应减小回撤：{with_ctrl.max_drawdown:.2%} "
+            f"vs 无控制 {no_ctrl.max_drawdown:.2%}")
+
+    def test_issues_risk_sell_orders(self):
+        """必须真的发出卖单，而不只是拦住买单"""
+        engine, _ = self._run(
+            DrawdownConfig(close_only_threshold=0.05, reduce_threshold=0.08,
+                           flat_threshold=0.12, min_observations=5))
+        assert engine.risk_exit_orders > 0, "REDUCE/FLAT 档必须发出卖单"
+
+    def test_risk_orders_tagged(self):
+        """风控减仓要与策略主动交易区分开，否则归因会算错"""
+        engine, _ = self._run(
+            DrawdownConfig(close_only_threshold=0.05, reduce_threshold=0.08,
+                           flat_threshold=0.12, min_observations=5))
+        tagged = [t for t in engine.trades
+                  if t.reference == engine.RISK_REFERENCE]
+        assert tagged, "风控委托必须带标记"
+
+    def test_no_orders_when_normal(self):
+        engine = self._run(DrawdownConfig(
+            close_only_threshold=0.90, reduce_threshold=0.95,
+            flat_threshold=0.99, min_observations=5))[0]
+        assert engine.risk_exit_orders == 0
+
+    def test_flat_sells_everything(self):
+        engine, _ = self._run(
+            DrawdownConfig(close_only_threshold=0.03, reduce_threshold=0.05,
+                           flat_threshold=0.07, min_observations=5))
+        assert engine.get_pos("600519.SSE") == 0, "FLAT 档应清空持仓"
+
+
+class TestNonMonotonicTightening:
+    """收紧档位不是单调变好的 —— 这是选参数时最容易犯的错。
+
+    实测（突破策略 · 沪深300 · 2016-2026）：
+
+        一档/二档/清仓    最大回撤    总收益
+           8/11/15       -22.67%    +95.38%
+           6/ 9/12       -18.35%    +22.91%
+           5/ 8/11       -32.42%    -22.12%   ← 收得更紧反而更差
+
+    阈值低于策略常态波动时会被反复触发，在局部低点被迫卖出，
+    峰值重置后再吃一轮完整回撤。
+    """
+
+    def test_default_config_targets_20_percent(self):
+        """默认档位必须留出执行滞后的余量，不能直接照 20% 设"""
+        from qmtquant.config import RiskConfig
+        r = RiskConfig()
+        assert r.drawdown_flat < 0.20, (
+            "清仓线必须明显低于 20%：信号收盘产生、次日开盘成交，"
+            "加上 T+1 当日买入不可卖，从触发到出清有滞后")
+
+    def test_tiers_strictly_increasing(self):
+        from qmtquant.config import RiskConfig
+        r = RiskConfig()
+        assert r.drawdown_close_only < r.drawdown_reduce < r.drawdown_flat
+
+    def test_freeze_enabled_by_default(self):
+        """不解冻会让策略停摆：实测成交从 3742 掉到 1184，
+        回撤反而从 -18.35% 升到 -21.55%"""
+        from qmtquant.config import RiskConfig
+        assert RiskConfig().drawdown_max_freeze > 0
