@@ -3,12 +3,28 @@
 回答的不是「哪组参数收益最高」，而是「这个策略是否只在某个特定参数点上有效」。
 只在一个点有效的策略是拟合噪声的产物，实盘必然失效。
 
+四道检验分别回答：
+
+1. **参数平原** —— 最优点周围的参数是不是也还行？孤峰即过拟合
+2. **样本外** —— 样本内选出的参数，拿到没见过的区间还灵吗？
+3. **walk-forward** —— 滚动地「用过去选参数、在未来验证」，多个窗口是否稳定
+4. **成本敏感性** —— 手续费翻倍还活得下去吗？多少倍成本会打平？
+
 用法：
-    python scripts/validate_strategy.py --sector 沪深300
+    # 内置策略
+    python scripts/validate_strategy.py --strategy mean_reversion
+
+    # 你自己写的策略 + 自定义参数网格
+    python scripts/validate_strategy.py --strategy my_pkg.my_mod.MyStrategy         --grid '{"ma_window": [20, 60, 120], "band": [0.0, 0.02]}'
+
+    # 用历史成分池（推荐，无幸存者偏差）
+    python scripts/validate_strategy.py --strategy mean_reversion         --universe-csv data/universe/index_weight_000300.SH.csv
+
     python scripts/validate_strategy.py --skip walkforward   # 跳过耗时的滚动验证
     python scripts/validate_strategy.py --quick              # 小网格快速跑
 """
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -30,30 +46,55 @@ from qmtquant.research.validation import (  # noqa: E402
     summarize_verdict,
     walk_forward,
 )
-from qmtquant.strategy.mean_reversion import MeanReversionStrategy  # noqa: E402
-from qmtquant.universe.providers import PointInTimeUniverse, StaticUniverse  # noqa: E402
+from qmtquant.research.loader import (  # noqa: E402
+    check_params,
+    load_strategy,
+    parse_params,
+)
+from qmtquant.universe.providers import (  # noqa: E402
+    HistoricalUniverse,
+    PointInTimeUniverse,
+    StaticUniverse,
+)
 from qmtquant.utils.logger import setup_logging  # noqa: E402
+from qmtquant.utils.symbol import normalize  # noqa: E402
 
-#: 完整网格。参数取值刻意覆盖「明显偏松」到「明显偏紧」，
-#: 这样才看得出最优点周围是平原还是孤峰
-FULL_GRID = {
-    "lookback": [10, 15, 20, 30],
-    "entry_z": [-1.2, -1.5, -2.0, -2.5],
-    "exit_z": [-0.5, 0.0, 0.5],
-    "max_holding_days": [10, 20, 40],
+#: 各策略的内置网格。参数取值刻意覆盖「明显偏松」到「明显偏紧」，
+#: 这样才看得出最优点周围是平原还是孤峰。
+#: 自己写的策略用 --grid 传 JSON 即可，不必改这里
+DEFAULT_GRIDS = {
+    "MeanReversionStrategy": {
+        "lookback": [10, 15, 20, 30],
+        "entry_z": [-1.2, -1.5, -2.0, -2.5],
+        "exit_z": [-0.5, 0.0, 0.5],
+        "max_holding_days": [10, 20, 40],
+    },
+    "IndexTimingStrategy": {
+        "ma_window": [20, 40, 60, 120, 200],
+        "band": [0.0, 0.01, 0.02, 0.03],
+        "confirm_days": [1, 2, 3],
+    },
+    "MomentumRotationStrategy": {
+        "lookback": [60, 120, 250],
+        "skip_recent": [0, 5, 20],
+        "rebalance_days": [10, 20, 60],
+    },
+    "MaCrossStrategy": {
+        "fast_window": [3, 5, 10, 20],
+        "slow_window": [20, 60, 120, 250],
+    },
 }
 
-QUICK_GRID = {
-    "lookback": [10, 20, 30],
-    "entry_z": [-1.2, -1.5, -2.0],
-    "exit_z": [-0.5, 0.5],
-}
-
-#: walk-forward 用更小的网格 —— 每个窗口都要跑一遍完整网格，
-#: 组合数乘以窗口数会爆炸
-WF_GRID = {
-    "lookback": [10, 20, 30],
-    "entry_z": [-1.2, -1.5, -2.0],
+QUICK_GRIDS = {
+    "MeanReversionStrategy": {
+        "lookback": [10, 20, 30],
+        "entry_z": [-1.2, -1.5, -2.0],
+        "exit_z": [-0.5, 0.5],
+    },
+    "IndexTimingStrategy": {
+        "ma_window": [20, 60, 200],
+        "band": [0.0, 0.02],
+    },
 }
 
 
@@ -64,10 +105,27 @@ class Harness:
     每次重新装载会让 100 组网格从 4 分钟变成 23 分钟。
     """
 
-    def __init__(self, cfg, sector: str, start: str, end: str,
-                 min_ipo_days: int, holdings: int) -> None:
+    def __init__(self, cfg, strategy_cls, sector: str, start: str, end: str,
+                 min_ipo_days: int, extra_params: dict | None = None,
+                 universe_csv: str | None = None,
+                 symbols: list[str] | None = None) -> None:
         self.cfg = cfg
-        self.holdings = holdings
+        self.strategy_cls = strategy_cls
+        #: 网格之外的固定参数（如 max_holdings），每次回测都会带上
+        self.extra_params = extra_params or {}
+
+        # 择时类策略只交易一两个标的，不需要也不该走成分股那套
+        if symbols:
+            self.symbols = symbols
+            self.universe = StaticUniverse(symbols, source="命令行指定")
+            self._load_bars(cfg, start, end)
+            return
+
+        if universe_csv:
+            self.universe = HistoricalUniverse(universe_csv)
+            self.symbols = self.universe.all_symbols()
+            self._load_bars(cfg, start, end)
+            return
 
         meta_path = (Path(cfg.data.store_dir) / "universe"
                      / f"universe_{sector}.parquet")
@@ -90,7 +148,9 @@ class Harness:
              if pd.notna(r.delist_date)},
             min_days_since_ipo=min_ipo_days,
             inclusion_dates=inclusion)
+        self._load_bars(cfg, start, end)
 
+    def _load_bars(self, cfg, start: str, end: str) -> None:
         feed = XtDataFeed(cfg.data.store_dir, cfg.data.dividend_type)
         t0 = time.time()
         self.bars = feed.load_bars(self.symbols, start, end, Interval.DAILY)
@@ -143,8 +203,8 @@ class Harness:
             initial_capital=self.cfg.backtest.initial_capital, cost=cost)
         engine.load_data(bars)
         engine.set_universe(self.universe)
-        engine.add_strategy(MeanReversionStrategy, self.symbols,
-                            dict(params, max_holdings=self.holdings))
+        engine.add_strategy(self.strategy_cls, self.symbols,
+                            dict(params, **self.extra_params))
         stats = engine.run()
 
         if warmup_days > 0 and start:
@@ -184,6 +244,18 @@ def make_progress(label: str):
 
 def main() -> int:
     p = argparse.ArgumentParser(description="策略稳健性验证")
+    p.add_argument("--strategy", default="mean_reversion",
+                   help="短名或完整路径 pkg.mod.Class")
+    p.add_argument("--grid", default=None,
+                   help="参数网格 JSON，如 '{\"ma_window\": [20, 60]}'。"
+                        "不给则用该策略的内置网格")
+    p.add_argument("--set", action="append", dest="fixed", metavar="K=V",
+                   help="网格之外的固定参数，可重复")
+    p.add_argument("--symbols", default=None,
+                   help="逗号分隔的标的代码。择时类策略用这个，"
+                        "指定后不走成分股逻辑")
+    p.add_argument("--universe-csv", default=None,
+                   help="历史成分股 CSV（推荐，无幸存者偏差）")
     p.add_argument("--sector", default="沪深300")
     p.add_argument("--start", default="2021-01-01")
     p.add_argument("--end", default="2026-08-26")
@@ -204,21 +276,53 @@ def main() -> int:
     cfg = get_config()
     setup_logging(LOG_DIR, cfg.log_level)
 
+    cls = load_strategy(args.strategy)
+    fixed = parse_params(args.fixed)
+    # 选股类策略需要 max_holdings；择时类没这个参数，加了会被 check 拦下
+    if "max_holdings" in cls.parameters and "max_holdings" not in fixed:
+        fixed["max_holdings"] = args.holdings
+    check_params(cls, fixed)
+
+    if args.grid:
+        try:
+            grid = json.loads(args.grid)
+        except json.JSONDecodeError as e:
+            print(f"--grid 不是合法 JSON：{e}")
+            return 1
+    else:
+        grid = DEFAULT_GRIDS.get(cls.__name__)
+        if grid is None:
+            example = '{"%s": [...]}' % cls.parameters[0]
+            print(f"{cls.__name__} 没有内置网格，请用 --grid 指定，例如：")
+            print(f"  --grid '{example}'")
+            print(f"  可用参数: {', '.join(cls.parameters)}")
+            return 1
+        if args.quick:
+            grid = QUICK_GRIDS.get(cls.__name__, grid)
+    check_params(cls, dict.fromkeys(grid))
+
+    print(f"策略  : {cls.__module__}.{cls.__name__}")
+    print(f"网格  : {grid}")
+    print(f"固定  : {fixed or '无'}")
+    print()
+
     try:
-        h = Harness(cfg, args.sector, args.start, args.end,
-                    args.min_ipo_days, args.holdings)
+        syms = ([normalize(x.strip()) for x in args.symbols.split(",")
+                 if x.strip()] if args.symbols else None)
+        h = Harness(cfg, cls, args.sector, args.start, args.end,
+                    args.min_ipo_days, fixed, args.universe_csv, syms)
     except (FileNotFoundError, RuntimeError) as exc:
         print(exc)
         return 1
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    grid = QUICK_GRID if args.quick else FULL_GRID
     sections = []
 
     # ---- 1. 参数网格与平原检验
     plateau = None
-    best_params = {"lookback": 20, "entry_z": -2.0, "exit_z": -0.5}
+    # 网格每维取中位数作为兜底起点，避免 grid 检验被跳过时无参可用
+    best_params = {k: v[len(v) // 2] for k, v in grid.items()}
     if "grid" not in args.skip:
         n = 1
         for v in grid.values():
@@ -263,13 +367,16 @@ def main() -> int:
     from qmtquant.research.validation import WalkForwardReport
     wf = WalkForwardReport()
     if "walkforward" not in args.skip:
+        # walk-forward 要在每个窗口重跑整个网格，组合数乘窗口数会爆炸 ——
+        # 只保留前两维、每维至多 3 个取值
+        wf_grid = {k: list(v)[:3] for k, v in list(grid.items())[:2]}
         wf_n = 1
-        for v in WF_GRID.values():
+        for v in wf_grid.values():
             wf_n *= len(v)
         print(f"\n>>> 3/4 Walk-forward（每窗口 {wf_n} 组组合）")
         # 训练窗口够长不必预热；测试窗口必须预热，否则测的是热身速度
         wf = walk_forward(
-            lambda p, s, e: h.run(p, s, e, warmup_days=args.warmup), WF_GRID,
+            lambda p, s, e: h.run(p, s, e, warmup_days=args.warmup), wf_grid,
             args.start, args.end, train_months=24, test_months=6,
             metric=args.metric, progress=make_progress("窗口"))
         print(wf.summary())
