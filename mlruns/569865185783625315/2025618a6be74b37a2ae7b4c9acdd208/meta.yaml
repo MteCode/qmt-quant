@@ -1,0 +1,14 @@
+artifact_uri: file:E:\qmt\mlruns/569865185783625315/2025618a6be74b37a2ae7b4c9acdd208/artifacts
+end_time: 1787926408213
+entry_point_name: ''
+experiment_id: '569865185783625315'
+lifecycle_stage: active
+run_id: 2025618a6be74b37a2ae7b4c9acdd208
+run_name: mlflow_recorder
+source_name: ''
+source_type: 4
+source_version: ''
+start_time: 1787926370188
+status: 3
+tags: []
+user_id: DELL
