@@ -41,9 +41,11 @@ from qmtquant.risk.drawdown import DrawdownConfig, DrawdownController  # noqa: E
 from qmtquant.research.validation import (  # noqa: E402
     SplitReport,
     _to_result,
+    check_overfit,
     cost_sensitivity,
     filter_by_drawdown as _eligible,
     grid_search,
+    robust_params,
     parameter_plateau,
     summarize_verdict,
     walk_forward,
@@ -297,6 +299,9 @@ def main() -> int:
     p.add_argument("--no-drawdown", action="store_true",
                    help="验证时关闭回撤控制。**默认开启** —— "
                         "不带风控验出来的是另一套系统")
+    p.add_argument("--pick-peak", action="store_true",
+                   help="用峰值参数而非平原中心。**默认用平原中心** —— "
+                        "峰值大概率是多重比较造出来的噪声尖端")
     p.add_argument("--quick", action="store_true", help="用小网格快速跑")
     p.add_argument("--skip", nargs="*", default=[],
                    choices=["grid", "split", "walkforward", "cost"])
@@ -367,6 +372,14 @@ def main() -> int:
 
         df.to_csv(out / "validation_grid.csv", index=False,
                   encoding="utf-8-sig")
+        overfit = check_overfit(
+            n_params=len(grid),
+            trading_days=len({b.datetime.date() for b in h.bars}),
+            n_combos=len(df), n_declared=len(cls.parameters))
+        print()
+        print(overfit.summary())
+        sections.append(overfit.summary())
+
         plateau = parameter_plateau(df, list(grid), args.metric,
                                     max_drawdown_limit=args.max_drawdown)
         if not plateau.best_params:
@@ -381,7 +394,18 @@ def main() -> int:
                                          "最大回撤": "{:.2%}".format,
                                          "Sharpe": "{:.3f}".format}))
             return 1
-        best_params = plateau.best_params
+        # **选平原中心而非峰值**：在 N 组参数里挑最高分，
+        # 即使全是噪声，最好那组看起来也会很好（多重比较）。
+        # 改用邻域中位数打分 —— 一组参数只有在它自己和周围都还行时才得高分
+        best_params = (plateau.best_params if args.pick_peak else
+                       robust_params(df, list(grid), args.metric,
+                                     args.max_drawdown)
+                       or plateau.best_params)
+        if best_params != plateau.best_params:
+            print()
+            print(f"  稳健参数（平原中心）: {best_params}")
+            print(f"  峰值参数（仅供对照）: {plateau.best_params}")
+            print("  后续检验用稳健参数 —— 峰值大概率是噪声的尖端")
         print()
         print(plateau.summary())
         sections.append(plateau.summary())
@@ -447,7 +471,7 @@ def main() -> int:
     # ---- 综合结论
     if plateau is not None:
         print()
-        verdict = summarize_verdict(plateau, split, wf, cost_df)
+        verdict = summarize_verdict(plateau, split, wf, cost_df, overfit)
         print(verdict)
         sections.append(verdict)
 

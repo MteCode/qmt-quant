@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -439,10 +440,20 @@ def cost_breakeven(df: pd.DataFrame) -> float | None:
 
 
 def summarize_verdict(plateau: PlateauReport, split: SplitReport,
-                      wf: WalkForwardReport, cost: pd.DataFrame) -> str:
-    """四道检验的综合结论"""
+                      wf: WalkForwardReport, cost: pd.DataFrame,
+                      overfit: "OverfitReport | None" = None) -> str:
+    """五道检验的综合结论。
+
+    自由度是**前置条件**：数据不够拟合这么多参数时，
+    后面四项无论结果如何都不能采信 —— 平原也可以是噪声形成的。
+    """
     breakeven = cost_breakeven(cost)
-    checks = [
+    checks = []
+    if overfit is not None:
+        checks.append(("自由度", overfit.passed,
+                       f"{overfit.n_params} 个参数 / 预算 "
+                       f"{overfit.budget:.1f} 个"))
+    checks += [
         ("参数平原", plateau.is_plateau,
          f"邻域保留 {plateau.retention:.0%}"),
         ("样本外", split.passed,
@@ -466,3 +477,140 @@ def summarize_verdict(plateau: PlateauReport, split: SplitReport,
         lines.append("  存在未通过项，不建议上实盘。"
                      "先弄清楚是策略逻辑问题还是参数拟合噪声。")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------- 过拟合
+
+#: 每个可优化参数至少需要多少个独立市场状态才谈得上「拟合」而非「记忆」。
+#: A 股约每 6 个月切换一次风格，10 年数据 ≈ 20 个独立状态。
+#: 经验法则取 10：拟合 3 个参数需要 30 个状态，即 15 年数据
+OBSERVATIONS_PER_PARAM = 10
+#: 一个交易日不是一个独立观测。趋势/风格的持续期约一个季度，
+#: 60 个交易日折算成 1 个独立状态
+TRADING_DAYS_PER_REGIME = 60
+
+
+@dataclass
+class OverfitReport:
+    """自由度检验：参数个数与可用信息量是否匹配。
+
+    ## 为什么这一项要单独看
+
+    参数平原检验回答的是「这组参数稳不稳」，但**它无法发现
+    「整个网格都是噪声」这种情况** —— 噪声也可以形成平原。
+
+    自由度检验回答的是更前置的问题：**这么多参数，数据够不够拟合。**
+    不够的话，无论平原检验结果如何，得到的都是记忆而非规律。
+
+    ## 交易日不等于独立观测
+
+    2588 个交易日看着很多，但相邻交易日高度相关。
+    A 股风格切换周期约一个季度，折算下来 10 年只有 40 个左右的独立状态。
+    用它去拟合 14 个参数，等于用 40 个点拟合 14 维曲面。
+    """
+
+    #: 参与寻优的参数个数
+    n_params: int = 0
+    #: 策略声明的全部参数个数（含未寻优的）
+    n_declared: int = 0
+    #: 回测覆盖的交易日数
+    trading_days: int = 0
+    #: 网格组合数
+    n_combos: int = 0
+
+    @property
+    def independent_regimes(self) -> float:
+        """折算后的独立市场状态数"""
+        return self.trading_days / TRADING_DAYS_PER_REGIME
+
+    @property
+    def budget(self) -> float:
+        """按自由度可支持的参数个数上限"""
+        return self.independent_regimes / OBSERVATIONS_PER_PARAM
+
+    @property
+    def passed(self) -> bool:
+        """参与寻优的参数个数是否在预算之内"""
+        return self.n_params <= self.budget + 1e-9
+
+    @property
+    def selection_bias(self) -> float:
+        """多重比较带来的虚假发现风险。
+
+        在 N 组参数里挑最好的一组，即使全是噪声，
+        最好那组的表现也会显著优于均值。N 越大，这个虚高越严重。
+        用 sqrt(2*ln(N)) 近似 N 个标准正态变量最大值的期望 ——
+        扫 100 组参数，最优点的 Sharpe 天然被抬高约 3 个标准差。
+        """
+        if self.n_combos < 2:
+            return 0.0
+        return float(np.sqrt(2 * np.log(self.n_combos)))
+
+    def summary(self) -> str:
+        lines = [
+            "--- 自由度检验 ---",
+            f"寻优参数     : {self.n_params} 个"
+            f"（策略共声明 {self.n_declared} 个）",
+            f"交易日       : {self.trading_days}",
+            f"独立状态     : {self.independent_regimes:.0f} 个"
+            f"（每 {TRADING_DAYS_PER_REGIME} 个交易日折算 1 个）",
+            f"参数预算     : {self.budget:.1f} 个",
+            f"网格组合     : {self.n_combos} 组，"
+            f"选优虚高约 {self.selection_bias:.1f} 个标准差",
+            f"结论         : {'自由度充足' if self.passed else '**自由度不足**'}",
+        ]
+        if not self.passed:
+            lines.append(f"  数据只够拟合 {self.budget:.1f} 个参数，"
+                         f"实际寻优 {self.n_params} 个 —— "
+                         "得到的是记忆而非规律，平原检验通过也不能采信")
+        return "\n".join(lines)
+
+
+def check_overfit(n_params: int, trading_days: int, n_combos: int,
+                  n_declared: int = 0) -> OverfitReport:
+    return OverfitReport(n_params=n_params, n_declared=n_declared or n_params,
+                         trading_days=trading_days, n_combos=n_combos)
+
+
+def robust_params(df: pd.DataFrame, param_cols: list[str],
+                  metric: str = "Sharpe",
+                  max_drawdown_limit: float | None = 0.20) -> dict:
+    """选**平原中心**而非峰值。
+
+    ## 为什么不能选最高分那组
+
+    在 N 组参数里挑表现最好的一组，即使全部是噪声，
+    最好那组看起来也会很好 —— 这是多重比较，不是发现。
+    扫 100 组参数，最优点的 Sharpe 天然被抬高约 3 个标准差。
+
+    本函数改为给每组参数打「邻域中位数」分：
+    一组参数只有在**它自己和周围的参数都还行**时才得高分。
+    孤峰的邻域中位数很低，会被自动淘汰。
+
+    这不能凭空造出 alpha，但能避免把噪声的尖峰当成发现。
+    """
+    if df.empty:
+        return {}
+    if max_drawdown_limit is not None:
+        df = filter_by_drawdown(df, max_drawdown_limit)
+        if df.empty:
+            return {}
+
+    levels = {c: sorted(df[c].unique()) for c in param_cols}
+    pos = {c: df[c].map(lambda v, c=c: levels[c].index(v)) for c in param_cols}
+
+    best_score, best_row = -np.inf, None
+    for idx in df.index:
+        mask = pd.Series(True, index=df.index)
+        for c in param_cols:
+            mask &= (pos[c] - pos[c][idx]).abs() <= 1
+        # 含自身在内取中位数：单点再高，周围塌了也拉不起来
+        score = float(df.loc[mask, metric].median())
+        if score > best_score:
+            best_score, best_row = score, df.loc[idx]
+
+    if best_row is None:
+        return {}
+    return {c: (int(best_row[c])
+                if pd.api.types.is_integer_dtype(df[c]) else best_row[c])
+            for c in param_cols}
