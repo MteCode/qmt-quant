@@ -4,6 +4,15 @@ numpy>=1.24,<3.0
 pyarrow>=14.0          # Parquet 落地
 PyYAML>=6.0            # 配置加载
 
+# ---- 外部数据源 ----
+tushare>=1.4            # 历史指数成分股、逐日估值因子、行业分类、全收益指数
+                        # 需 2000 积分（200 元/年），token 走环境变量 TUSHARE_TOKEN
+
+# ---- 研究（可选，不装不影响回测与实盘）----
+pyqlib>=0.9.7           # 微软 Qlib：ML 模型库 + Alpha158/360 因子集
+                        # ⚠ 它会把 pandas 锁到 <3.0（实测从 3.0.5 降到 2.3.3）
+scipy>=1.11             # Qlib 的 spearman 相关需要；本项目的 IC 分析也用
+
 # ---- 调度与通知 ----
 APScheduler>=3.10       # 盘前/盘中/盘后定时任务
 requests>=2.31          # 企微/钉钉 webhook
