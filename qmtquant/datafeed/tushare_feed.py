@@ -289,6 +289,37 @@ class TushareFeed:
         df["symbol"] = normalize(vt_symbol)
         return df
 
+    def stock_basic(self) -> pd.DataFrame:
+        """全市场股票基础信息，含**行业分类**。
+
+        行业是因子中性化的必需输入 —— 不做行业中性化的话，
+        「低换手因子」实测选出 15/20 是银行，所谓因子显著
+        很可能只是行业暴露，不是选股能力。
+
+        Tushare 的 industry 字段是申万一级的简化版，全历史静态
+        （不随时间变化）。这有个已知局限：公司转型换行业时，
+        历史区间也会被打上现在的标签。对中性化来说影响可接受 ——
+        行业标签错几个，好过完全不做中性化。
+        """
+        df = self.client.query(
+            "stock_basic", exchange="", list_status="L",
+            fields="ts_code,symbol,name,area,industry,market,list_date")
+        # 退市股也要，否则历史成分里的老票没有行业标签
+        for status in ("D", "P"):
+            extra = self.client.query(
+                "stock_basic", exchange="", list_status=status,
+                fields="ts_code,symbol,name,area,industry,market,list_date")
+            if not extra.empty:
+                df = pd.concat([df, extra], ignore_index=True)
+
+        if df.empty:
+            return df
+        df = df.drop_duplicates(subset=["ts_code"], keep="first").copy()
+        df["vt_symbol"] = df["ts_code"].map(from_xt_symbol)
+        df["list_date"] = pd.to_datetime(df["list_date"], format="%Y%m%d",
+                                         errors="coerce")
+        return df
+
     def trade_dates(self, start: str, end: str,
                     exchange: str = "SSE") -> list[pd.Timestamp]:
         """交易日历。用于按日循环拉 daily_basic 时跳过非交易日。"""

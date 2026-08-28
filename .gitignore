@@ -37,3 +37,6 @@ htmlcov/
 *.swp
 Thumbs.db
 desktop.ini
+
+# 研究脚本产出
+research/__pycache__/
