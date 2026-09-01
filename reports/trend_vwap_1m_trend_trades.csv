@@ -1,0 +1,2 @@
+﻿datetime,symbol,direction,price,volume,commission,amount,strategy
+2026-01-29 13:28:00,600519.SSE,买入,1360.98577,600,212.31,816591.46,IntradayVwapStrategy

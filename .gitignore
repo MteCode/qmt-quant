@@ -6,15 +6,17 @@ config/*.local.yaml
 # 数据与日志
 data/
 logs/
-*.parquet
 *.db
 *.sqlite3
-*.csv
 
-# 回测产物
-reports/
+# 回测产物 —— 保留报告目录的关键结果
+# 大文件（parquet/html）不入库，csv 结果入库
+reports/**/*.parquet
+reports/**/*.html
+*.parquet
 *.html
 !docs/*.html
+!reports/**/*.csv
 
 # Python
 __pycache__/
