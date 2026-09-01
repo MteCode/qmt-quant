@@ -113,7 +113,8 @@ class TimingEnv(gymnasium.Env):
     def __init__(self, dates, daily_features, daily_returns,
                  hold_k=HOLD_K, rebal_period=REBAL_PERIOD,
                  initial_amount=500_000,
-                 buy_cost=0.0005, sell_cost=0.0015):
+                 buy_cost=0.0005, sell_cost=0.0015,
+                 scores=None):
         super().__init__()
 
         self.dates = dates
@@ -124,6 +125,7 @@ class TimingEnv(gymnasium.Env):
         self.initial_amount = initial_amount
         self.buy_cost = buy_cost
         self.sell_cost = sell_cost
+        self.scores = scores
 
         self.n_features = next(iter(daily_features.values())).shape[1]
 
@@ -145,7 +147,27 @@ class TimingEnv(gymnasium.Env):
         self.asset_memory = []
 
     def _select_stocks(self, date):
-        """等权全市场（近似指数），不做选股"""
+        """有分数用分数选 Top-K，无分数用等权全市场"""
+        if self.scores is not None:
+            ts = pd.Timestamp(date)
+            pos = self.scores.index.searchsorted(ts, side="right") - 1
+            if pos >= 0:
+                row = self.scores.iloc[pos].dropna().sort_values(ascending=False)
+                # scores 列名可能是 vt 格式(600007.SSE)，转成 Qlib(sh600007)
+                top_vt = list(row.index[:self.hold_k])
+                if top_vt and "." in str(top_vt[0]):
+                    from qmtquant.datafeed.qlib_export import to_qlib_code
+                    if not hasattr(self, "_vt2qlib"):
+                        self._vt2qlib = {}
+                        for c in self.scores.columns:
+                            try:
+                                self._vt2qlib[c] = to_qlib_code(c)
+                            except ValueError:
+                                pass
+                    return [self._vt2qlib.get(s, s) for s in top_vt
+                            if s in self._vt2qlib]
+                return top_vt
+
         if date not in self.daily_returns:
             return []
         rets = self.daily_returns[date].dropna()
@@ -248,7 +270,7 @@ class TimingEnv(gymnasium.Env):
         }
 
 
-def build_env(close_df, feat_df, label_df, start, end, **kwargs):
+def build_env(close_df, feat_df, label_df, start, end, scores=None, **kwargs):
     idx = feat_df.index.get_level_values("datetime")
     mask = (idx >= start) & (idx <= end)
 
@@ -269,6 +291,7 @@ def build_env(close_df, feat_df, label_df, start, end, **kwargs):
         dates=dates,
         daily_features=daily_features,
         daily_returns=daily_returns,
+        scores=scores,
         **kwargs,
     )
 
@@ -358,15 +381,24 @@ def main():
     train_time = time.time() - t0
     print(f"\n训练完成，耗时 {train_time:.0f}s")
 
-    # 测试
+    # 测试：加载 ALSTM 分数做选股
     print("\n" + "-" * 62)
-    print("测试段回测（样本外）")
+    print("测试段回测（样本外）—— ALSTM 选股 + PPO 择时")
     print("-" * 62)
+
+    scores_path = Path("reports/alstm_csi1000/scores.parquet")
+    alstm_scores = None
+    if scores_path.exists():
+        alstm_scores = pd.read_parquet(scores_path)
+        print(f"加载 ALSTM 分数: {alstm_scores.shape[0]} 期 x {alstm_scores.shape[1]} 只")
+    else:
+        print("未找到 ALSTM 分数，使用等权全市场")
 
     test_env = build_env(
         close_df, feat_df, label_df,
         TEST[0], TEST[1],
         initial_amount=args.capital,
+        scores=alstm_scores,
     )
     print(f"测试日数: {len(test_env.dates)}")
 
