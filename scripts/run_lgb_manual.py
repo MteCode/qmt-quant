@@ -153,23 +153,26 @@ def train_lgb(feat_df, label):
         "objective": "regression",
         "metric": "mse",
         "verbosity": -1,
-        "num_leaves": 31,
-        "learning_rate": 0.05,
+        "num_leaves": 64,
+        "learning_rate": 0.01,
         "feature_fraction": 0.8,
         "bagging_fraction": 0.8,
         "bagging_freq": 5,
+        "min_child_samples": 500,
+        "lambda_l1": 0.1,
+        "lambda_l2": 0.1,
         "seed": 42,
     }
 
     print("训练 LightGBM ...")
     callbacks = [
-        lgb.early_stopping(50, verbose=False),
-        lgb.log_evaluation(100),
+        lgb.early_stopping(100, verbose=False),
+        lgb.log_evaluation(200),
     ]
     t0 = time.time()
     model = lgb.train(
         params, dtrain,
-        num_boost_round=1000,
+        num_boost_round=3000,
         valid_sets=[dvalid],
         valid_names=["valid"],
         callbacks=callbacks,
