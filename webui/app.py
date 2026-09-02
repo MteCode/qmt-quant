@@ -81,6 +81,18 @@ def tasks():
     )
 
 
+@app.route("/selection")
+def selection_page():
+    """实盘执行 —— 策略实际下了什么单。"""
+    ex = loaders.executions(request.args.get("date") or None)
+    sel = loaders.selection(request.args.get("signal") or None)
+    return render_template(
+        "selection.html", ex=ex, sel=sel,
+        industry=loaders.industry_figure(sel) if sel else None,
+        picks=loaders.backtest_picks(),
+    )
+
+
 @app.route("/schedule")
 def schedule_page():
     return render_template(

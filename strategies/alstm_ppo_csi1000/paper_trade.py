@@ -19,6 +19,7 @@ import argparse
 import math
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -166,6 +167,52 @@ def _split_code(vt: str):
     return code, f"{code}.SZ", Exchange.SZSE
 
 
+#: 执行记录的列。顺序即 CSV 列序，改动会影响已有文件的可读性
+EXEC_COLUMNS = ["time", "vt_symbol", "name", "direction", "volume",
+                "price", "amount", "result", "reason", "order_id", "mode"]
+
+
+def record_executions(rows: list, dry_run: bool) -> Path | None:
+    """把本次执行结果追加到当日记录。
+
+    预览与实盘写同一个文件，用 mode 列区分 —— 分开存会让「今天到底做了什么」
+    需要看两个地方。被风控拦截的同样记录：事后要能回答「为什么这只没买」。
+    """
+    if not rows:
+        return None
+    import csv
+
+    paths.ensure_dirs()
+    path = paths.execution_file(datetime.now().strftime("%Y-%m-%d"))
+    exists = path.exists()
+    try:
+        with open(path, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=EXEC_COLUMNS)
+            if not exists:
+                w.writeheader()
+            for r in rows:
+                w.writerow({k: r.get(k, "") for k in EXEC_COLUMNS})
+    except OSError as e:
+        print(f"  [WARN] 执行记录写入失败: {e}")
+        return None
+    return path
+
+
+def _load_names() -> dict:
+    """vt_symbol -> 股票名。取不到就算了，不影响下单。"""
+    try:
+        import pandas as pd
+
+        from qmtquant.config import get_config
+        p = Path(get_config().data.store_dir) / "universe" / "industry.parquet"
+        if not p.exists():
+            return {}
+        df = pd.read_parquet(p)
+        return dict(zip(df["vt_symbol"], df["name"]))
+    except Exception:
+        return {}
+
+
 def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=False):
     """先卖后买，每笔经过风控校验。
 
@@ -177,6 +224,8 @@ def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=Fals
     from qmtquant.core.objects import OrderRequest
     from xtquant.xttype import StockAccount
     account = StockAccount(gateway.account_id)
+    names = _load_names()
+    records = []
 
     passed_sell = passed_buy = rejected = 0
 
@@ -188,6 +237,14 @@ def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=Fals
         amount = order.get("amount", 0)
         code, xt_code, exchange = _split_code(vt)
 
+        rec = {
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "vt_symbol": vt, "name": names.get(vt, ""),
+            "direction": tag, "volume": vol,
+            "price": round(price, 3), "amount": round(amount, 2),
+            "mode": "预览" if dry_run else "实盘",
+        }
+
         if risk_mgr is not None:
             ok, reason = risk_mgr.check(OrderRequest(
                 symbol=code, exchange=exchange, direction=direction,
@@ -196,16 +253,22 @@ def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=Fals
             if not ok:
                 print(f"  [拦截] {xt_code} {vol:>6d} 股 -- {reason.value}")
                 rejected += 1
+                rec.update(result="风控拦截", reason=reason.value)
+                records.append(rec)
                 return False
 
         print(f"  {xt_code}  {vol:>6d} 股  {amount:>10,.0f} 元  {order['reason']}")
+        order_id = ""
         if not dry_run:
-            gateway.trader.order_stock(
+            order_id = gateway.trader.order_stock(
                 account, xt_code, xt_order_type,
                 vol, 5, 0,  # price_type=5(最优五档即时成交), price=0
                 strategy_name="ALSTM_PPO", order_remark=remark,
             )
             time.sleep(0.2)
+        rec.update(result="已预览" if dry_run else "已委托",
+                   reason=order.get("reason", ""), order_id=order_id or "")
+        records.append(rec)
         return True
 
     if sell_orders:
@@ -222,6 +285,10 @@ def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=Fals
 
     if rejected:
         print(f"\n  风控拦截 {rejected} 笔")
+
+    path = record_executions(records, dry_run)
+    if path:
+        print(f"  执行记录: {path}")
     return passed_sell, passed_buy
 
 

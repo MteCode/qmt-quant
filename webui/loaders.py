@@ -315,6 +315,331 @@ def strategy_overview() -> dict:
     return info
 
 
+#: 股票名称与行业。首次读取后缓存 —— 5890 行的 parquet 没必要每次请求都读
+_meta_cache = None
+
+
+def _stock_meta() -> dict:
+    """vt_symbol -> {name, industry, area}。取不到就返回空字典。"""
+    global _meta_cache
+    if _meta_cache is not None:
+        return _meta_cache
+
+    import pandas as pd
+
+    meta = {}
+    ind = ROOT / "data" / "universe" / "industry.parquet"
+    if ind.exists():
+        try:
+            df = pd.read_parquet(ind)
+            for r in df.itertuples():
+                vt = getattr(r, "vt_symbol", None)
+                if vt:
+                    meta[vt] = {
+                        "name": getattr(r, "name", "") or "",
+                        "industry": getattr(r, "industry", "") or "",
+                        "area": getattr(r, "area", "") or "",
+                    }
+        except (OSError, ValueError):
+            pass
+
+    # industry.parquet 缺的标的用 universe_full 补名称
+    full = ROOT / "data" / "universe" / "universe_full.parquet"
+    if full.exists():
+        try:
+            df = pd.read_parquet(full)
+            for r in df.itertuples():
+                vt = getattr(r, "vt_symbol", None)
+                if vt and vt not in meta:
+                    meta[vt] = {"name": getattr(r, "name", "") or "",
+                                "industry": "", "area": ""}
+        except (OSError, ValueError):
+            pass
+
+    _meta_cache = meta
+    return meta
+
+
+EXECUTIONS = ROOT / STRATEGY / "executions"
+
+
+def list_exec_dates() -> list:
+    """有执行记录的日期，倒序。"""
+    if not EXECUTIONS.exists():
+        return []
+    return sorted((p.stem.replace("exec_", "")
+                   for p in EXECUTIONS.glob("exec_*.csv")), reverse=True)
+
+
+def executions(date: str = None) -> dict | None:
+    """实盘执行记录 —— 当天下了什么单、成交与否、被拦的原因。"""
+    import pandas as pd
+
+    dates = list_exec_dates()
+    if not dates:
+        return None
+    date = date if date in dates else dates[0]
+
+    try:
+        df = pd.read_csv(EXECUTIONS / f"exec_{date}.csv", encoding="utf-8-sig")
+    except (OSError, pd.errors.ParserError):
+        return None
+    if df.empty:
+        return None
+
+    meta = _stock_meta()
+    rows = []
+    for r in df.itertuples():
+        vt = str(getattr(r, "vt_symbol", ""))
+        name = str(getattr(r, "name", "") or "") or meta.get(vt, {}).get("name", "—")
+        rows.append({
+            "time": str(getattr(r, "time", "")),
+            "vt_symbol": vt,
+            "code": vt.split(".")[0] if vt else "",
+            "name": name,
+            "industry": meta.get(vt, {}).get("industry", ""),
+            "direction": str(getattr(r, "direction", "")),
+            "volume": int(getattr(r, "volume", 0) or 0),
+            "price": float(getattr(r, "price", 0) or 0),
+            "amount": float(getattr(r, "amount", 0) or 0),
+            "result": str(getattr(r, "result", "")),
+            "reason": str(getattr(r, "reason", "") or ""),
+            "mode": str(getattr(r, "mode", "")),
+        })
+
+    live = [r for r in rows if r["mode"] == "实盘"]
+    blocked = [r for r in rows if r["result"] == "风控拦截"]
+    buys = [r for r in rows if r["direction"] == "买" and r["result"] != "风控拦截"]
+    sells = [r for r in rows if r["direction"] == "卖" and r["result"] != "风控拦截"]
+
+    # 拦截原因分布 —— 反复出现同一原因说明配置或信号有系统性问题
+    reasons = {}
+    for r in blocked:
+        reasons[r["reason"]] = reasons.get(r["reason"], 0) + 1
+
+    return {
+        "date": date, "dates": dates, "rows": rows,
+        "n_total": len(rows), "n_live": len(live),
+        "n_buy": len(buys), "n_sell": len(sells),
+        "n_blocked": len(blocked),
+        "buy_amount": sum(r["amount"] for r in buys),
+        "sell_amount": sum(r["amount"] for r in sells),
+        "reasons": sorted(reasons.items(), key=lambda x: -x[1]),
+        "has_live": bool(live),
+    }
+
+
+#: 回测成交记录。文件名 -> 展示用的策略名
+TRADE_FILES = {
+    "alstm_only_trades.csv": "ALSTM 单独（满仓）",
+}
+
+
+def backtest_picks(fname: str = None, limit_dates: int = 40) -> dict | None:
+    """从回测成交记录还原每个调仓日选了哪些股。
+
+    回测只留下成交流水，没有直接记录「这一期选了谁」。但调仓是集中发生的：
+    同一天的买单就是该期新选入的标的，卖单是被换掉的。据此按日期分组即可
+    还原每期的调仓动作。
+    """
+    import pandas as pd
+
+    fname = fname or next(iter(TRADE_FILES))
+    path = BACKTEST / fname
+    if not path.exists():
+        return None
+    try:
+        df = pd.read_csv(path)
+    except (OSError, pd.errors.ParserError):
+        return None
+    if df.empty or "datetime" not in df.columns:
+        return None
+
+    meta = _stock_meta()
+    df["datetime"] = pd.to_datetime(df["datetime"]).dt.date
+
+    # direction 列在不同版本里可能是中文或英文，统一判定
+    def is_buy(v) -> bool:
+        return str(v) in ("买入", "LONG", "Direction.LONG", "buy", "BUY")
+
+    sessions = []
+    for d, g in df.groupby("datetime", sort=False):
+        buys, sells = [], []
+        for r in g.itertuples():
+            vt = str(r.symbol)
+            item = {
+                "vt_symbol": vt,
+                "code": vt.split(".")[0],
+                "name": meta.get(vt, {}).get("name", "—"),
+                "industry": meta.get(vt, {}).get("industry", ""),
+                "price": float(r.price),
+                "volume": int(r.volume),
+                "amount": float(r.amount),
+            }
+            (buys if is_buy(r.direction) else sells).append(item)
+        buys.sort(key=lambda x: -x["amount"])
+        sells.sort(key=lambda x: -x["amount"])
+        sessions.append({
+            "date": str(d),
+            "buys": buys, "sells": sells,
+            "n_buy": len(buys), "n_sell": len(sells),
+            "buy_amount": sum(x["amount"] for x in buys),
+            "sell_amount": sum(x["amount"] for x in sells),
+            "commission": float(g["commission"].sum())
+            if "commission" in g else 0.0,
+        })
+
+    sessions.sort(key=lambda s: s["date"], reverse=True)
+    total_comm = float(df["commission"].sum()) if "commission" in df else 0.0
+
+    return {
+        "file": fname,
+        "label": TRADE_FILES.get(fname, fname),
+        "files": [{"f": k, "label": v} for k, v in TRADE_FILES.items()
+                  if (BACKTEST / k).exists()],
+        "sessions": sessions[:limit_dates],
+        "n_sessions": len(sessions),
+        "n_trades": len(df),
+        "total_commission": total_comm,
+        "period": f"{min(df['datetime'])} ~ {max(df['datetime'])}",
+        "mtime": pd.Timestamp(path.stat().st_mtime, unit="s").strftime(
+            "%Y-%m-%d %H:%M"),
+    }
+
+
+def picks_industry_figure(picks: dict):
+    """回测期间被选中标的的行业分布 —— 看策略实际在买什么。"""
+    if not picks:
+        return None
+    counter = {}
+    for s in picks["sessions"]:
+        for b in s["buys"]:
+            key = b["industry"] or "未分类"
+            counter[key] = counter.get(key, 0) + 1
+    if not counter:
+        return None
+
+    items = sorted(counter.items(), key=lambda x: -x[1])[:12]
+    names = [k for k, _ in items][::-1]
+    vals = [v for _, v in items][::-1]
+
+    fig = go.Figure(go.Bar(x=vals, y=names, orientation="h",
+                           marker_color=C_LINE, text=vals,
+                           textposition="outside"))
+    fig.update_layout(**{**LAYOUT, "height": max(240, 26 * len(items) + 90),
+                         "title": "买入标的的行业分布",
+                         "xaxis": dict(title="买入次数", gridcolor=C_GRID),
+                         "margin": dict(l=100, r=34, t=48, b=40)})
+    return _fig_html(fig)
+
+
+def list_signal_dates() -> list:
+    """有哪些历史信号文件，按日期倒序。"""
+    if not SIGNALS.exists():
+        return []
+    dates = []
+    for p in SIGNALS.glob("target_*.csv"):
+        stem = p.stem.replace("target_", "")
+        if stem != "latest":
+            dates.append(stem)
+    return sorted(dates, reverse=True)
+
+
+def selection(date: str = None) -> dict | None:
+    """某日选股明细，含名称、行业、与上一期的对比。"""
+    import pandas as pd
+
+    dates = list_signal_dates()
+    if date is None:
+        path = SIGNALS / "target_latest.csv"
+        if not path.exists() and dates:
+            path = SIGNALS / f"target_{dates[0]}.csv"
+            date = dates[0]
+    else:
+        path = SIGNALS / f"target_{date}.csv"
+    if not path.exists():
+        return None
+
+    try:
+        # 信号文件带 BOM，用 utf-8-sig 读
+        df = pd.read_csv(path, encoding="utf-8-sig")
+    except (OSError, pd.errors.ParserError):
+        return None
+    if df.empty or "vt_symbol" not in df.columns:
+        return None
+
+    meta = _stock_meta()
+
+    # 与上一期比对，标出新进 / 保留
+    prev_set = set()
+    cur_date = date or (dates[0] if dates else None)
+    if cur_date and cur_date in dates:
+        i = dates.index(cur_date)
+        if i + 1 < len(dates):
+            try:
+                prev = pd.read_csv(SIGNALS / f"target_{dates[i + 1]}.csv",
+                                   encoding="utf-8-sig")
+                prev_set = set(prev["vt_symbol"].astype(str))
+            except (OSError, pd.errors.ParserError, KeyError):
+                pass
+
+    rows = []
+    for i, r in enumerate(df.itertuples(), 1):
+        vt = str(r.vt_symbol)
+        m = meta.get(vt, {})
+        rows.append({
+            "rank": i,
+            "vt_symbol": vt,
+            "code": vt.split(".")[0],
+            "exchange": "沪" if vt.endswith("SSE") else "深",
+            "name": m.get("name", "—"),
+            "industry": m.get("industry", ""),
+            "score": float(getattr(r, "score", 0) or 0),
+            "weight": float(getattr(r, "weight", 0) or 0),
+            "target_value": float(getattr(r, "target_value", 0) or 0),
+            "is_new": bool(prev_set) and vt not in prev_set,
+        })
+
+    # 行业分布
+    by_ind = {}
+    for r in rows:
+        key = r["industry"] or "未分类"
+        by_ind[key] = by_ind.get(key, 0) + 1
+    industries = sorted(by_ind.items(), key=lambda x: -x[1])
+
+    return {
+        "date": cur_date or "latest",
+        "dates": dates,
+        "rows": rows,
+        "count": len(rows),
+        "total_weight": sum(r["weight"] for r in rows),
+        "total_value": sum(r["target_value"] for r in rows),
+        "new_count": sum(1 for r in rows if r["is_new"]),
+        "has_prev": bool(prev_set),
+        "industries": industries,
+        "mtime": pd.Timestamp(path.stat().st_mtime, unit="s").strftime(
+            "%Y-%m-%d %H:%M"),
+    }
+
+
+def industry_figure(sel: dict):
+    """选股的行业分布。集中在少数行业意味着组合承担了行业风险。"""
+    if not sel or not sel["industries"]:
+        return None
+    items = sel["industries"][:12]
+    names = [k for k, _ in items][::-1]
+    vals = [v for _, v in items][::-1]
+
+    fig = go.Figure(go.Bar(x=vals, y=names, orientation="h",
+                           marker_color=C_LINE,
+                           text=vals, textposition="outside"))
+    fig.update_layout(**{**LAYOUT, "height": max(240, 26 * len(items) + 90),
+                         "title": "行业分布",
+                         "xaxis": dict(title="只数", gridcolor=C_GRID),
+                         "margin": dict(l=90, r=30, t=48, b=40)})
+    return _fig_html(fig)
+
+
 def subperiod_table():
     """分段检验对比 —— 同一参数在不同时间段是否稳定。"""
     h1 = _read_json("sweep_portfolio_h1.json")

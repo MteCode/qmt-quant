@@ -61,6 +61,16 @@ LATEST_SIGNAL = SIGNALS_DIR / "target_latest.csv"
 STATE_DIR = STRATEGY_DIR / "state"
 RISK_STATE = STATE_DIR / "risk_state.json"
 
+#: 实盘执行记录。每次下单（含被风控拦截的）都追加一行。
+#: 此前实盘只打印到控制台，跑完就没了 —— 事后无法回答
+#: 「昨天到底下了什么单、哪些被拦了、为什么」
+EXEC_DIR = STRATEGY_DIR / "executions"
+
+
+def execution_file(date: str):
+    """某日的执行记录"""
+    return EXEC_DIR / f"exec_{date}.csv"
+
 
 def signal_file(date: str) -> Path:
     """某日的目标持仓文件"""
@@ -68,7 +78,8 @@ def signal_file(date: str) -> Path:
 
 
 def ensure_dirs() -> None:
-    for d in (MODELS_DIR, ENSEMBLE_DIR, BACKTEST_DIR, SIGNALS_DIR, STATE_DIR):
+    for d in (MODELS_DIR, ENSEMBLE_DIR, BACKTEST_DIR, SIGNALS_DIR,
+              STATE_DIR, EXEC_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 
