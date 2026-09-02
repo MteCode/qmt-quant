@@ -53,6 +53,23 @@ class Task:
 
 TASKS = [
     Task(
+        id="update_market_data",
+        name="更新行情",
+        script="scripts/update_market_data.py",
+        desc="下载最新日线并导出 Qlib 格式。两步必须成对执行 —— "
+             "只下载不导出，模型读到的仍是旧数据。需 miniQMT 已启动。",
+        eta="约 5-15 分钟",
+        params=[
+            Param("mode", "模式", "choice", "post",
+                  choices=["post", "pre"],
+                  help="post=盘后更新（当日日线已定稿）；pre=盘前补齐昨夜遗漏"),
+            Param("sector", "板块", "str", "中证1000"),
+            Param("index", "导出指数", "str", "000852.SH"),
+            Param("all", "全量导出（消除跨指数数据撕裂，较慢）", "bool", False),
+            Param("skip_download", "只导出，不下载", "bool", False),
+        ],
+    ),
+    Task(
         id="train_alstm",
         name="训练 ALSTM",
         script=f"{STRATEGY}/train_alstm.py",

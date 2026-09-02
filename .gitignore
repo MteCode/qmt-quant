@@ -59,3 +59,4 @@ mlruns/
 
 # 管理台的运行日志与任务索引（本机运行痕迹，不入库）
 webui/jobs/
+webui/schedules.json

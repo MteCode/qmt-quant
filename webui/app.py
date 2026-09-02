@@ -24,7 +24,7 @@ from datetime import datetime
 from flask import Flask, jsonify, render_template, request
 from plotly.offline import get_plotlyjs
 
-from . import jobs, loaders
+from . import jobs, loaders, scheduler
 from .registry import TASKS, TASK_BY_ID
 
 app = Flask(__name__)
@@ -79,6 +79,42 @@ def tasks():
         tasks=TASKS,
         running={r["task_id"] for r in jobs.running_jobs()},
     )
+
+
+@app.route("/schedule")
+def schedule_page():
+    return render_template(
+        "schedule.html",
+        schedules=scheduler.list_schedules(),
+        scheduler_on=scheduler.is_running(),
+        weekday_names=scheduler.WEEKDAY_NAMES,
+    )
+
+
+@app.post("/api/schedule/<sched_id>/enabled")
+def api_schedule_enabled(sched_id):
+    data = request.get_json(silent=True) or {}
+    ok = scheduler.set_enabled(sched_id, bool(data.get("enabled")))
+    return jsonify(ok=ok)
+
+
+@app.post("/api/schedule/<sched_id>")
+def api_schedule_update(sched_id):
+    data = request.get_json(silent=True) or {}
+    ok = scheduler.update(sched_id, data.get("time"),
+                          data.get("weekdays"), data.get("catchup_hours"))
+    return jsonify(ok=ok, error=None if ok else "时间格式应为 HH:MM")
+
+
+@app.post("/api/schedule/<sched_id>/run")
+def api_schedule_run(sched_id):
+    try:
+        job_id = scheduler.trigger_now(sched_id)
+    except RuntimeError as e:
+        return jsonify(ok=False, error=str(e)), 409
+    if job_id is None:
+        return jsonify(ok=False, error="计划不存在"), 404
+    return jsonify(ok=True, job_id=job_id)
 
 
 @app.route("/jobs")
@@ -151,6 +187,12 @@ def main():
     if args.host not in ("127.0.0.1", "localhost"):
         print(f"[警告] 监听 {args.host} —— 管理台可触发真实委托，"
               f"确认所在网络可信再继续")
+
+    # debug 模式下 Flask 会重启进程，会起两个调度线程造成重复触发
+    if not args.debug:
+        scheduler.start_scheduler()
+        n = sum(1 for s in scheduler.list_schedules() if s["enabled"])
+        print(f"  定时调度已启动（{n} 条计划生效）")
 
     print(f"\n  管理台已启动: http://127.0.0.1:{args.port}\n")
     app.run(host=args.host, port=args.port, debug=args.debug,
