@@ -312,8 +312,8 @@ def main():
     setup_logging(LOG_DIR, cfg.log_level)
     uri = str(Path(cfg.data.store_dir) / "qlib_data")
 
-    import qlib
-    qlib.init(provider_uri=uri, region="cn", joblib_backend="threading")
+    from qmtquant.datafeed.qlib_init import init_qlib
+    init_qlib(uri, n_expressions=32)
 
     print("=" * 62)
     print("强化学习 PPO 择时（stable-baselines3）")

@@ -212,8 +212,8 @@ def main():
     cfg = get_config()
     uri = str(Path(cfg.data.store_dir) / "qlib_data")
 
-    import qlib
-    qlib.init(provider_uri=uri, region="cn", joblib_backend="threading")
+    from qmtquant.datafeed.qlib_init import init_qlib
+    init_qlib(uri, n_expressions=32)
 
     df = generate_signal(date, args.market, args.capital)
     if df.empty:

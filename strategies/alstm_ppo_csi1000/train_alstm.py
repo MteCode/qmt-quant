@@ -175,12 +175,15 @@ def main() -> int:
         print(f"数据目录不存在: {uri}\n请先运行 scripts/export_qlib.py")
         return 1
 
-    import qlib
-    qlib.init(provider_uri=uri, region="cn", joblib_backend="threading")
+    # Alpha360 有 360 个表达式，并发下会撑爆 Qlib 默认 500 条的内存缓存，
+    # 触发 LRU 淘汰竞争导致随机 KeyError。详见 qlib_init 的模块文档
+    from qmtquant.datafeed.qlib_init import init_qlib
+    cache_limit = init_qlib(uri, n_expressions=360)
 
     print("=" * 62)
     print("Alpha360 + ALSTM（Attention LSTM）")
     print("=" * 62)
+    print(f"缓存上限  : {cache_limit} 条")
     print(f"数据      : {uri}  市场 {args.market}")
     print(f"训练      : {TRAIN[0]} ~ {TRAIN[1]}")
     print(f"验证      : {VALID[0]} ~ {VALID[1]}（早停）")
