@@ -204,7 +204,6 @@ class XtGateway(BaseGateway):
             self.on_position(PositionData(
                 symbol=symbol,
                 exchange=exchange,
-                direction=Direction.LONG,
                 volume=pos.volume,
                 frozen=pos.volume - pos.can_use_volume,
                 price=pos.avg_price,

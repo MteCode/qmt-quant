@@ -148,13 +148,16 @@ def calc_orders(target_df: pd.DataFrame, current_pos: dict,
     return sell_orders, buy_orders
 
 
-def execute_orders(gateway, sell_orders, buy_orders, dry_run=False):
-    """先卖后买"""
+def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=False):
+    """先卖后买，每笔经过风控校验。"""
+    from qmtquant.core.constants import Direction, Exchange
+    from qmtquant.core.objects import OrderRequest
     from xtquant.xttype import StockAccount
     account = StockAccount(gateway.account_id)
 
     total_sell = 0
     total_buy = 0
+    rejected = 0
 
     # 卖出
     if sell_orders:
@@ -164,6 +167,21 @@ def execute_orders(gateway, sell_orders, buy_orders, dry_run=False):
             vol = order["volume"]
             parts = vt.split(".")
             xt_code = f"{parts[0]}.{'SH' if parts[1] == 'SSE' else 'SZ'}"
+            exchange = Exchange.SSE if parts[1] == "SSE" else Exchange.SZSE
+            price = order.get("price", 0)
+
+            # 风控校验
+            if risk_mgr and not dry_run:
+                req = OrderRequest(
+                    symbol=parts[0], exchange=exchange,
+                    direction=Direction.SHORT,
+                    price=price, volume=vol,
+                )
+                ok, reason = risk_mgr.check(req)
+                if not ok:
+                    print(f"  [RISK] {xt_code} {vol} 股 -- 拒绝: {reason.value}")
+                    rejected += 1
+                    continue
 
             print(f"  {xt_code}  {vol:>6d} 股  {order['reason']}")
             total_sell += vol
@@ -171,7 +189,7 @@ def execute_orders(gateway, sell_orders, buy_orders, dry_run=False):
             if not dry_run:
                 gateway.trader.order_stock(
                     account, xt_code, 24,  # STOCK_SELL
-                    int(vol), 0,  # 0 = 市价
+                    int(vol), 5, 0,  # price_type=5(最优五档), price=0
                     strategy_name="ALSTM_PPO",
                     order_remark="paper_sell",
                 )
@@ -187,19 +205,35 @@ def execute_orders(gateway, sell_orders, buy_orders, dry_run=False):
             amount = order.get("amount", 0)
             parts = vt.split(".")
             xt_code = f"{parts[0]}.{'SH' if parts[1] == 'SSE' else 'SZ'}"
+            exchange = Exchange.SSE if parts[1] == "SSE" else Exchange.SZSE
 
-            print(f"  {xt_code}  {vol:>6d} 股  ¥{amount:>10,.0f}  {order['reason']}")
+            # 风控校验
+            if risk_mgr and not dry_run:
+                req = OrderRequest(
+                    symbol=parts[0], exchange=exchange,
+                    direction=Direction.LONG,
+                    price=price, volume=vol,
+                )
+                ok, reason = risk_mgr.check(req)
+                if not ok:
+                    print(f"  [RISK] {xt_code} {vol} 股 -- 拒绝: {reason.value}")
+                    rejected += 1
+                    continue
+
+            print(f"  {xt_code}  {vol:>6d} 股  {amount:>10,.0f} 元  {order['reason']}")
             total_buy += 1
 
             if not dry_run:
                 gateway.trader.order_stock(
                     account, xt_code, 23,  # STOCK_BUY
-                    int(vol), 0,  # 0 = 市价
+                    int(vol), 5, 0,  # price_type=5(最优五档), price=0
                     strategy_name="ALSTM_PPO",
                     order_remark="paper_buy",
                 )
                 time.sleep(0.2)
 
+    if rejected:
+        print(f"\n  [RISK] 风控拦截 {rejected} 笔")
     return total_sell, total_buy
 
 
@@ -246,8 +280,30 @@ def main():
         event_engine.stop()
         return 1
 
-    print("  连接成功 ✓")
+    print("  连接成功")
     time.sleep(1)
+
+    # 2.5 初始化风控
+    from qmtquant.risk.risk_manager import RiskManager
+    risk_mgr = RiskManager(cfg.risk, event_engine)
+
+    # 查询账户资产（风控需要）
+    from xtquant.xttype import StockAccount as _SA
+    _acct = _SA(cfg.gateway.account_id)
+    _asset = gateway.trader.query_stock_asset(_acct)
+    if _asset:
+        from qmtquant.core.objects import AccountData
+        risk_mgr.update_account(AccountData(
+            accountid=cfg.gateway.account_id,
+            balance=_asset.total_asset,
+            available=_asset.cash,
+            frozen=_asset.frozen_cash,
+        ))
+        print(f"\n  账户资产: {_asset.total_asset:,.0f} 元, 可用: {_asset.cash:,.0f} 元")
+
+    risk_stats = risk_mgr.stats()
+    print(f"  风控状态: 回撤 {risk_stats['drawdown']:.2%}, "
+          f"级别 {risk_stats['drawdown_level']}")
 
     # 3. 查询当前持仓
     print("\n查询当前持仓...")
@@ -288,7 +344,8 @@ def main():
     print(f"{'='*50}")
 
     total_sell, total_buy = execute_orders(
-        gateway, sell_orders, buy_orders, dry_run=args.dry_run)
+        gateway, sell_orders, buy_orders,
+        risk_mgr=risk_mgr, dry_run=args.dry_run)
 
     print(f"\n卖出 {len(sell_orders)} 笔, 买入 {len(buy_orders)} 笔")
     if args.dry_run:

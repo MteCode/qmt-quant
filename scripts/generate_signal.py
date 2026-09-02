@@ -26,7 +26,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
-HOLD_K = 30
+HOLD_K = 10
 OUTPUT_DIR = Path("signals")
 
 
