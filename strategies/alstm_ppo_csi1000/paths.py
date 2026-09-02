@@ -36,6 +36,18 @@ ALSTM_META = MODELS_DIR / "alstm_meta.json"
 #: PPO 择时模型权重（LFS 跟踪）
 PPO_MODEL = MODELS_DIR / "ppo_model.zip"
 
+#: 集成模型目录。单个种子的结果方差过大（8 种子实测 Sharpe -0.491 ~ +0.532，
+#: 中位数 -0.027），集成用多个种子的截面排名平均消掉这层随机性
+ENSEMBLE_DIR = MODELS_DIR / "ensemble"
+
+
+def ensemble_weights(seed: int):
+    return ENSEMBLE_DIR / f"alstm_seed{seed}.pt"
+
+
+def ensemble_scores(seed: int):
+    return ENSEMBLE_DIR / f"scores_seed{seed}.parquet"
+
 # ---------------------------------------------------------------- 回测结果
 BACKTEST_DIR = STRATEGY_DIR / "backtest"
 
@@ -56,7 +68,7 @@ def signal_file(date: str) -> Path:
 
 
 def ensure_dirs() -> None:
-    for d in (MODELS_DIR, BACKTEST_DIR, SIGNALS_DIR, STATE_DIR):
+    for d in (MODELS_DIR, ENSEMBLE_DIR, BACKTEST_DIR, SIGNALS_DIR, STATE_DIR):
         d.mkdir(parents=True, exist_ok=True)
 
 

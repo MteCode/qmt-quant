@@ -1,0 +1,177 @@
+{
+  "generated_at": "2026-09-02T20:04:30",
+  "config": {
+    "seeds": 8,
+    "holdings": 50,
+    "rebalance": 20,
+    "capital": 1000000,
+    "combine": "cross_sectional_rank_mean",
+    "test": [
+      "2022-01-01",
+      "2026-08-27"
+    ]
+  },
+  "singles": [
+    {
+      "total_return": 0.4358396893866838,
+      "annual_return": 0.0807749310170014,
+      "max_drawdown": 0.18354518519755114,
+      "sharpe": 0.5319271805695217,
+      "calmar": 0.440081993597722,
+      "win_rate": 0.48148148148148145,
+      "total_trades": 2410,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "seed": 0,
+      "ic_mean": 0.02176293366855472,
+      "ic_t": 6.141858511393306
+    },
+    {
+      "total_return": -0.1419735654020996,
+      "annual_return": -0.0323447875832239,
+      "max_drawdown": 0.3027413278769149,
+      "sharpe": -0.4909435253039544,
+      "calmar": -0.10683968327038017,
+      "win_rate": 0.355297157622739,
+      "total_trades": 1425,
+      "drawdown_ok": false,
+      "peak_resets": 5,
+      "seed": 1,
+      "ic_mean": -0.00811248092184874,
+      "ic_t": -1.6531436873960725
+    },
+    {
+      "total_return": 0.18780814034325388,
+      "annual_return": 0.03764841093094118,
+      "max_drawdown": 0.22342662356879794,
+      "sharpe": 0.20784990456985963,
+      "calmar": 0.1685045870075032,
+      "win_rate": 0.4447592067988669,
+      "total_trades": 2023,
+      "drawdown_ok": false,
+      "peak_resets": 4,
+      "seed": 2,
+      "ic_mean": 0.0022272775430570123,
+      "ic_t": 0.5061211328996789
+    },
+    {
+      "total_return": -0.12197051597307118,
+      "annual_return": -0.02754448294544487,
+      "max_drawdown": 0.22299695615662607,
+      "sharpe": -0.4797859775768495,
+      "calmar": -0.12351954672465794,
+      "win_rate": 0.35192697768762676,
+      "total_trades": 1756,
+      "drawdown_ok": false,
+      "peak_resets": 5,
+      "seed": 3,
+      "ic_mean": 0.013551665190857778,
+      "ic_t": 3.0804243352296634
+    },
+    {
+      "total_return": 0.3747635346162199,
+      "annual_return": 0.0707340462921322,
+      "max_drawdown": 0.17945489153969596,
+      "sharpe": 0.45941070528917455,
+      "calmar": 0.3941605920309262,
+      "win_rate": 0.4810224632068164,
+      "total_trades": 2403,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "seed": 4,
+      "ic_mean": 0.019825101817811178,
+      "ic_t": 4.867165960307909
+    },
+    {
+      "total_return": 0.010185849474585451,
+      "annual_return": 0.002178506363318622,
+      "max_drawdown": 0.25830686955075055,
+      "sharpe": -0.13458550956118775,
+      "calmar": 0.008433791819425857,
+      "win_rate": 0.40470193115029385,
+      "total_trades": 2240,
+      "drawdown_ok": false,
+      "peak_resets": 4,
+      "seed": 5,
+      "ic_mean": 0.016677983927609868,
+      "ic_t": 4.569216176349121
+    },
+    {
+      "total_return": 0.11107393035065405,
+      "annual_return": 0.022874510804255843,
+      "max_drawdown": 0.19230546013549843,
+      "sharpe": 0.08064545085107498,
+      "calmar": 0.11894883685641823,
+      "win_rate": 0.4317596566523605,
+      "total_trades": 2154,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "seed": 6,
+      "ic_mean": 0.024311451239900337,
+      "ic_t": 5.879255556050507
+    },
+    {
+      "total_return": -0.08367327289195303,
+      "annual_return": -0.018588604431500233,
+      "max_drawdown": 0.1983090202782436,
+      "sharpe": -0.34697989495177267,
+      "calmar": -0.093735546700896,
+      "win_rate": 0.37259100642398285,
+      "total_trades": 1748,
+      "drawdown_ok": true,
+      "peak_resets": 5,
+      "seed": 7,
+      "ic_mean": 0.027111900322949762,
+      "ic_t": 6.751325279664724
+    }
+  ],
+  "ensemble": {
+    "total_return": 0.5662255231514521,
+    "annual_return": 0.10113594661377112,
+    "max_drawdown": 0.17059790220247584,
+    "sharpe": 0.6497120344641605,
+    "calmar": 0.592832299272572,
+    "win_rate": 0.48715953307392995,
+    "total_trades": 2385,
+    "drawdown_ok": true,
+    "peak_resets": 4
+  },
+  "subsets": [
+    {
+      "total_return": 0.5731267912707831,
+      "annual_return": 0.10217600315633746,
+      "max_drawdown": 0.1814065619879277,
+      "sharpe": 0.6442862687740409,
+      "calmar": 0.5632431486306272,
+      "win_rate": 0.4891391794046661,
+      "total_trades": 2306,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "group": "前半",
+      "seeds": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "total_return": 0.10460750025099719,
+      "annual_return": 0.0215932717544165,
+      "max_drawdown": 0.20065974232515105,
+      "sharpe": 0.06784979296923802,
+      "calmar": 0.10761137986226726,
+      "win_rate": 0.4225589225589226,
+      "total_trades": 2196,
+      "drawdown_ok": false,
+      "peak_resets": 4,
+      "group": "后半",
+      "seeds": [
+        4,
+        5,
+        6,
+        7
+      ]
+    }
+  ]
+}
