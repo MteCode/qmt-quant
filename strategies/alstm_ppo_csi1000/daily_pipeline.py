@@ -5,9 +5,9 @@
 
 用法::
 
-    python scripts/daily_pipeline.py
-    python scripts/daily_pipeline.py --skip-download   # 跳过数据下载（已更新时）
-    python scripts/daily_pipeline.py --auto-trade       # 自动下单（慎用）
+    python strategies/alstm_ppo_csi1000/daily_pipeline.py
+    python strategies/alstm_ppo_csi1000/daily_pipeline.py --skip-download
+    python strategies/alstm_ppo_csi1000/daily_pipeline.py --auto-trade   # 自动下单（慎用）
 """
 import argparse
 import subprocess
@@ -16,8 +16,13 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-PYTHON = str(Path(__file__).resolve().parent.parent / ".venv" / "Scripts" / "python.exe")
-ROOT = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402
+
+PYTHON = paths.PYTHON
+ROOT = str(paths.ROOT_DIR)
+S = paths.STRATEGY_DIR
+PARAMS = paths.load_params()
 
 
 def run_step(name: str, cmd: list, timeout: int = 1800) -> bool:
@@ -55,14 +60,14 @@ def main():
                     help="重新训练 ALSTM（默认使用已有分数，无需每天重训）")
     p.add_argument("--auto-trade", action="store_true",
                     help="自动执行下单（默认只生成信号）")
-    p.add_argument("--capital", type=float, default=500_000)
+    p.add_argument("--capital", type=float, default=PARAMS["capital"])
     args = p.parse_args()
 
     today = datetime.now().strftime("%Y-%m-%d")
     t_start = time.time()
 
     print("=" * 60)
-    print(f"  ALSTM + PPO 每日流水线")
+    print(f"  {paths.STRATEGY_NAME} 每日流水线")
     print(f"  日期: {today}")
     print(f"  本金: {args.capital:,.0f} 元")
     print("=" * 60)
@@ -73,7 +78,7 @@ def main():
     if not args.skip_download:
         ok = run_step(
             "1/5 下载最新行情（QMT）",
-            [PYTHON, "scripts/download_data.py",
+            [PYTHON, str(paths.SHARED_SCRIPTS / "download_data.py"),
              "--sector", "中证1000", "--intervals", "1d", "--resume"],
             timeout=600,
         )
@@ -86,8 +91,8 @@ def main():
         # 步骤 2：导出 Qlib 格式
         ok = run_step(
             "2/5 导出 Qlib 格式",
-            [PYTHON, "scripts/export_qlib.py",
-             "--index", "000852.SH", "--start", "2016-01-01"],
+            [PYTHON, str(paths.SHARED_SCRIPTS / "export_qlib.py"),
+             "--index", PARAMS["index"], "--start", "2016-01-01"],
             timeout=600,
         )
         steps_ok.append(("导出Qlib", ok))
@@ -104,15 +109,15 @@ def main():
     if args.retrain_alstm:
         ok = run_step(
             "3/5 ALSTM 重新训练+推理",
-            [PYTHON, "scripts/run_alstm.py",
-             "--market", "csi1000", "--index", "000852.SH"],
+            [PYTHON, str(S / "train_alstm.py"),
+             "--market", PARAMS["market"], "--index", PARAMS["index"]],
             timeout=1800,
         )
         steps_ok.append(("ALSTM推理", ok))
         if not ok:
             print("\n[WARN] ALSTM 推理失败，将使用上次的分数")
     else:
-        scores_path = Path("reports/alstm_csi1000/scores.parquet")
+        scores_path = paths.ALSTM_SCORES
         if scores_path.exists():
             import pandas as pd
             scores = pd.read_parquet(scores_path)
@@ -121,14 +126,14 @@ def main():
             print(f"  如需重新训练，加 --retrain-alstm")
         else:
             print("\n  [WARN] 分数文件不存在，需要先训练一次")
-            print(f"  运行: {PYTHON} scripts/run_alstm.py --market csi1000 --index 000852.SH")
+            print(f"  运行: {PYTHON} {S / 'train_alstm.py'}")
             return 1
         steps_ok.append(("ALSTM推理", "使用缓存"))
 
     # 步骤 4：生成信号
     ok = run_step(
         "4/5 生成交易信号（ALSTM选股 + PPO择时）",
-        [PYTHON, "scripts/generate_signal.py",
+        [PYTHON, str(S / "generate_signal.py"),
          "--date", today, "--capital", str(args.capital)],
         timeout=300,
     )
@@ -141,7 +146,7 @@ def main():
     if args.auto_trade:
         ok = run_step(
             "5/5 执行下单",
-            [PYTHON, "scripts/run_paper_trade.py"],
+            [PYTHON, str(S / "paper_trade.py")],
             timeout=120,
         )
         steps_ok.append(("执行下单", ok))
@@ -149,8 +154,8 @@ def main():
         print(f"\n{'='*60}")
         print(f"  5/5 信号已就绪，请手动执行下单：")
         print(f"{'='*60}")
-        print(f"\n  预览:  {PYTHON} scripts/run_paper_trade.py --dry-run")
-        print(f"  执行:  {PYTHON} scripts/run_paper_trade.py")
+        print(f"\n  预览:  {PYTHON} {S / 'paper_trade.py'} --dry-run")
+        print(f"  执行:  {PYTHON} {S / 'paper_trade.py'}")
         steps_ok.append(("执行下单", "待手动"))
 
     # 汇总
@@ -168,7 +173,7 @@ def main():
         print(f"  {icon} {name}: {status}")
 
     # 显示信号摘要
-    signal_file = Path("signals/target_latest.csv")
+    signal_file = paths.LATEST_SIGNAL
     if signal_file.exists():
         import csv
         with open(signal_file, encoding="utf-8-sig") as f:

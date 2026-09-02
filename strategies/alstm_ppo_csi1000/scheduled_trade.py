@@ -11,9 +11,9 @@
 
 用法::
 
-    python scripts/scheduled_trade.py              # 正常定时执行
-    python scripts/scheduled_trade.py --dry-run     # 到点只预览不下单
-    python scripts/scheduled_trade.py --now         # 立即执行全部步骤（不等时间）
+    python strategies/alstm_ppo_csi1000/scheduled_trade.py            # 定时执行
+    python strategies/alstm_ppo_csi1000/scheduled_trade.py --dry-run  # 只预览
+    python strategies/alstm_ppo_csi1000/scheduled_trade.py --now      # 立即跑
 """
 import argparse
 import subprocess
@@ -22,8 +22,13 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-PYTHON = str(Path(__file__).resolve().parent.parent / ".venv" / "Scripts" / "python.exe")
-ROOT = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402
+
+PYTHON = paths.PYTHON
+ROOT = str(paths.ROOT_DIR)
+S = paths.STRATEGY_DIR
+PARAMS = paths.load_params()
 
 SCHEDULE = [
     ("09:00", "update_data",    "更新行情数据"),
@@ -82,12 +87,12 @@ def main():
                     help="到下单时只预览，不实际执行")
     p.add_argument("--now", action="store_true",
                     help="立即执行全部步骤，不等定时")
-    p.add_argument("--capital", type=float, default=500_000)
+    p.add_argument("--capital", type=float, default=PARAMS["capital"])
     args = p.parse_args()
 
     today = datetime.now().strftime("%Y-%m-%d")
     print("=" * 50)
-    print(f"  ALSTM + PPO 定时交易")
+    print(f"  {paths.STRATEGY_NAME} 定时交易")
     print(f"  日期: {today}")
     print(f"  模式: {'DRY RUN' if args.dry_run else '实盘下单'}")
     print("=" * 50)
@@ -109,7 +114,7 @@ def main():
 
         if step == "update_data":
             ok = run_cmd(desc, [
-                PYTHON, "scripts/download_data.py",
+                PYTHON, str(paths.SHARED_SCRIPTS / "download_data.py"),
                 "--sector", "中证1000", "--intervals", "1d", "--resume",
             ], timeout=600)
             results.append((desc, ok))
@@ -118,14 +123,14 @@ def main():
 
         elif step == "export_qlib":
             ok = run_cmd(desc, [
-                PYTHON, "scripts/export_qlib.py",
-                "--index", "000852.SH", "--start", "2016-01-01",
+                PYTHON, str(paths.SHARED_SCRIPTS / "export_qlib.py"),
+                "--index", PARAMS["index"], "--start", "2016-01-01",
             ], timeout=600)
             results.append((desc, ok))
 
         elif step == "generate_signal":
             ok = run_cmd(desc, [
-                PYTHON, "scripts/generate_signal.py",
+                PYTHON, str(S / "generate_signal.py"),
                 "--date", today, "--capital", str(args.capital),
             ], timeout=300)
             results.append((desc, ok))
@@ -136,11 +141,11 @@ def main():
         elif step == "execute_trade":
             if args.dry_run:
                 ok = run_cmd(desc + " (DRY RUN)", [
-                    PYTHON, "scripts/run_paper_trade.py", "--dry-run",
+                    PYTHON, str(S / "paper_trade.py"), "--dry-run",
                 ], timeout=120)
             else:
                 ok = run_cmd(desc, [
-                    PYTHON, "scripts/run_paper_trade.py",
+                    PYTHON, str(S / "paper_trade.py"),
                 ], timeout=120)
             results.append((desc, ok))
 
@@ -153,7 +158,7 @@ def main():
         print(f"  {icon} {desc}")
 
     # 显示信号摘要
-    signal_file = Path("signals/target_latest.csv")
+    signal_file = paths.LATEST_SIGNAL
     if signal_file.exists():
         import csv
         with open(signal_file, encoding="utf-8-sig") as f:

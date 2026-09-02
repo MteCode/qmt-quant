@@ -12,8 +12,8 @@
 
 用法::
 
-    python scripts/run_paper_trade.py
-    python scripts/run_paper_trade.py --dry-run   # 只看差异，不下单
+    python strategies/alstm_ppo_csi1000/paper_trade.py
+    python strategies/alstm_ppo_csi1000/paper_trade.py --dry-run   # 只看差异，不下单
 """
 import argparse
 import math
@@ -23,17 +23,18 @@ from pathlib import Path
 
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402
 
 
 def load_target() -> pd.DataFrame:
-    path = Path("signals/target_latest.csv")
+    path = paths.LATEST_SIGNAL
     if not path.exists():
         print(f"信号文件不存在: {path}")
-        print("请先运行: python scripts/generate_signal.py")
+        print(f"请先运行: python {paths.STRATEGY_DIR / 'generate_signal.py'}")
         return pd.DataFrame()
     df = pd.read_csv(path)
-    print(f"加载目标持仓: {len(df)} 只, 总金额 ¥{df['target_value'].sum():,.0f}")
+    print(f"加载目标持仓: {len(df)} 只, 总金额 {df['target_value'].sum():,.0f} 元")
     return df
 
 
@@ -241,7 +242,8 @@ def main():
     p = argparse.ArgumentParser(description="虚拟盘执行")
     p.add_argument("--dry-run", action="store_true",
                     help="只计算差异，不实际下单")
-    p.add_argument("--capital", type=float, default=500_000)
+    p.add_argument("--capital", type=float,
+                    default=paths.load_params()["capital"])
     args = p.parse_args()
 
     from qmtquant.config import get_config
@@ -313,7 +315,7 @@ def main():
         for vt, info in sorted(current_pos.items()):
             print(f"    {vt:>12s}  {info['volume']:>6d} 股  "
                   f"可卖 {info['available']:>6d}  "
-                  f"市值 ¥{info['market_value']:>10,.0f}")
+                  f"市值 {info['market_value']:>10,.0f} 元")
     else:
         print("  当前空仓")
 

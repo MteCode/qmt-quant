@@ -1,0 +1,4 @@
+# 模型产物走 LFS —— 分数面板与模型权重必须版本化，
+# 否则回测结果无法复现（曾因 *.parquet 被 gitignore 而丢失过一份 ALSTM 分数）
+strategies/**/models/*.parquet filter=lfs diff=lfs merge=lfs -text
+strategies/**/models/*.zip     filter=lfs diff=lfs merge=lfs -text

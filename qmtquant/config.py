@@ -154,10 +154,17 @@ def load_config(path: str | Path | None = None) -> AppConfig:
         with open(path, "r", encoding="utf-8") as f:
             raw = yaml.safe_load(f) or {}
 
+    data = _fill(DataConfig, raw.get("data"))
+    # store_dir 配的是 "./data" 这类相对路径，必须按**项目根**解析而不是
+    # 当前工作目录 —— 否则从别处调用脚本会解析成 C:\data\qlib_data 而报
+    # "does not contain data for day"。策略脚本挪进 strategies/ 之后
+    # 更容易踩到这个坑
+    data.store_dir = str((ROOT_DIR / data.store_dir).resolve())
+
     return AppConfig(
         log_level=raw.get("log_level", "INFO"),
         gateway=_fill(GatewayConfig, raw.get("gateway")),
-        data=_fill(DataConfig, raw.get("data")),
+        data=data,
         cost=_fill(CostConfig, raw.get("cost")),
         risk=_fill(RiskConfig, raw.get("risk")),
         backtest=_fill(BacktestConfig, raw.get("backtest")),

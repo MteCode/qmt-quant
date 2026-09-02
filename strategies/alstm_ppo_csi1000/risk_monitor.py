@@ -18,15 +18,15 @@
 ## 状态持久化
 
 回撤峰值必须跨重启保留 —— `DrawdownController.reset()` 的文档明确写了
-「实盘不应调用，那等于抹掉回撤记忆」。状态存到 `data/risk_state.json`，
-启动时加载，每次更新后落盘。
+「实盘不应调用，那等于抹掉回撤记忆」。状态存到本策略的 `state/risk_state.json`，
+启动时加载，每次更新后落盘。每个策略各自一份，互不干扰。
 
 用法::
 
-    python scripts/risk_monitor.py                 # 正常守护（会自动下单减仓）
-    python scripts/risk_monitor.py --dry-run       # 只监控告警，不下单
-    python scripts/risk_monitor.py --interval 60   # 轮询间隔（秒），默认 30
-    python scripts/risk_monitor.py --once          # 只检查一次就退出
+    python strategies/alstm_ppo_csi1000/risk_monitor.py              # 守护（自动减仓）
+    python strategies/alstm_ppo_csi1000/risk_monitor.py --dry-run    # 只告警不下单
+    python strategies/alstm_ppo_csi1000/risk_monitor.py --interval 60
+    python strategies/alstm_ppo_csi1000/risk_monitor.py --once       # 只检查一次
 """
 import argparse
 import json
@@ -35,9 +35,10 @@ import time
 from datetime import date, datetime, time as dtime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402
 
-STATE_FILE = Path("data/risk_state.json")
+STATE_FILE = paths.RISK_STATE
 
 MORNING = (dtime(9, 30), dtime(11, 30))
 AFTERNOON = (dtime(13, 0), dtime(15, 0))

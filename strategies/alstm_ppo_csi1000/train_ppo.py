@@ -8,8 +8,8 @@
 
 用法::
 
-    python scripts/run_rl_ppo.py
-    python scripts/run_rl_ppo.py --timesteps 200000
+    python strategies/alstm_ppo_csi1000/train_ppo.py
+    python strategies/alstm_ppo_csi1000/train_ppo.py --timesteps 200000
 """
 import argparse
 import os
@@ -21,7 +21,8 @@ import gymnasium
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402
 os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
 TRAIN = ("2016-01-01", "2019-12-31")
@@ -301,7 +302,7 @@ def main():
     p.add_argument("--market", default="csi1000")
     p.add_argument("--capital", type=float, default=500_000)
     p.add_argument("--timesteps", type=int, default=200_000)
-    p.add_argument("--report", default="reports/rl_ppo")
+    p.add_argument("--report", default=str(paths.BACKTEST_DIR))
     args = p.parse_args()
 
     from qmtquant.config import LOG_DIR, get_config
@@ -386,7 +387,7 @@ def main():
     print("测试段回测（样本外）—— ALSTM 选股 + PPO 择时")
     print("-" * 62)
 
-    scores_path = Path("reports/alstm_csi1000/scores.parquet")
+    scores_path = paths.ALSTM_SCORES
     alstm_scores = None
     if scores_path.exists():
         alstm_scores = pd.read_parquet(scores_path)
@@ -451,7 +452,7 @@ def main():
         "date": test_env.dates[:len(asset_curve)],
         "equity": asset_curve,
     })
-    equity.to_csv(out / "equity.csv", index=False, encoding="utf-8-sig")
+    equity.to_csv(out / "ppo_equity.csv", index=False, encoding="utf-8-sig")
 
     pd.DataFrame({
         "date": test_env.dates[:len(daily_ret)],
@@ -459,9 +460,11 @@ def main():
         "exposure": exp_arr,
     }).to_csv(out / "daily_returns.csv", index=False, encoding="utf-8-sig")
 
-    model.save(str(out / "ppo_model"))
-    print(f"\n模型已保存: {out / 'ppo_model.zip'}")
-    print(f"明细: {out.resolve()}")
+    # 权重存到 models/，与回测结果分开 —— models/ 走 LFS 版本化
+    paths.ensure_dirs()
+    model.save(str(paths.PPO_MODEL.with_suffix("")))
+    print(f"\n模型已保存: {paths.PPO_MODEL}")
+    print(f"回测明细: {out.resolve()}")
     print(f"\n总耗时 {(time.time() - t0) / 60:.1f} 分钟")
 
     return 0

@@ -11,8 +11,8 @@
 
 用法::
 
-    python scripts/generate_signal.py
-    python scripts/generate_signal.py --date 2026-09-01
+    python strategies/alstm_ppo_csi1000/generate_signal.py
+    python strategies/alstm_ppo_csi1000/generate_signal.py --date 2026-09-01
 """
 import argparse
 import os
@@ -23,11 +23,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402  （必须在 sys.path 设好后再导入）
+
 os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
 
-HOLD_K = 10
-OUTPUT_DIR = Path("signals")
+PARAMS = paths.load_params()
+HOLD_K = PARAMS["hold_k"]
 
 
 def get_market_features(market: str, end_date: str, lookback: int = 60):
@@ -83,7 +85,7 @@ def get_alstm_scores(date: str) -> pd.Series:
 
     实盘时需要每日重新推理，此处先用离线分数演示流程。
     """
-    scores_path = Path("reports/alstm_csi1000/scores.parquet")
+    scores_path = paths.ALSTM_SCORES
     if not scores_path.exists():
         print("  !! ALSTM 分数文件不存在")
         return pd.Series(dtype=float)
@@ -104,7 +106,7 @@ def get_alstm_scores(date: str) -> pd.Series:
 
 def get_ppo_exposure(feat_df, date: str) -> float:
     """用 PPO 模型预测当日仓位水平。"""
-    model_path = Path("reports/rl_ppo/ppo_model.zip")
+    model_path = paths.PPO_MODEL
     if not model_path.exists():
         print("  !! PPO 模型不存在，默认仓位 30%")
         return 0.30
@@ -190,8 +192,8 @@ def generate_signal(date: str, market: str = "csi1000",
 
     print(f"\n  持仓只数: {len(df)}")
     print(f"  总仓位: {df['weight'].sum():.1%}")
-    print(f"  总金额: ¥{df['target_value'].sum():,.0f}")
-    print(f"  单只均值: ¥{df['target_value'].mean():,.0f}")
+    print(f"  总金额: {df['target_value'].sum():,.0f} 元")
+    print(f"  单只均值: {df['target_value'].mean():,.0f} 元")
 
     return df
 
@@ -200,8 +202,8 @@ def main():
     p = argparse.ArgumentParser(description="每日信号生成")
     p.add_argument("--date", default=None,
                     help="信号日期，默认今天")
-    p.add_argument("--market", default="csi1000")
-    p.add_argument("--capital", type=float, default=500_000)
+    p.add_argument("--market", default=PARAMS["market"])
+    p.add_argument("--capital", type=float, default=PARAMS["capital"])
     args = p.parse_args()
 
     date = args.date or datetime.now().strftime("%Y-%m-%d")
@@ -218,22 +220,21 @@ def main():
         return 1
 
     # 保存
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_file = OUTPUT_DIR / f"target_{date}.csv"
+    paths.ensure_dirs()
+    out_file = paths.signal_file(date)
     df.to_csv(out_file, index=False, encoding="utf-8-sig")
     print(f"\n已保存: {out_file}")
 
     # 同时保存一份 latest
-    latest = OUTPUT_DIR / "target_latest.csv"
-    df.to_csv(latest, index=False, encoding="utf-8-sig")
-    print(f"已更新: {latest}")
+    df.to_csv(paths.LATEST_SIGNAL, index=False, encoding="utf-8-sig")
+    print(f"已更新: {paths.LATEST_SIGNAL}")
 
     print(f"\n前 10 只:")
     for _, row in df.head(10).iterrows():
         print(f"  {row['vt_symbol']:>12s}  "
               f"分数 {row['score']:+.4f}  "
               f"权重 {row['weight']:.2%}  "
-              f"¥{row['target_value']:,.0f}")
+              f"{row['target_value']:>10,.0f} 元")
 
     return 0
 

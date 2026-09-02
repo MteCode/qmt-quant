@@ -18,6 +18,16 @@ reports/**/*.html
 !docs/*.html
 !reports/**/*.csv
 
+# 策略目录的模型产物必须入库（走 LFS，见 .gitattributes）。
+# 教训：scores.parquet 曾被这里的 *.parquet 规则挡在库外，
+# 重训覆盖后那份产生 +44.37% 回测的分数永久丢失，结果无法复现。
+!strategies/**/models/*.parquet
+!strategies/**/models/*.zip
+
+# 策略运行时状态：回撤峰值是本机实盘记录，不该跟着代码走。
+# 换机器要手动迁移，删掉等于抹掉回撤记忆（见 drawdown.py）
+strategies/**/state/
+
 # Python
 __pycache__/
 *.py[cod]

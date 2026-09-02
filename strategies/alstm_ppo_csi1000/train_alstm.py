@@ -7,8 +7,11 @@ ALSTM 用 6 个原始价量特征 × 60 天滑动窗口（Alpha360），
 
 用法::
 
-    python scripts/run_alstm.py --market csi1000 --index 000852.SH
-    python scripts/run_alstm.py --market csi1000 --index 000852.SH --holdings 50 --rebalance 20
+    python strategies/alstm_ppo_csi1000/train_alstm.py
+    python strategies/alstm_ppo_csi1000/train_alstm.py --holdings 50 --rebalance 20
+
+⚠ 重训会覆盖 models/alstm_scores.parquet。覆盖前先 git commit，
+   否则旧分数无法找回，对应的回测结果永久失去可复现性。
 """
 import argparse
 import os
@@ -16,8 +19,11 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import paths  # noqa: E402
+
 os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+PARAMS = paths.load_params()
 
 TRAIN = ("2016-01-01", "2019-12-31")
 VALID = ("2020-01-01", "2021-12-31")
@@ -75,12 +81,12 @@ def to_score_panel(pred):
 def main() -> int:
     p = argparse.ArgumentParser(description="Alpha360 + ALSTM")
     p.add_argument("--uri", default=None, help="qlib 数据目录")
-    p.add_argument("--market", default="csi1000")
-    p.add_argument("--index", default="000852.SH")
+    p.add_argument("--market", default=PARAMS["market"])
+    p.add_argument("--index", default=PARAMS["index"])
     p.add_argument("--holdings", type=int, default=50)
     p.add_argument("--rebalance", type=int, default=20)
     p.add_argument("--capital", type=float, default=1_000_000)
-    p.add_argument("--report", default="reports/alstm_csi1000")
+    p.add_argument("--report", default=str(paths.BACKTEST_DIR))
     p.add_argument("--no-drawdown", action="store_true")
     p.add_argument("--n-epochs", type=int, default=200)
     p.add_argument("--gpu", type=int, default=0, help="-1 表示用 CPU")
@@ -230,12 +236,19 @@ def main() -> int:
 
     out = Path(args.report)
     out.mkdir(parents=True, exist_ok=True)
-    engine.get_equity_df().to_csv(out / "equity.csv", encoding="utf-8-sig")
+    engine.get_equity_df().to_csv(out / "alstm_only_equity.csv",
+                                  encoding="utf-8-sig")
     tdf = engine.get_trades_df()
     if not tdf.empty:
-        tdf.to_csv(out / "trades.csv", index=False, encoding="utf-8-sig")
-    scores.to_parquet(out / "scores.parquet")
-    pd.Series(ic).to_csv(out / "test_ic.csv", encoding="utf-8-sig")
+        tdf.to_csv(out / "alstm_only_trades.csv", index=False,
+                   encoding="utf-8-sig")
+    pd.Series(ic).to_csv(out / "alstm_test_ic.csv", encoding="utf-8-sig")
+
+    # 分数面板存到 models/（走 LFS）。这是下游 PPO 回测和实盘选股的输入，
+    # 覆盖前应先提交旧版本，否则对应回测结果失去可复现性
+    paths.ensure_dirs()
+    scores.to_parquet(paths.ALSTM_SCORES)
+    print(f"分数面板已保存: {paths.ALSTM_SCORES}")
 
     report = build_report(
         engine, stats, out / "alstm_report.html",
