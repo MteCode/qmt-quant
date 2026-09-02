@@ -52,45 +52,9 @@ def in_trading_hours(now: datetime | None = None) -> bool:
     return (MORNING[0] <= t <= MORNING[1]) or (AFTERNOON[0] <= t <= AFTERNOON[1])
 
 
-# ---------------------------------------------------------------- 状态持久化
-
-def load_state(controller) -> str | None:
-    """把上次的回撤状态灌回控制器，返回上次观测日期(YYYY-MM-DD)。"""
-    if not STATE_FILE.exists():
-        print("  无历史风控状态，以今日为起点")
-        return None
-
-    from qmtquant.risk.drawdown import DrawdownLevel
-
-    data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    s = controller.state
-    s.peak = data.get("peak", 0.0)
-    s.current = data.get("current", 0.0)
-    s.drawdown = data.get("drawdown", 0.0)
-    s.level = DrawdownLevel(data.get("level", 0))
-    s.observations = data.get("observations", 0)
-    s.observations_at_level = data.get("observations_at_level", 0)
-    s.peak_resets = data.get("peak_resets", 0)
-
-    print(f"  已加载风控状态: 峰值 {s.peak:,.0f}, 回撤 {s.drawdown:.2%}, "
-          f"档位 {s.level.label}, 观测 {s.observations} 天")
-    return data.get("last_obs_date")
-
-
-def save_state(controller, last_obs_date: str | None) -> None:
-    s = controller.state
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps({
-        "peak": s.peak,
-        "current": s.current,
-        "drawdown": s.drawdown,
-        "level": int(s.level),
-        "observations": s.observations,
-        "observations_at_level": s.observations_at_level,
-        "peak_resets": s.peak_resets,
-        "last_obs_date": last_obs_date,
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+# 状态持久化走共用模块 —— paper_trade.py 也读写同一份，
+# 两边各持一份实现会漂移出「监控说只平不开、下单脚本照样开新仓」的分裂
+from risk_state import load_state, save_state  # noqa: E402
 
 
 # ---------------------------------------------------------------- 账户查询
@@ -210,7 +174,7 @@ def main() -> int:
     ))
 
     print()
-    last_obs_date = load_state(controller)
+    last_obs_date = load_state(controller).get("last_obs_date")
 
     # 连接 miniQMT
     print(f"\n  连接 miniQMT ({cfg.gateway.account_id}) ...")

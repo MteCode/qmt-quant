@@ -25,6 +25,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths  # noqa: E402
+import risk_state  # noqa: E402
 
 
 def load_target() -> pd.DataFrame:
@@ -100,10 +101,15 @@ def calc_orders(target_df: pd.DataFrame, current_pos: dict,
     for vt in current_holdings - target_holdings:
         pos = current_pos[vt]
         if pos["available"] > 0:
+            # 价格取不到时退回成本价 —— 风控要用它算委托金额，给 0 会让
+            # 单笔金额上限形同虚设
+            px = prices.get(vt, 0) or pos.get("avg_price", 0)
             sell_orders.append({
                 "vt_symbol": vt,
                 "direction": "卖出",
                 "volume": pos["available"],
+                "price": px,
+                "amount": pos["available"] * px,
                 "reason": "清仓（不在目标持仓中）",
             })
 
@@ -143,99 +149,80 @@ def calc_orders(target_df: pd.DataFrame, current_pos: dict,
                     "vt_symbol": vt,
                     "direction": "卖出",
                     "volume": sell_vol,
+                    "price": price,
+                    "amount": sell_vol * price,
                     "reason": f"减仓 {current_shares} -> {current_shares - sell_vol}",
                 })
 
     return sell_orders, buy_orders
 
 
+def _split_code(vt: str):
+    """vt_symbol -> (6位代码, xtquant 代码, Exchange)"""
+    from qmtquant.core.constants import Exchange
+    code, ex = vt.split(".")
+    if ex == "SSE":
+        return code, f"{code}.SH", Exchange.SSE
+    return code, f"{code}.SZ", Exchange.SZSE
+
+
 def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=False):
-    """先卖后买，每笔经过风控校验。"""
-    from qmtquant.core.constants import Direction, Exchange
+    """先卖后买，每笔经过风控校验。
+
+    风控在 dry-run 下**同样执行** —— 预览的意义就是看到真实执行时会发生什么。
+    只跳过最后的 `order_stock` 调用。若 dry-run 不跑风控，你会看到 10 笔委托，
+    实际执行时被风控砍掉 4 笔而毫不知情。
+    """
+    from qmtquant.core.constants import Direction
     from qmtquant.core.objects import OrderRequest
     from xtquant.xttype import StockAccount
     account = StockAccount(gateway.account_id)
 
-    total_sell = 0
-    total_buy = 0
-    rejected = 0
+    passed_sell = passed_buy = rejected = 0
 
-    # 卖出
+    def handle(order, direction, xt_order_type, remark, tag):
+        nonlocal rejected
+        vt = order["vt_symbol"]
+        vol = int(order["volume"])
+        price = order.get("price", 0)
+        amount = order.get("amount", 0)
+        code, xt_code, exchange = _split_code(vt)
+
+        if risk_mgr is not None:
+            ok, reason = risk_mgr.check(OrderRequest(
+                symbol=code, exchange=exchange, direction=direction,
+                price=price, volume=vol,
+            ))
+            if not ok:
+                print(f"  [拦截] {xt_code} {vol:>6d} 股 -- {reason.value}")
+                rejected += 1
+                return False
+
+        print(f"  {xt_code}  {vol:>6d} 股  {amount:>10,.0f} 元  {order['reason']}")
+        if not dry_run:
+            gateway.trader.order_stock(
+                account, xt_code, xt_order_type,
+                vol, 5, 0,  # price_type=5(最优五档即时成交), price=0
+                strategy_name="ALSTM_PPO", order_remark=remark,
+            )
+            time.sleep(0.2)
+        return True
+
     if sell_orders:
         print(f"\n--- 卖出 ({len(sell_orders)} 笔) ---")
-        for order in sell_orders:
-            vt = order["vt_symbol"]
-            vol = order["volume"]
-            parts = vt.split(".")
-            xt_code = f"{parts[0]}.{'SH' if parts[1] == 'SSE' else 'SZ'}"
-            exchange = Exchange.SSE if parts[1] == "SSE" else Exchange.SZSE
-            price = order.get("price", 0)
+        for o in sell_orders:
+            if handle(o, Direction.SHORT, 24, "paper_sell", "卖"):
+                passed_sell += 1
 
-            # 风控校验
-            if risk_mgr and not dry_run:
-                req = OrderRequest(
-                    symbol=parts[0], exchange=exchange,
-                    direction=Direction.SHORT,
-                    price=price, volume=vol,
-                )
-                ok, reason = risk_mgr.check(req)
-                if not ok:
-                    print(f"  [RISK] {xt_code} {vol} 股 -- 拒绝: {reason.value}")
-                    rejected += 1
-                    continue
-
-            print(f"  {xt_code}  {vol:>6d} 股  {order['reason']}")
-            total_sell += vol
-
-            if not dry_run:
-                gateway.trader.order_stock(
-                    account, xt_code, 24,  # STOCK_SELL
-                    int(vol), 5, 0,  # price_type=5(最优五档), price=0
-                    strategy_name="ALSTM_PPO",
-                    order_remark="paper_sell",
-                )
-                time.sleep(0.2)
-
-    # 买入
     if buy_orders:
         print(f"\n--- 买入 ({len(buy_orders)} 笔) ---")
-        for order in buy_orders:
-            vt = order["vt_symbol"]
-            vol = order["volume"]
-            price = order.get("price", 0)
-            amount = order.get("amount", 0)
-            parts = vt.split(".")
-            xt_code = f"{parts[0]}.{'SH' if parts[1] == 'SSE' else 'SZ'}"
-            exchange = Exchange.SSE if parts[1] == "SSE" else Exchange.SZSE
-
-            # 风控校验
-            if risk_mgr and not dry_run:
-                req = OrderRequest(
-                    symbol=parts[0], exchange=exchange,
-                    direction=Direction.LONG,
-                    price=price, volume=vol,
-                )
-                ok, reason = risk_mgr.check(req)
-                if not ok:
-                    print(f"  [RISK] {xt_code} {vol} 股 -- 拒绝: {reason.value}")
-                    rejected += 1
-                    continue
-
-            print(f"  {xt_code}  {vol:>6d} 股  {amount:>10,.0f} 元  {order['reason']}")
-            total_buy += 1
-
-            if not dry_run:
-                gateway.trader.order_stock(
-                    account, xt_code, 23,  # STOCK_BUY
-                    int(vol), 5, 0,  # price_type=5(最优五档), price=0
-                    strategy_name="ALSTM_PPO",
-                    order_remark="paper_buy",
-                )
-                time.sleep(0.2)
+        for o in buy_orders:
+            if handle(o, Direction.LONG, 23, "paper_buy", "买"):
+                passed_buy += 1
 
     if rejected:
-        print(f"\n  [RISK] 风控拦截 {rejected} 笔")
-    return total_sell, total_buy
+        print(f"\n  风控拦截 {rejected} 笔")
+    return passed_sell, passed_buy
 
 
 def main():
@@ -285,29 +272,7 @@ def main():
     print("  连接成功")
     time.sleep(1)
 
-    # 2.5 初始化风控
-    from qmtquant.risk.risk_manager import RiskManager
-    risk_mgr = RiskManager(cfg.risk, event_engine)
-
-    # 查询账户资产（风控需要）
-    from xtquant.xttype import StockAccount as _SA
-    _acct = _SA(cfg.gateway.account_id)
-    _asset = gateway.trader.query_stock_asset(_acct)
-    if _asset:
-        from qmtquant.core.objects import AccountData
-        risk_mgr.update_account(AccountData(
-            accountid=cfg.gateway.account_id,
-            balance=_asset.total_asset,
-            available=_asset.cash,
-            frozen=_asset.frozen_cash,
-        ))
-        print(f"\n  账户资产: {_asset.total_asset:,.0f} 元, 可用: {_asset.cash:,.0f} 元")
-
-    risk_stats = risk_mgr.stats()
-    print(f"  风控状态: 回撤 {risk_stats['drawdown']:.2%}, "
-          f"级别 {risk_stats['drawdown_level']}")
-
-    # 3. 查询当前持仓
+    # 3. 查询当前持仓（必须在初始化风控之前 —— 风控校验卖单要用它）
     print("\n查询当前持仓...")
     current_pos = get_current_positions(gateway)
     if current_pos:
@@ -318,6 +283,69 @@ def main():
                   f"市值 {info['market_value']:>10,.0f} 元")
     else:
         print("  当前空仓")
+
+    # 3.5 初始化风控
+    print("\n初始化风控...")
+    from qmtquant.core.constants import Exchange
+    from qmtquant.core.objects import AccountData, PositionData
+    from qmtquant.risk.risk_manager import RiskManager
+    from xtquant.xttype import StockAccount as _SA
+
+    risk_mgr = RiskManager(cfg.risk, event_engine)
+
+    # 回撤状态与盘中监控共用同一份，否则本进程的控制器峰值从 0 开始、
+    # 观测点数不足 min_observations，档位判定永远不会触发 ——
+    # 会出现「监控说只平不开、下单脚本照样开新仓」的分裂
+    prev_state = risk_state.load_state(risk_mgr.drawdown)
+
+    _asset = gateway.trader.query_stock_asset(_SA(cfg.gateway.account_id))
+    if not _asset:
+        print("  查询账户资产失败，风控无法校验买单，中止")
+        gateway.close()
+        event_engine.stop()
+        return 1
+
+    market_value = sum(p["market_value"] for p in current_pos.values())
+    # market_value 必须显式传入：总仓位上限用它计算，缺省 0 会让
+    # 「总仓位不超过 95%」的检查以为当前空仓，从而放行超额买入
+    risk_mgr.update_account(AccountData(
+        accountid=cfg.gateway.account_id,
+        balance=_asset.total_asset,
+        available=_asset.cash,
+        market_value=market_value,
+        frozen=_asset.frozen_cash,
+    ))
+    # 日亏线的基准是**当日开盘**的总资产，不是脚本启动时的。
+    # RiskManager 新建时会把它设成当前资产，于是 14:00 启动的脚本
+    # 会认为「今天还没亏」，哪怕早盘已经跌了 2.5%
+    risk_mgr._day_start_balance = risk_state.resolve_day_start(
+        prev_state, _asset.total_asset)
+    risk_mgr._check_daily_loss()
+
+    # 持仓必须灌进风控，否则 positions 为空，每一笔卖单都会以
+    # 「可卖数量不足」被拒 —— 回撤时连减仓自救都做不到
+    for vt, info in current_pos.items():
+        code, _, exchange = _split_code(vt)
+        risk_mgr.update_position(PositionData(
+            symbol=code, exchange=exchange,
+            volume=info["volume"],
+            frozen=info["volume"] - info["available"],
+            price=info["avg_price"],
+        ))
+
+    st = risk_mgr.stats()
+    day_pnl = ((_asset.total_asset - risk_mgr._day_start_balance)
+               / risk_mgr._day_start_balance if risk_mgr._day_start_balance else 0)
+    print(f"  账户总资产: {_asset.total_asset:,.0f} 元  "
+          f"可用 {_asset.cash:,.0f} 元  持仓市值 {market_value:,.0f} 元")
+    print(f"  当日盈亏  : {day_pnl:+.2%}"
+          f"（日亏线 -{cfg.risk.daily_loss_limit_ratio:.0%}）")
+    print(f"  回撤      : {st['drawdown']:.2%}  档位 {st['drawdown_level']}"
+          f"  观测 {risk_mgr.drawdown.state.observations} 天")
+    if risk_mgr.close_only:
+        print("  [WARN] 已触发只平不开")
+    if not risk_mgr.drawdown.allow_open():
+        print("  [WARN] 回撤档位禁止开新仓，买单将被全部拦截")
 
     # 4. 获取最新价格
     print("\n获取最新价格...")
@@ -345,15 +373,25 @@ def main():
     print(f"调仓 {mode}")
     print(f"{'='*50}")
 
-    total_sell, total_buy = execute_orders(
+    sent_sell, sent_buy = execute_orders(
         gateway, sell_orders, buy_orders,
         risk_mgr=risk_mgr, dry_run=args.dry_run)
 
-    print(f"\n卖出 {len(sell_orders)} 笔, 买入 {len(buy_orders)} 笔")
+    print(f"\n卖出 {sent_sell}/{len(sell_orders)} 笔, "
+          f"买入 {sent_buy}/{len(buy_orders)} 笔")
     if args.dry_run:
-        print("\n(DRY RUN 完成，未实际下单)")
+        print("(DRY RUN — 未实际下单，但风控校验已按真实执行路径跑过)")
 
-    # 7. 清理
+    # 7. 记下今日起始资产，供当日后续运行判断日亏线。
+    #    dry-run 不写，避免预览污染实盘状态
+    if not args.dry_run:
+        from datetime import date
+        risk_state.save_state(
+            risk_mgr.drawdown,
+            day_start_balance=risk_mgr._day_start_balance,
+            day_start_date=date.today().isoformat())
+
+    # 8. 清理
     time.sleep(2)
     gateway.close()
     event_engine.stop()
