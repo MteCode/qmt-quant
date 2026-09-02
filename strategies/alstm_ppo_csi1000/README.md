@@ -98,10 +98,27 @@ python strategies/alstm_ppo_csi1000/risk_monitor.py --dry-run
 本策略年化波动仅 8.65%，一档 6% 是 0.69 倍波动率，高于 `drawdown.py` 给的
 0.5 倍经验下限，所以档位对它偏宽松。
 
-## 重训注意
+## 模型权重与复现
 
-`train_alstm.py` 会**覆盖** `models/alstm_scores.parquet`。覆盖前先提交，
-否则旧分数找不回来（神经网络随机初始化，重训不会得到相同模型）。
+`models/` 下三个 ALSTM 相关文件：
+
+| 文件 | 内容 |
+|------|------|
+| `alstm_weights.pt` | 网络权重。有它就能不重训直接推理 |
+| `alstm_meta.json` | 权重对应的超参与训练时间，加载时校验结构 |
+| `alstm_scores.parquet` | 推理输出的分数面板，下游 PPO 和实盘选股的输入 |
+
+不重训、直接用已保存权重刷新分数（约 1 分钟，重训要 20 分钟）：
+
+```bash
+python strategies/alstm_ppo_csi1000/train_alstm.py --reuse-weights
+```
+
+改了 `HYPER` 里的网络结构后再加载旧权重会直接报错，不会静默加载出错误结果。
+
+### 重训注意
+
+不加 `--reuse-weights` 就是重新训练，会**覆盖**权重和分数。覆盖前先提交：
 
 ```bash
 git add strategies/alstm_ppo_csi1000/models/ && git commit -m "chore: 保存重训前的模型产物"
@@ -109,6 +126,10 @@ git add strategies/alstm_ppo_csi1000/models/ && git commit -m "chore: 保存重�
 
 重训 ALSTM 后**必须**重跑 `train_ppo.py`，否则手上的回测数字描述的不是正在
 跑的系统。
+
+⚠ 2026-09-01 之前 `train_alstm.py` 根本不保存权重，只保存推理输出的分数。
+那次重训覆盖分数后，产生 +44.37% 回测的那个模型彻底无法复现 —— 权重没存，
+神经网络随机初始化，重训得到的是完全不同的模型。权重保存就是为这个补的。
 
 ## 已知偏差：回测没有整手约束
 

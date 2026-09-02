@@ -28,6 +28,11 @@ SHARED_SCRIPTS = ROOT_DIR / "scripts"
 MODELS_DIR = STRATEGY_DIR / "models"
 #: ALSTM 选股分数面板（LFS 跟踪，重训会覆盖 —— 覆盖前务必先提交）
 ALSTM_SCORES = MODELS_DIR / "alstm_scores.parquet"
+#: ALSTM 网络权重。有了它就能不重训直接推理，分数可复现。
+#: 曾经只存分数不存权重，分数被覆盖后对应的回测永久无法复现
+ALSTM_WEIGHTS = MODELS_DIR / "alstm_weights.pt"
+#: 权重对应的超参与训练时间，加载时用来校验网络结构没被改过
+ALSTM_META = MODELS_DIR / "alstm_meta.json"
 #: PPO 择时模型权重（LFS 跟踪）
 PPO_MODEL = MODELS_DIR / "ppo_model.zip"
 

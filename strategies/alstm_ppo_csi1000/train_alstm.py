@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -78,6 +79,73 @@ def to_score_panel(pred):
     return panel.sort_index()
 
 
+#: 网络结构超参。改这些等于换了模型，旧权重加载会失败（形状对不上），
+#: 所以随权重一起存进 meta，加载时校验
+HYPER = {
+    "d_feat": 6,
+    "hidden_size": 64,
+    "num_layers": 2,
+    "dropout": 0.0,
+}
+
+
+def save_model(model, n_epochs: int) -> None:
+    """保存 ALSTM 权重 + 超参。
+
+    Qlib 的 ALSTM 包装类本身不可 pickle（含 logger、optimizer 等），
+    但内部 `ALSTM_model` 是标准 nn.Module，存 state_dict 即可。
+    """
+    import json
+
+    import torch
+
+    paths.ensure_dirs()
+    torch.save(model.ALSTM_model.state_dict(), paths.ALSTM_WEIGHTS)
+    meta = dict(HYPER)
+    meta.update({
+        "n_epochs": n_epochs,
+        "trained_at": datetime.now().isoformat(timespec="seconds"),
+        "train": list(TRAIN), "valid": list(VALID), "test": list(TEST),
+    })
+    paths.ALSTM_META.write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"权重已保存: {paths.ALSTM_WEIGHTS}")
+
+
+def load_model(gpu: int = -1):
+    """加载已训练的 ALSTM，返回可直接 predict 的模型。
+
+    权重不存在返回 None，调用方自行决定是重训还是报错。
+    """
+    import json
+
+    import torch
+    from qlib.contrib.model.pytorch_alstm import ALSTM
+
+    if not paths.ALSTM_WEIGHTS.exists():
+        return None
+
+    meta = {}
+    if paths.ALSTM_META.exists():
+        meta = json.loads(paths.ALSTM_META.read_text(encoding="utf-8"))
+    for k, v in HYPER.items():
+        if k in meta and meta[k] != v:
+            raise ValueError(
+                f"权重的网络结构与当前代码不符: {k}={meta[k]} vs {v}。"
+                f"改过结构就必须重训，不能加载旧权重")
+
+    model = ALSTM(**HYPER, n_epochs=1, lr=0.001, early_stop=20,
+                  batch_size=2000, loss="mse", GPU=gpu)
+    state = torch.load(paths.ALSTM_WEIGHTS, map_location=model.device)
+    model.ALSTM_model.load_state_dict(state)
+    model.ALSTM_model.to(model.device)
+    # Qlib 的 predict() 会检查这个标志，不置位会拒绝推理
+    model.fitted = True
+    print(f"已加载权重: {paths.ALSTM_WEIGHTS}"
+          + (f"（训练于 {meta['trained_at']}）" if "trained_at" in meta else ""))
+    return model
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Alpha360 + ALSTM")
     p.add_argument("--uri", default=None, help="qlib 数据目录")
@@ -90,6 +158,9 @@ def main() -> int:
     p.add_argument("--no-drawdown", action="store_true")
     p.add_argument("--n-epochs", type=int, default=200)
     p.add_argument("--gpu", type=int, default=0, help="-1 表示用 CPU")
+    p.add_argument("--reuse-weights", action="store_true",
+                    help="加载已保存的权重直接推理，不重新训练。"
+                         "用于复现回测或每日刷新分数（约 1 分钟 vs 重训 20 分钟）")
     args = p.parse_args()
 
     import pandas as pd
@@ -122,23 +193,28 @@ def main() -> int:
     dataset = build_dataset(uri, args.market)
     print(f"  完成，耗时 {time.time() - t0:.0f}s")
 
-    print("\n训练 ALSTM ...")
-    from qlib.contrib.model.pytorch_alstm import ALSTM
-    model = ALSTM(
-        d_feat=6,
-        hidden_size=64,
-        num_layers=2,
-        dropout=0.0,
-        n_epochs=args.n_epochs,
-        lr=0.001,
-        early_stop=20,
-        batch_size=2000,
-        loss="mse",
-        GPU=args.gpu,
-    )
-    t1 = time.time()
-    model.fit(dataset)
-    print(f"  完成，耗时 {(time.time() - t1) / 60:.1f} 分钟")
+    model = None
+    if args.reuse_weights:
+        model = load_model(args.gpu)
+        if model is None:
+            print("\n[WARN] 没有已保存的权重，改为重新训练")
+
+    if model is None:
+        print("\n训练 ALSTM ...")
+        from qlib.contrib.model.pytorch_alstm import ALSTM
+        model = ALSTM(
+            **HYPER,
+            n_epochs=args.n_epochs,
+            lr=0.001,
+            early_stop=20,
+            batch_size=2000,
+            loss="mse",
+            GPU=args.gpu,
+        )
+        t1 = time.time()
+        model.fit(dataset)
+        print(f"  完成，耗时 {(time.time() - t1) / 60:.1f} 分钟")
+        save_model(model, args.n_epochs)
 
     print("\n在测试段预测 ...")
     pred = model.predict(dataset, segment="test")
