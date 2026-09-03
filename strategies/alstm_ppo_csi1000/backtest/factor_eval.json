@@ -1,0 +1,84 @@
+{
+  "generated_at": "2026-09-03T16:47:49",
+  "config": {
+    "market": "csi1000",
+    "fwd_days": 20,
+    "min_coverage": 200,
+    "split": "2024-03-01",
+    "period": [
+      "2022-01-01",
+      "2026-08-27"
+    ]
+  },
+  "factors": [
+    {
+      "name": "dragon_count_20",
+      "usable": true,
+      "ic_mean": -0.06464,
+      "ic_std": 0.08437,
+      "icir": -0.7662,
+      "t": -7.504,
+      "t_raw": -25.273,
+      "significant": true,
+      "ic_positive_ratio": 0.2022,
+      "n_periods": 1088,
+      "mean_coverage": 940.7,
+      "ic_h1": -0.06518,
+      "ic_h2": -0.06415,
+      "sign_flip": false
+    },
+    {
+      "name": "dragon_inst_net",
+      "usable": false,
+      "mean_coverage": 6.2,
+      "reason": "有效截面仅 0 期（日均 6 只有值，需 >= 200）"
+    },
+    {
+      "name": "margin_bal_chg",
+      "usable": true,
+      "ic_mean": -0.02402,
+      "ic_std": 0.06373,
+      "icir": -0.3769,
+      "t": -4.986,
+      "t_raw": -4.077,
+      "significant": true,
+      "ic_positive_ratio": 0.3675,
+      "n_periods": 117,
+      "mean_coverage": 797.1,
+      "ic_h1": -0.02766,
+      "ic_h2": -0.02006,
+      "sign_flip": false
+    },
+    {
+      "name": "margin_buy_ratio",
+      "usable": true,
+      "ic_mean": -0.09103,
+      "ic_std": 0.15443,
+      "icir": -0.5895,
+      "t": -7.221,
+      "t_raw": -6.349,
+      "significant": true,
+      "ic_positive_ratio": 0.3017,
+      "n_periods": 116,
+      "mean_coverage": 618.1,
+      "ic_h1": -0.09094,
+      "ic_h2": -0.09113,
+      "sign_flip": false
+    },
+    {
+      "name": "north_net_pct",
+      "usable": false,
+      "reason": "对齐后仅 1065 期 x 176 只"
+    }
+  ],
+  "corr_with_alstm": {
+    "dragon_count_20": -0.0851,
+    "margin_bal_chg": -0.0955,
+    "margin_buy_ratio": -0.1074
+  },
+  "keep": [
+    "dragon_count_20",
+    "margin_bal_chg",
+    "margin_buy_ratio"
+  ]
+}
