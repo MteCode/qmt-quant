@@ -88,6 +88,7 @@ def selection_page():
     sel = loaders.selection(request.args.get("signal") or None)
     return render_template(
         "selection.html", ex=ex, sel=sel,
+        pos=loaders.positions(),
         industry=loaders.industry_figure(sel) if sel else None,
         picks=loaders.backtest_picks(),
     )

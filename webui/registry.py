@@ -143,6 +143,14 @@ TASKS = [
         outputs=["target_latest.csv"],
     ),
     Task(
+        id="snapshot_positions",
+        name="刷新持仓快照",
+        script=f"{STRATEGY}/snapshot_positions.py",
+        desc="从 miniQMT 拉取账户实际持仓与资金，供「实盘执行」页展示。"
+             "只读不下单。需 miniQMT 已启动登录。",
+        eta="约 10 秒",
+    ),
+    Task(
         id="paper_trade",
         name="执行下单",
         script=f"{STRATEGY}/paper_trade.py",

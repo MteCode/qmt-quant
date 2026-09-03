@@ -363,6 +363,33 @@ def _stock_meta() -> dict:
 EXECUTIONS = ROOT / STRATEGY / "executions"
 
 
+def positions() -> dict | None:
+    """账户实际持仓快照。由 snapshot_positions.py 生成。
+
+    管理台不直接连 miniQMT —— 连接要 QMT 在线、会阻塞请求、
+    失败时整个页面打不开。改为读快照文件。
+    """
+    import pandas as pd
+
+    p = STATE / "positions.json"
+    if not p.exists():
+        return None
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    # 快照过期就明确标出来 —— 拿隔夜的持仓当实时数据看会误判
+    try:
+        age_h = (pd.Timestamp.now()
+                 - pd.Timestamp(d["updated_at"])).total_seconds() / 3600
+    except (KeyError, ValueError):
+        age_h = None
+    d["age_hours"] = age_h
+    d["is_stale"] = age_h is not None and age_h > 12
+    return d
+
+
 def list_exec_dates() -> list:
     """有执行记录的日期，倒序。"""
     if not EXECUTIONS.exists():

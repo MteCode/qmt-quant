@@ -63,3 +63,4 @@ webui/schedules.json
 
 # 实盘执行记录（含真实持仓与委托，不入库）
 strategies/**/executions/
+strategies/**/state/positions.json
