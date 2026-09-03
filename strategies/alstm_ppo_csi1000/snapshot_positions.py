@@ -48,16 +48,28 @@ def load_names() -> dict:
         return {}
 
 
-def load_target() -> dict:
-    """当前信号的目标持仓 vt_symbol -> target_value。"""
+def load_target() -> tuple[dict, dict]:
+    """当前信号的目标持仓，以及它的身份信息。
+
+    必须记下比对的是**哪一份**信号：比对结果写死在快照里，而页面上的信号是
+    现读的。信号重新生成后两者会对不上，不记下来就无从察觉。
+    """
     if not paths.LATEST_SIGNAL.exists():
-        return {}
+        return {}, {}
     try:
         import pandas as pd
         df = pd.read_csv(paths.LATEST_SIGNAL, encoding="utf-8-sig")
-        return dict(zip(df["vt_symbol"].astype(str), df["target_value"]))
+        target = dict(zip(df["vt_symbol"].astype(str), df["target_value"]))
+        st = paths.LATEST_SIGNAL.stat()
+        return target, {
+            "file": paths.LATEST_SIGNAL.name,
+            "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(
+                timespec="seconds"),
+            "count": len(target),
+            "total_value": round(float(sum(target.values())), 2),
+        }
     except Exception:
-        return {}
+        return {}, {}
 
 
 def main() -> int:
@@ -98,7 +110,7 @@ def main() -> int:
 
     pos_list = gateway.trader.query_stock_positions(acct) or []
     names = load_names()
-    target = load_target()
+    target, signal_info = load_target()
 
     holdings = []
     for pos in pos_list:
@@ -152,6 +164,8 @@ def main() -> int:
         # 在目标中但尚未持有 —— 下次调仓应买入
         "to_buy": to_buy,
         "has_target": bool(target),
+        # 比对基准的身份，供页面判断这份差异是否还对得上当前信号
+        "signal": signal_info,
     }
 
     paths.ensure_dirs()

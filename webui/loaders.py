@@ -5,6 +5,7 @@
 管理台要能在任何产物缺失的状态下打开。
 """
 import json
+from datetime import datetime
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -32,6 +33,16 @@ LAYOUT = dict(
     yaxis=dict(gridcolor=C_GRID),
     showlegend=False,
 )
+
+
+def _mtime_str(ts: float) -> str:
+    """文件修改时间 -> 本地时间字符串。
+
+    不用 ``pd.Timestamp(ts, unit="s")`` —— 它把 unix 时间戳当 UTC，
+    与 ``datetime.fromtimestamp`` 的本地时间差一个时区（东八区差 8 小时）。
+    两者混用会让页面上的时间偏移，更糟的是让新鲜度比对静默漏报。
+    """
+    return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
 
 
 def _read_json(name: str):
@@ -229,8 +240,7 @@ def strategy_overview() -> dict:
             st = p.stat()
             info["models"].append({
                 "label": label, "size_kb": st.st_size / 1024,
-                "mtime": pd.Timestamp(st.st_mtime, unit="s").strftime(
-                    "%Y-%m-%d %H:%M"),
+                "mtime": _mtime_str(st.st_mtime),
             })
         else:
             info["models"].append({"label": label, "size_kb": None,
@@ -252,8 +262,7 @@ def strategy_overview() -> dict:
                 "weight": float(df["weight"].sum()) if "weight" in df else None,
                 "value": float(df["target_value"].sum())
                 if "target_value" in df else None,
-                "mtime": pd.Timestamp(sig.stat().st_mtime, unit="s").strftime(
-                    "%Y-%m-%d %H:%M"),
+                "mtime": _mtime_str(sig.stat().st_mtime),
                 "rows": df.head(10).to_dict("records"),
             }
         except (OSError, pd.errors.ParserError, KeyError):
@@ -387,6 +396,37 @@ def positions() -> dict | None:
         age_h = None
     d["age_hours"] = age_h
     d["is_stale"] = age_h is not None and age_h > 12
+
+    # 「与信号差异」是快照那一刻算好写死的，而页面上的信号是现读的。
+    # 信号若在快照之后重新生成过，这份差异已经失效 —— 必须标出来，
+    # 否则页面上下两块数据对不上，用户却看不出问题在哪
+    sig = d.get("signal") or {}
+    d["signal_changed"] = False
+    d["signal_date"] = None
+    latest = SIGNALS / "target_latest.csv"
+    if latest.exists():
+        cur_m = datetime.fromtimestamp(latest.stat().st_mtime)
+        # 快照记的是本地时间字符串，容差 2 秒避免浮点与截断造成误报
+        if sig.get("mtime"):
+            try:
+                d["signal_changed"] = (
+                    cur_m - pd.Timestamp(sig["mtime"])).total_seconds() > 2
+            except ValueError:
+                pass
+        elif d.get("has_target"):
+            # 旧版快照没记基准，无从判断，按已变更处理
+            d["signal_changed"] = True
+        d["signal_date"] = cur_m.strftime("%Y-%m-%d %H:%M")
+
+    # 快照比对的那份信号是哪天的 —— 取 signals/ 里 mtime 最接近的一份
+    if sig.get("mtime"):
+        try:
+            d["signal_label"] = pd.Timestamp(sig["mtime"]).strftime(
+                "%Y-%m-%d %H:%M")
+        except ValueError:
+            d["signal_label"] = sig["mtime"]
+    else:
+        d["signal_label"] = None
     return d
 
 
@@ -529,8 +569,7 @@ def backtest_picks(fname: str = None, limit_dates: int = 40) -> dict | None:
         "n_trades": len(df),
         "total_commission": total_comm,
         "period": f"{min(df['datetime'])} ~ {max(df['datetime'])}",
-        "mtime": pd.Timestamp(path.stat().st_mtime, unit="s").strftime(
-            "%Y-%m-%d %H:%M"),
+        "mtime": _mtime_str(path.stat().st_mtime),
     }
 
 
@@ -644,8 +683,7 @@ def selection(date: str = None) -> dict | None:
         "new_count": sum(1 for r in rows if r["is_new"]),
         "has_prev": bool(prev_set),
         "industries": industries,
-        "mtime": pd.Timestamp(path.stat().st_mtime, unit="s").strftime(
-            "%Y-%m-%d %H:%M"),
+        "mtime": _mtime_str(path.stat().st_mtime),
     }
 
 
