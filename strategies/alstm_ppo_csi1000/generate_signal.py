@@ -104,6 +104,71 @@ def get_alstm_scores(date: str) -> pd.Series:
     return row
 
 
+#: 组合状态的字段顺序，必须与 train_ppo.py 的 `_portfolio_state()` 完全一致。
+#: 错位会让模型把「回撤」读成「仓位」，输出的仓位建议毫无意义
+PORT_STATE_FIELDS = ["总收益", "5日收益", "5日波动", "回撤", "当前仓位"]
+
+
+def build_portfolio_state() -> "np.ndarray":
+    """还原 PPO 训练时见过的组合状态。
+
+    训练环境里这五个量是随轨迹连续演进的；此前推理时一律填 0，
+    等于每天都告诉模型「刚开仓、无持仓、无回撤」—— 这是训练/推理错配，
+    模型给出的永远是「从零起步」那一档答案，与实际持仓状态无关。
+
+    现在从两份运行时状态还原：
+
+    - ``state/positions.json``：账户总资产与仓位比例
+    - ``state/risk_state.json``：峰值与回撤（跨重启持续跟踪）
+
+    取不到就退回全零，但会明确告警 —— 静默填零正是原来的 bug。
+    """
+    import json
+
+    zeros = np.zeros(len(PORT_STATE_FIELDS), dtype=np.float32)
+    pos_file = paths.STATE_DIR / "positions.json"
+    risk_file = paths.RISK_STATE
+
+    if not pos_file.exists():
+        print("  !! 无持仓快照，组合状态填 0 —— PPO 会按「空仓起步」给建议，"
+              "与实际持仓不符。请先运行 snapshot_positions.py")
+        return zeros
+
+    try:
+        pos = json.loads(pos_file.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"  !! 持仓快照读取失败({e})，组合状态填 0")
+        return zeros
+
+    total = float(pos.get("total_asset") or 0)
+    exposure = float(pos.get("position_ratio") or 0)
+    capital = float(paths.load_params().get("capital") or 0)
+
+    # 总收益以配置的本金为基准。本金取不到就没法算，留 0 好过瞎猜
+    total_ret = (total / capital - 1) if (capital and total) else 0.0
+
+    # 回撤优先取风控状态 —— 它跨重启持续跟踪峰值，比单点快照可靠
+    dd = 0.0
+    if risk_file.exists():
+        try:
+            dd = float(json.loads(
+                risk_file.read_text(encoding="utf-8")).get("drawdown") or 0)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 5 日收益与波动需要净值序列，当前没有留存 —— 填 0 并说明，
+    # 不假装算得出来
+    ret_5d = vol_5d = 0.0
+
+    state = np.array([total_ret, ret_5d, vol_5d, dd, exposure],
+                     dtype=np.float32)
+    print("  组合状态: " + "  ".join(
+        f"{k} {v:+.3f}" for k, v in zip(PORT_STATE_FIELDS, state)))
+    if ret_5d == 0.0 and vol_5d == 0.0:
+        print("    （5 日收益/波动暂无净值序列可算，填 0）")
+    return state
+
+
 def get_ppo_exposure(feat_df, date: str) -> float:
     """用 PPO 模型预测当日仓位水平。"""
     model_path = paths.PPO_MODEL
@@ -130,8 +195,7 @@ def get_ppo_exposure(feat_df, date: str) -> float:
     n_features = day_feat.shape[1]
     means = day_feat.mean().values.astype(np.float32)
     stds = day_feat.std().values.astype(np.float32)
-    # 组合状态（初始状态：无持仓）
-    port_state = np.array([0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    port_state = build_portfolio_state()
     state = np.concatenate([means, stds, port_state])
 
     action, _ = model.predict(state, deterministic=True)

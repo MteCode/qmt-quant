@@ -7,6 +7,7 @@
 - 同一任务不允许并发（训练脚本会覆盖同一批产物，并发跑必然互相破坏）
 """
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -18,12 +19,19 @@ from pathlib import Path
 
 from .registry import ROOT, TASK_BY_ID, build_command
 
+logger = logging.getLogger(__name__)
+
 JOBS_DIR = ROOT / "webui" / "jobs"
 INDEX_FILE = JOBS_DIR / "index.json"
 
 _lock = threading.Lock()
 #: job_id -> Popen，仅本进程存活期间有效
 _procs: dict = {}
+
+#: 判定 PID 是否仍是当初那个进程时，允许的创建时间偏差（秒）。
+#: started_at 在 Popen 返回后立刻记录，正常只差毫秒；给 60 秒是为了
+#: 容忍系统繁忙时的调度延迟与时钟精度
+PID_MATCH_WINDOW_S = 60
 
 
 @dataclass
@@ -62,6 +70,23 @@ def _save_index(rows: list) -> None:
                           encoding="utf-8")
 
 
+def _pid_matches(pid: int, started_at: str) -> bool:
+    """该 PID 当前的进程，是否仍是当初启动的那一个。
+
+    PID 会被系统复用。判断存活时误判只是显示错误，但**按 PID 杀进程时
+    误判会杀掉无关程序** —— 因此杀之前必须走同一套校验。
+    """
+    import psutil
+
+    try:
+        p = psutil.Process(pid)
+        delta = abs(p.create_time()
+                    - datetime.fromisoformat(started_at).timestamp())
+        return p.is_running() and delta <= PID_MATCH_WINDOW_S
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError, OSError):
+        return False
+
+
 def _reconcile(rows: list) -> list:
     """服务重启后，把已经不存在的进程从 running 改掉。
 
@@ -75,17 +100,7 @@ def _reconcile(rows: list) -> list:
         if r.get("status") != "running":
             continue
         pid = r.get("pid")
-        alive = False
-        if pid:
-            try:
-                p = psutil.Process(pid)
-                # PID 会被复用，比对启动时间避免误判
-                alive = (p.is_running()
-                         and datetime.fromtimestamp(p.create_time())
-                         >= datetime.fromisoformat(r["started_at"])
-                         - __import__("datetime").timedelta(seconds=5))
-            except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
-                alive = False
+        alive = bool(pid) and _pid_matches(pid, r.get("started_at", ""))
         if not alive and r["id"] not in _procs:
             r["status"] = "unknown"
             r["finished_at"] = r.get("finished_at") or datetime.now().isoformat(
@@ -198,8 +213,14 @@ def stop(job_id: str) -> bool:
         except OSError:
             return False
     else:
+        # 服务重启后 _procs 为空，只能按 PID 杀。但 PID 会被复用，
+        # 不校验就可能杀掉一个与本任务毫无关系的进程
         row = get_job(job_id)
         if not row or not row.get("pid"):
+            return False
+        if not _pid_matches(row["pid"], row.get("started_at", "")):
+            logger.warning("PID %s 已不是任务 %s 的进程，拒绝终止",
+                           row["pid"], job_id)
             return False
         try:
             os.kill(row["pid"], signal.SIGTERM)
