@@ -49,6 +49,40 @@ MIN_COVERAGE = 200
 #: 预测周期（交易日）。与策略 20 日调仓对齐
 FWD_DAYS = 20
 
+#: 有效截面数占总交易日的最低比例。数据稀疏的因子即便算出漂亮的 IC 也不可信 ——
+#: 那些日期不是随机抽样，而是「恰好有数据的日期」
+MIN_PERIOD_RATIO = 0.6
+
+#: 各因子的**可获得滞后**（交易日）。因子面板按 trade_date 索引，
+#: 那是数据「所属」的日期，不是「拿得到」的日期 —— 不滞后就是前视偏差。
+#:
+#: - 龙虎榜：收盘后公布，最早次日开盘可用 -> 1
+#: - 融资融券：交易所次日发布 T 日余额，最早 T+2 开盘可用 -> 2
+#:
+#: 实测滞后对信号的影响（IC / Newey-West t）：
+#:
+#:   因子                 lag=0            lag=1            lag=2
+#:   dragon_count_20   -0.0646(-7.5)   -0.0627(-7.2)   -0.0600(-6.9)
+#:   margin_buy_ratio  -0.0910(-7.2)   -0.0807(-6.3)   -0.0742(-5.6)
+#:   margin_bal_chg    -0.0240(-5.0)   -0.0094(-1.6)   -0.0067(-1.6)
+#:
+#: 前两个稳健；margin_bal_chg 滞后一天即失去显著性，说明它此前的「显著」
+#: 完全建立在使用当天尚不可得的数据上，不可用。
+FACTOR_LAG = {
+    "dragon_count_20": 1,
+    "dragon_inst_net": 1,
+    "margin_buy_ratio": 2,
+    "margin_bal_chg": 2,
+    "north_net_pct": 1,
+}
+DEFAULT_LAG = 1
+
+
+def apply_lag(name: str, panel):
+    """按可获得时点滞后因子面板。"""
+    lag = FACTOR_LAG.get(name, DEFAULT_LAG)
+    return panel.shift(lag) if lag else panel
+
 
 def load_money_factors(store_dir: str) -> dict:
     """加载已建好的资金流因子。"""
@@ -66,9 +100,11 @@ def load_money_factors(store_dir: str) -> dict:
         s = df.iloc[:, 0]
         # 因子面板是 (datetime, instrument)，转成 日期 x 标的 的宽表
         try:
-            out[p.stem] = s.unstack(level=1).sort_index()
+            panel = s.unstack(level=1).sort_index()
         except (ValueError, KeyError):
             continue
+        # 在加载处即施加滞后，下游任何使用都自动无前视
+        out[p.stem] = apply_lag(p.stem, panel)
     return out
 
 
@@ -149,6 +185,22 @@ def evaluate(name: str, panel, fwd, min_cov: int, split_date: str,
                 "mean_coverage": round(mean_cov, 1),
                 "reason": f"有效截面仅 {len(ics)} 期"
                           f"（日均 {mean_cov:.0f} 只有值，需 >= {min_cov}）"}
+
+    # 有效期数占比也是硬门槛。融资融券因子曾只有 115/1108 期有数据（10%），
+    # 却仍算出 IC -0.0742、t -5.61 的漂亮结果 —— 那 115 天不是随机抽样，
+    # 是「恰好下载到的日期」，据此外推到全样本没有依据。
+    # 分母必须是**回测期的全部交易日**，不能用交集。融资融券缺的是整个日期
+    # （2023 年后每年只有 24 天数据），交集本身就只剩 119 天，
+    # 用交集当分母算出 115/119 = 97%，门槛形同虚设
+    total_days = len(fwd.index)
+    ratio = len(ics) / max(total_days, 1)
+    if ratio < MIN_PERIOD_RATIO:
+        return {"name": name, "usable": False,
+                "mean_coverage": round(mean_cov, 1),
+                "n_periods": int(len(ics)),
+                "reason": f"仅 {len(ics)}/{total_days} 个交易日有数据"
+                          f"（{ratio:.0%}，需 >= {MIN_PERIOD_RATIO:.0%}）"
+                          f" —— 数据不全，IC 不可信"}
 
     idx = pd.DatetimeIndex([d for d, _ in ics])
     vals = pd.Series([v for _, v in ics], index=idx)
@@ -238,6 +290,8 @@ def main() -> int:
     print(f"区间      : {TEST[0]} ~ {TEST[1]}（样本外）")
     print(f"预测周期  : {args.fwd_days} 交易日（与调仓周期对齐）")
     print(f"最少覆盖  : {args.min_coverage} 只/日")
+    print(f"可获得滞后: " + "  ".join(
+        f"{k}={v}日" for k, v in FACTOR_LAG.items()))
     print(f"分段切分  : {args.split}")
 
     print("\n加载候选因子...")

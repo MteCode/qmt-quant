@@ -1,0 +1,162 @@
+{
+  "generated_at": "2026-09-03T21:09:45",
+  "config": {
+    "holdings": 50,
+    "rebalance": 20,
+    "capital": 1000000,
+    "split": "2024-03-01",
+    "period": [
+      "2022-01-01",
+      "2026-08-27"
+    ],
+    "money_factors": {
+      "dragon_count_20": -1
+    }
+  },
+  "variants": [
+    {
+      "total_return": 0.5662255231514521,
+      "annual_return": 0.10113594661377112,
+      "max_drawdown": 0.17059790220247584,
+      "sharpe": 0.6497120344641605,
+      "calmar": 0.592832299272572,
+      "win_rate": 0.48715953307392995,
+      "total_trades": 2385,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "label": "仅 ALSTM",
+      "weights": {
+        "alstm": 1.0
+      }
+    },
+    {
+      "total_return": 0.14737984733421894,
+      "annual_return": 0.0299612679720338,
+      "max_drawdown": 0.16344447543337703,
+      "sharpe": 0.14465181745509897,
+      "calmar": 0.1833115979759534,
+      "win_rate": 0.3910806174957118,
+      "total_trades": 1020,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "label": "仅龙虎榜",
+      "weights": {
+        "dragon_count_20": 1.0
+      }
+    },
+    {
+      "total_return": 0.504239031261519,
+      "annual_return": 0.0916291801709983,
+      "max_drawdown": 0.192446025471685,
+      "sharpe": 0.5946654760993808,
+      "calmar": 0.47612924167394616,
+      "win_rate": 0.500400320256205,
+      "total_trades": 2312,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "label": "ALSTM 9 : 龙虎 1",
+      "weights": {
+        "alstm": 0.9,
+        "dragon_count_20": 0.1
+      }
+    },
+    {
+      "total_return": 0.5440677114974539,
+      "annual_return": 0.09777213964864151,
+      "max_drawdown": 0.1693922554984032,
+      "sharpe": 0.6306167744375933,
+      "calmar": 0.5771936819718607,
+      "win_rate": 0.5023847376788553,
+      "total_trades": 2328,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "label": "ALSTM 8 : 龙虎 2",
+      "weights": {
+        "alstm": 0.8,
+        "dragon_count_20": 0.2
+      }
+    },
+    {
+      "total_return": 0.5438553337239427,
+      "annual_return": 0.09773971540665549,
+      "max_drawdown": 0.1693922554984032,
+      "sharpe": 0.6305753259080447,
+      "calmar": 0.577002266833721,
+      "win_rate": 0.5023847376788553,
+      "total_trades": 2328,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "label": "ALSTM 7 : 龙虎 3",
+      "weights": {
+        "alstm": 0.7,
+        "dragon_count_20": 0.3
+      }
+    },
+    {
+      "total_return": 0.5432616312599319,
+      "annual_return": 0.0976490547917368,
+      "max_drawdown": 0.16896068827642208,
+      "sharpe": 0.6301519101661618,
+      "calmar": 0.5779394946117973,
+      "win_rate": 0.5011914217633042,
+      "total_trades": 2330,
+      "drawdown_ok": true,
+      "peak_resets": 4,
+      "label": "ALSTM 5 : 龙虎 5",
+      "weights": {
+        "alstm": 0.5,
+        "dragon_count_20": 0.5
+      }
+    }
+  ],
+  "subperiod": [
+    {
+      "label": "仅 ALSTM",
+      "h1": 0.2684884357420645,
+      "h2": -0.10739452867006986,
+      "flip": true,
+      "h1_dd": 0.1746557771162327,
+      "h2_dd": 0.16532142610093448
+    },
+    {
+      "label": "仅龙虎榜",
+      "h1": -0.0022099344680526854,
+      "h2": -0.1031713889730681,
+      "flip": false,
+      "h1_dd": 0.16344447543337703,
+      "h2_dd": 0.13888492715834955
+    },
+    {
+      "label": "ALSTM 9 : 龙虎 1",
+      "h1": 0.2934179656001845,
+      "h2": -0.11976567722792265,
+      "flip": true,
+      "h1_dd": 0.19355931182531916,
+      "h2_dd": 0.17403091519193814
+    },
+    {
+      "label": "ALSTM 8 : 龙虎 2",
+      "h1": 0.29739894805995215,
+      "h2": -0.12423558955360564,
+      "flip": true,
+      "h1_dd": 0.17807611470590223,
+      "h2_dd": 0.16500187195726435
+    },
+    {
+      "label": "ALSTM 7 : 龙虎 3",
+      "h1": 0.29739894805995215,
+      "h2": -0.12423558955360572,
+      "flip": true,
+      "h1_dd": 0.17807611470590223,
+      "h2_dd": 0.16500187195726435
+    },
+    {
+      "label": "ALSTM 5 : 龙虎 5",
+      "h1": 0.2965042333531562,
+      "h2": -0.09745066470876312,
+      "flip": true,
+      "h1_dd": 0.17880042523609552,
+      "h2_dd": 0.1593270969448204
+    }
+  ]
+}

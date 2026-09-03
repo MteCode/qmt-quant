@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-03T16:47:49",
+  "generated_at": "2026-09-03T21:06:37",
   "config": {
     "market": "csi1000",
     "fwd_days": 20,
@@ -14,56 +14,38 @@
     {
       "name": "dragon_count_20",
       "usable": true,
-      "ic_mean": -0.06464,
-      "ic_std": 0.08437,
-      "icir": -0.7662,
-      "t": -7.504,
-      "t_raw": -25.273,
+      "ic_mean": -0.06273,
+      "ic_std": 0.08466,
+      "icir": -0.7409,
+      "t": -7.219,
+      "t_raw": -24.439,
       "significant": true,
-      "ic_positive_ratio": 0.2022,
+      "ic_positive_ratio": 0.2096,
       "n_periods": 1088,
       "mean_coverage": 940.7,
-      "ic_h1": -0.06518,
-      "ic_h2": -0.06415,
+      "ic_h1": -0.06369,
+      "ic_h2": -0.06184,
       "sign_flip": false
     },
     {
       "name": "dragon_inst_net",
       "usable": false,
-      "mean_coverage": 6.2,
+      "mean_coverage": 6.1,
       "reason": "有效截面仅 0 期（日均 6 只有值，需 >= 200）"
     },
     {
       "name": "margin_bal_chg",
-      "usable": true,
-      "ic_mean": -0.02402,
-      "ic_std": 0.06373,
-      "icir": -0.3769,
-      "t": -4.986,
-      "t_raw": -4.077,
-      "significant": true,
-      "ic_positive_ratio": 0.3675,
+      "usable": false,
+      "mean_coverage": 792.5,
       "n_periods": 117,
-      "mean_coverage": 797.1,
-      "ic_h1": -0.02766,
-      "ic_h2": -0.02006,
-      "sign_flip": false
+      "reason": "仅 117/1108 个交易日有数据（11%，需 >= 60%） —— 数据不全，IC 不可信"
     },
     {
       "name": "margin_buy_ratio",
-      "usable": true,
-      "ic_mean": -0.09103,
-      "ic_std": 0.15443,
-      "icir": -0.5895,
-      "t": -7.221,
-      "t_raw": -6.349,
-      "significant": true,
-      "ic_positive_ratio": 0.3017,
-      "n_periods": 116,
-      "mean_coverage": 618.1,
-      "ic_h1": -0.09094,
-      "ic_h2": -0.09113,
-      "sign_flip": false
+      "usable": false,
+      "mean_coverage": 618.3,
+      "n_periods": 115,
+      "reason": "仅 115/1108 个交易日有数据（10%，需 >= 60%） —— 数据不全，IC 不可信"
     },
     {
       "name": "north_net_pct",
@@ -72,13 +54,9 @@
     }
   ],
   "corr_with_alstm": {
-    "dragon_count_20": -0.0851,
-    "margin_bal_chg": -0.0955,
-    "margin_buy_ratio": -0.1074
+    "dragon_count_20": -0.0784
   },
   "keep": [
-    "dragon_count_20",
-    "margin_bal_chg",
-    "margin_buy_ratio"
+    "dragon_count_20"
   ]
 }
