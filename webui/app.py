@@ -24,7 +24,7 @@ from datetime import datetime
 from flask import Flask, jsonify, render_template, request
 from plotly.offline import get_plotlyjs
 
-from . import jobs, loaders, scheduler
+from . import data_browser, jobs, loaders, scheduler
 from .registry import TASKS, TASK_BY_ID
 
 app = Flask(__name__)
@@ -92,6 +92,53 @@ def selection_page():
         industry=loaders.industry_figure(sel) if sel else None,
         picks=loaders.backtest_picks(),
     )
+
+
+@app.route("/data")
+def data_page():
+    src = request.args.get("source", "qlib")
+    sym = request.args.get("symbol", "")
+    q = request.args.get("q", "")
+
+    result, issues = None, []
+    if sym:
+        result = (data_browser.read_qlib(sym) if src == "qlib"
+                  else data_browser.read_parquet_source(src, sym))
+        if result and "df" in result:
+            issues = data_browser.check_quality(result["df"], src, sym)
+
+    return render_template(
+        "data.html",
+        sources=data_browser.SOURCES,
+        source=src, symbol=sym, query=q,
+        symbols=data_browser.list_symbols(src, query=q),
+        result=result, issues=issues,
+        overview=data_browser.overview(),
+        consistency=(data_browser.qlib_consistency()
+                     if src == "qlib" and not sym else None),
+    )
+
+
+@app.get("/api/data/export")
+def api_data_export():
+    """导出为 CSV，供 Excel 等工具打开。"""
+    src = request.args.get("source", "qlib")
+    sym = request.args.get("symbol", "")
+    if not sym:
+        return jsonify(ok=False, error="缺少 symbol"), 400
+
+    r = (data_browser.read_qlib(sym, tail=10 ** 9) if src == "qlib"
+         else data_browser.read_parquet_source(src, sym, tail=10 ** 9))
+    df = r.get("full") if r.get("full") is not None else r.get("df")
+    if df is None:
+        return jsonify(ok=False, error=r.get("error", "无数据")), 404
+
+    # utf-8-sig 让 Excel 正确识别中文，否则打开是乱码
+    csv = df.to_csv(encoding="utf-8-sig")
+    return app.response_class(
+        csv, mimetype="text/csv",
+        headers={"Content-Disposition":
+                 f'attachment; filename="{src}_{sym}.csv"'})
 
 
 @app.route("/schedule")
