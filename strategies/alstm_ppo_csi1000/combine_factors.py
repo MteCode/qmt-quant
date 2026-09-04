@@ -62,15 +62,46 @@ COMBINED_SCORES = paths.MODELS_DIR / "multifactor_scores.parquet"
 #: （覆盖 10%）被剔除 —— 详见 eval_factors.MIN_PERIOD_RATIO
 MONEY_FACTORS = {
     "dragon_count_20": -1,
+    # 公告因子：方向在看数据前按常识设定，评估结果与之一致
+    "ann_reduce_20": -1,      # 减持利空
+    "ann_risk_20": -1,        # 诉讼/处罚/问询/质押利空
+    "ann_incentive_20": +1,   # 股权激励利好
+    "ann_net_score_20": +1,   # 公告净分（利好数 - 利空数）
 }
 
-#: 缺失值填的中性排名。填 0 等于断言「排名垫底」，会误伤未上榜的标的
+#: 缺失值填的中性排名。仅用于**非计数型**因子 —— 那类缺失确实是「未知」
 NEUTRAL = 0.5
+
+#: 计数型因子：缺失的语义是「该事件从未发生」，即计数为 0，而非未知。
+#:
+#: 这类因子的面板只包含**曾经发生过该事件**的标的，从未发生的根本不在
+#: 面板里。若按 NEUTRAL=0.5 填排名，会把「从未减持」排到「减持过」之后 ——
+#: 方向完全反了。实测 ann_reduce_20 缺失率 24%，而有值者中位排名 0.556，
+#: 填 0.5 使得最干净的那批标的反而垫底。
+#:
+#: 正确做法是在**排名之前**把原始值补 0，让它们参与同一次截面排序。
+COUNT_LIKE = {
+    "dragon_count_20", "ann_reduce_20", "ann_risk_20",
+    "ann_incentive_20", "ann_net_score_20",
+}
 
 
 def to_rank(panel):
     """截面百分位排名，统一量纲到 0~1。"""
     return panel.rank(axis=1, pct=True)
+
+
+def to_rank_aligned(panel, sign: int, index, columns, count_like: bool):
+    """先对齐到完整标的池，再做截面排名。
+
+    对齐必须在排名**之前**：计数型因子的缺失意味着计数为 0，
+    补 0 后与其余标的一起排序才能得到正确的相对位置。
+    先排名再填充等于让它们缺席了那次排序。
+    """
+    p = panel.reindex(index=index, columns=columns)
+    if count_like:
+        p = p.fillna(0.0)
+    return to_rank(p * sign)
 
 
 def load_alstm():
@@ -95,13 +126,15 @@ def combine(alstm, factors: dict, weights: dict):
     """加权合成。各路先转截面排名，缺失填中性值。"""
     import pandas as pd
 
+    # 对齐到 ALSTM 的日期与标的 —— 它覆盖最全，是组合的基准
+    idx, cols = alstm.index, alstm.columns
+
     parts = {"alstm": to_rank(alstm)}
     for name, sign in MONEY_FACTORS.items():
         if name in factors:
-            parts[name] = to_rank(factors[name] * sign)
+            parts[name] = to_rank_aligned(
+                factors[name], sign, idx, cols, name in COUNT_LIKE)
 
-    # 对齐到 ALSTM 的日期与标的 —— 它覆盖最全，是组合的基准
-    idx, cols = alstm.index, alstm.columns
     total = None
     wsum = 0.0
     for name, panel in parts.items():
@@ -109,7 +142,7 @@ def combine(alstm, factors: dict, weights: dict):
         if w <= 0:
             continue
         p = panel.reindex(index=idx, columns=cols)
-        # 中性填充：该股此项无信息，不代表排名垫底
+        # 计数型已在排名前补 0，这里剩下的缺失才是真的未知
         p = p.fillna(NEUTRAL)
         total = p * w if total is None else total + p * w
         wsum += w
@@ -197,13 +230,17 @@ def main() -> int:
     print(f"  {len(bars):,} 根 K 线")
 
     # ---- 待比较的几种配置
+    ann = {"ann_reduce_20": 1.0, "ann_risk_20": 1.0,
+           "ann_incentive_20": 1.0, "ann_net_score_20": 1.0}
     variants = {
         "仅 ALSTM": {"alstm": 1.0},
         "仅龙虎榜": {"dragon_count_20": 1.0},
-        "ALSTM 9 : 龙虎 1": {"alstm": 0.9, "dragon_count_20": 0.1},
-        "ALSTM 8 : 龙虎 2": {"alstm": 0.8, "dragon_count_20": 0.2},
-        "ALSTM 7 : 龙虎 3": {"alstm": 0.7, "dragon_count_20": 0.3},
-        "ALSTM 5 : 龙虎 5": {"alstm": 0.5, "dragon_count_20": 0.5},
+        "仅公告(4因子)": dict(ann),
+        "ALSTM + 龙虎": {"alstm": 0.8, "dragon_count_20": 0.2},
+        "ALSTM + 公告": {"alstm": 0.8, **{k: 0.05 for k in ann}},
+        "ALSTM + 龙虎 + 公告": {"alstm": 0.7, "dragon_count_20": 0.15,
+                                **{k: 0.0375 for k in ann}},
+        "等权全部": {"alstm": 1.0, "dragon_count_20": 1.0, **ann},
     }
 
     print("\n" + "-" * 72)

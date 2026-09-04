@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-03T21:09:45",
+  "generated_at": "2026-09-04T20:21:55",
   "config": {
     "holdings": 50,
     "rebalance": 20,
@@ -10,7 +10,11 @@
       "2026-08-27"
     ],
     "money_factors": {
-      "dragon_count_20": -1
+      "dragon_count_20": -1,
+      "ann_reduce_20": -1,
+      "ann_risk_20": -1,
+      "ann_incentive_20": 1,
+      "ann_net_score_20": 1
     }
   },
   "variants": [
@@ -30,13 +34,13 @@
       }
     },
     {
-      "total_return": 0.14737984733421894,
-      "annual_return": 0.0299612679720338,
+      "total_return": 0.14245465942408853,
+      "annual_return": 0.029010310380959803,
       "max_drawdown": 0.16344447543337703,
-      "sharpe": 0.14465181745509897,
-      "calmar": 0.1833115979759534,
-      "win_rate": 0.3910806174957118,
-      "total_trades": 1020,
+      "sharpe": 0.1359871342360336,
+      "calmar": 0.17749336772649094,
+      "win_rate": 0.3900343642611684,
+      "total_trades": 1018,
       "drawdown_ok": true,
       "peak_resets": 4,
       "label": "仅龙虎榜",
@@ -45,67 +49,96 @@
       }
     },
     {
-      "total_return": 0.504239031261519,
-      "annual_return": 0.0916291801709983,
-      "max_drawdown": 0.192446025471685,
-      "sharpe": 0.5946654760993808,
-      "calmar": 0.47612924167394616,
-      "win_rate": 0.500400320256205,
-      "total_trades": 2312,
+      "total_return": 0.04482607733932786,
+      "annual_return": 0.009460446789049115,
+      "max_drawdown": 0.15747316150381752,
+      "sharpe": -0.06056100756135813,
+      "calmar": 0.060076566055478425,
+      "win_rate": 0.41306436119116235,
+      "total_trades": 1994,
       "drawdown_ok": true,
       "peak_resets": 4,
-      "label": "ALSTM 9 : 龙虎 1",
+      "label": "仅公告(4因子)",
       "weights": {
-        "alstm": 0.9,
-        "dragon_count_20": 0.1
+        "ann_reduce_20": 1.0,
+        "ann_risk_20": 1.0,
+        "ann_incentive_20": 1.0,
+        "ann_net_score_20": 1.0
       }
     },
     {
-      "total_return": 0.5440677114974539,
-      "annual_return": 0.09777213964864151,
-      "max_drawdown": 0.1693922554984032,
-      "sharpe": 0.6306167744375933,
-      "calmar": 0.5771936819718607,
+      "total_return": 0.5431560436670135,
+      "annual_return": 0.09763292829788983,
+      "max_drawdown": 0.16937794398651762,
+      "sharpe": 0.6294854306637568,
+      "calmar": 0.5764205539397819,
       "win_rate": 0.5023847376788553,
       "total_trades": 2328,
       "drawdown_ok": true,
       "peak_resets": 4,
-      "label": "ALSTM 8 : 龙虎 2",
+      "label": "ALSTM + 龙虎",
       "weights": {
         "alstm": 0.8,
         "dragon_count_20": 0.2
       }
     },
     {
-      "total_return": 0.5438553337239427,
-      "annual_return": 0.09773971540665549,
-      "max_drawdown": 0.1693922554984032,
-      "sharpe": 0.6305753259080447,
-      "calmar": 0.577002266833721,
-      "win_rate": 0.5023847376788553,
-      "total_trades": 2328,
-      "drawdown_ok": true,
+      "total_return": 0.016228279176245364,
+      "annual_return": 0.0034626964775752445,
+      "max_drawdown": 0.26158522761930525,
+      "sharpe": -0.10559873060215356,
+      "calmar": 0.013237354834939824,
+      "win_rate": 0.4201605709188225,
+      "total_trades": 2144,
+      "drawdown_ok": false,
       "peak_resets": 4,
-      "label": "ALSTM 7 : 龙虎 3",
+      "label": "ALSTM + 公告",
       "weights": {
-        "alstm": 0.7,
-        "dragon_count_20": 0.3
+        "alstm": 0.8,
+        "ann_reduce_20": 0.05,
+        "ann_risk_20": 0.05,
+        "ann_incentive_20": 0.05,
+        "ann_net_score_20": 0.05
       }
     },
     {
-      "total_return": 0.5432616312599319,
-      "annual_return": 0.0976490547917368,
-      "max_drawdown": 0.16896068827642208,
-      "sharpe": 0.6301519101661618,
-      "calmar": 0.5779394946117973,
-      "win_rate": 0.5011914217633042,
-      "total_trades": 2330,
+      "total_return": 0.08655453805538427,
+      "annual_return": 0.0179848678016723,
+      "max_drawdown": 0.18793290431378873,
+      "sharpe": 0.028553321354927875,
+      "calmar": 0.095698344402975,
+      "win_rate": 0.4331275720164609,
+      "total_trades": 1812,
+      "drawdown_ok": true,
+      "peak_resets": 5,
+      "label": "ALSTM + 龙虎 + 公告",
+      "weights": {
+        "alstm": 0.7,
+        "dragon_count_20": 0.15,
+        "ann_reduce_20": 0.0375,
+        "ann_risk_20": 0.0375,
+        "ann_incentive_20": 0.0375,
+        "ann_net_score_20": 0.0375
+      }
+    },
+    {
+      "total_return": -0.04333474390684844,
+      "annual_return": -0.009467778958822781,
+      "max_drawdown": 0.17894060728098382,
+      "sharpe": -0.24954681670620943,
+      "calmar": -0.05291017563138074,
+      "win_rate": 0.3808710503842869,
+      "total_trades": 2161,
       "drawdown_ok": true,
       "peak_resets": 4,
-      "label": "ALSTM 5 : 龙虎 5",
+      "label": "等权全部",
       "weights": {
-        "alstm": 0.5,
-        "dragon_count_20": 0.5
+        "alstm": 1.0,
+        "dragon_count_20": 1.0,
+        "ann_reduce_20": 1.0,
+        "ann_risk_20": 1.0,
+        "ann_incentive_20": 1.0,
+        "ann_net_score_20": 1.0
       }
     }
   ],
@@ -127,36 +160,44 @@
       "h2_dd": 0.13888492715834955
     },
     {
-      "label": "ALSTM 9 : 龙虎 1",
-      "h1": 0.2934179656001845,
-      "h2": -0.11976567722792265,
+      "label": "仅公告(4因子)",
+      "h1": 0.03969331665504676,
+      "h2": -0.21843008900879624,
       "flip": true,
-      "h1_dd": 0.19355931182531916,
-      "h2_dd": 0.17403091519193814
+      "h1_dd": 0.15628585117244664,
+      "h2_dd": 0.11823997388249474
     },
     {
-      "label": "ALSTM 8 : 龙虎 2",
-      "h1": 0.29739894805995215,
-      "h2": -0.12423558955360564,
+      "label": "ALSTM + 龙虎",
+      "h1": 0.2959745327044502,
+      "h2": -0.12486485001572348,
       "flip": true,
-      "h1_dd": 0.17807611470590223,
+      "h1_dd": 0.17885213441447123,
       "h2_dd": 0.16500187195726435
     },
     {
-      "label": "ALSTM 7 : 龙虎 3",
-      "h1": 0.29739894805995215,
-      "h2": -0.12423558955360572,
-      "flip": true,
-      "h1_dd": 0.17807611470590223,
-      "h2_dd": 0.16500187195726435
+      "label": "ALSTM + 公告",
+      "h1": -0.2135908648648797,
+      "h2": -0.16907805542692234,
+      "flip": false,
+      "h1_dd": 0.20355413090976004,
+      "h2_dd": 0.16227821254342123
     },
     {
-      "label": "ALSTM 5 : 龙虎 5",
-      "h1": 0.2965042333531562,
-      "h2": -0.09745066470876312,
-      "flip": true,
-      "h1_dd": 0.17880042523609552,
-      "h2_dd": 0.1593270969448204
+      "label": "ALSTM + 龙虎 + 公告",
+      "h1": -0.018526201779977193,
+      "h2": -0.101270311708641,
+      "flip": false,
+      "h1_dd": 0.19955147711094456,
+      "h2_dd": 0.16742789862123442
+    },
+    {
+      "label": "等权全部",
+      "h1": -0.3030152282449395,
+      "h2": -0.6978085429376389,
+      "flip": false,
+      "h1_dd": 0.1851114226170435,
+      "h2_dd": 0.22777525441007973
     }
   ]
 }
