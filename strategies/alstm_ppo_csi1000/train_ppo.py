@@ -303,6 +303,8 @@ def main():
     p.add_argument("--capital", type=float, default=500_000)
     p.add_argument("--timesteps", type=int, default=200_000)
     p.add_argument("--report", default=str(paths.BACKTEST_DIR))
+    p.add_argument("--scores", default=None,
+                    help="选股分数面板路径，默认用本策略的 ALSTM 分数")
     args = p.parse_args()
 
     from qmtquant.config import LOG_DIR, get_config
@@ -387,7 +389,8 @@ def main():
     print("测试段回测（样本外）—— ALSTM 选股 + PPO 择时")
     print("-" * 62)
 
-    scores_path = paths.ALSTM_SCORES
+    # 分数来源可切换 —— 第 1 层换成 LightGBM 后需要指向它的产出
+    scores_path = Path(args.scores) if args.scores else paths.ALSTM_SCORES
     alstm_scores = None
     if scores_path.exists():
         alstm_scores = pd.read_parquet(scores_path)
