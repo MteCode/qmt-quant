@@ -135,6 +135,13 @@ def main() -> int:
                 return 1
             print("盘前模式下继续尝试导出已有数据。")
 
+    # 清洗必须紧跟下载。跳过这一步，脏数据会一路进到训练集 ——
+    # 曾有 25000 多行非正价格因此进了模型
+    if not run("清洗数据", [str(PYTHON), "scripts/clean_data.py"],
+               timeout=1800):
+        print("\n清洗失败。导出会回退到原始层就地清洗，结果仍是干净的，"
+              "但每次导出都要重清。")
+
     export_cmd = [str(PYTHON), "scripts/export_qlib.py",
                   "--start", args.start]
     export_cmd += ["--all"] if args.all else ["--index", args.index]

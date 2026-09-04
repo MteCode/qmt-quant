@@ -97,15 +97,41 @@ def read_bin(path: Path, calendar: pd.DatetimeIndex) -> pd.Series:
 class QlibExporter:
     """把 ``data/1d/`` 的日线导出成 Qlib 数据目录"""
 
-    def __init__(self, store_dir: str, out_dir: str) -> None:
+    def __init__(self, store_dir: str, out_dir: str,
+                 clean: bool = True) -> None:
+        """:param clean: 是否在导出时清洗。默认开启 ——
+            关掉意味着让脏数据直接进训练集，只应在排查问题时临时使用
+        """
         self.store_dir = Path(store_dir)
         self.out = Path(out_dir)
         self.calendar: pd.DatetimeIndex | None = None
+        self.clean = clean
+        #: 清洗统计，导出结束后由调用方打印
+        self.clean_stats: dict = {}
 
     # ------------------------------------------------------------ 读取
 
     def _load_one(self, vt_symbol: str) -> pd.DataFrame | None:
+        """读取单个标的的日线。
+
+        **优先读清洗层** ``data/clean/1d/``。那是唯一真相源，由
+        ``scripts/clean_data.py`` 统一产出，所有下游共用同一份。
+
+        清洗层缺该标的时回退到原始层并就地清洗 —— 保证任何情况下
+        导出的都不是脏数据。训练链路曾因为没有这道保障，
+        吃进了 25000 多行非正价格。回退次数会计入统计并在导出末尾提示。
+        """
         code, _, ex = vt_symbol.rpartition(".")
+
+        clean_path = self.store_dir / "clean" / "1d" / ex / f"{code}.parquet"
+        if self.clean and clean_path.exists():
+            df = pd.read_parquet(clean_path)
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index, errors="coerce")
+            self.clean_stats["来自清洗层"] = (
+                self.clean_stats.get("来自清洗层", 0) + 1)
+            return df[~df.index.isna()].sort_index()
+
         path = self.store_dir / "1d" / ex / f"{code}.parquet"
         if not path.exists():
             return None
@@ -113,7 +139,24 @@ class QlibExporter:
         idx = pd.to_datetime(df.index.astype(str), format="%Y%m%d",
                              errors="coerce")
         df = df.set_axis(idx).sort_index()
-        return df[~df.index.isna()]
+        df = df[~df.index.isna()]
+
+        if not self.clean:
+            return df
+
+        # 清洗层没有 -> 就地清洗，并记下回退次数
+        from .cleaner import clean_bars
+
+        self.clean_stats["回退原始层"] = (
+            self.clean_stats.get("回退原始层", 0) + 1)
+        res = clean_bars(df, vt_symbol)
+        for a in res.actions:
+            self.clean_stats[a.rule] = (
+                self.clean_stats.get(a.rule, 0) + a.n_rows)
+        for f in res.flags:
+            key = f"[标记] {f.rule}"
+            self.clean_stats[key] = self.clean_stats.get(key, 0) + f.n_rows
+        return res.df
 
     # ------------------------------------------------------------ 导出
 

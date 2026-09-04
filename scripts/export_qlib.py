@@ -66,6 +66,8 @@ def main() -> int:
     p.add_argument("--end", default=None)
     p.add_argument("--out", default=None,
                    help="输出目录，默认 data/qlib_data")
+    p.add_argument("--no-clean", action="store_true",
+                   help="跳过清洗直接导出。脏数据会进训练集，仅排查问题时用")
     args = p.parse_args()
 
     cfg = get_config()
@@ -91,7 +93,7 @@ def main() -> int:
         symbols = sorted(w["symbol"].unique())
         print(f"{args.index} 历史成分并集：{len(symbols)} 只")
 
-    exporter = QlibExporter(store, out)
+    exporter = QlibExporter(store, out, clean=not args.no_clean)
 
     t0 = time.time()
     print("构建全局交易日历（所有标的交易日的并集）...")
@@ -102,6 +104,26 @@ def main() -> int:
     spans = exporter.export_features(symbols, progress=progress)
     print(f"  {len(spans)} 只标的有数据"
           f"（{len(symbols) - len(spans)} 只本地无行情，已跳过）")
+
+    # 清洗结果必须打出来。清了什么无人知晓，等于把「看得见的脏数据」
+    # 变成「看不见的改动」
+    if exporter.clean_stats:
+        st = dict(exporter.clean_stats)
+        from_clean = st.pop("来自清洗层", 0)
+        fallback = st.pop("回退原始层", 0)
+        print("\n数据来源:")
+        print(f"  清洗层  {from_clean:>6d} 只")
+        if fallback:
+            print(f"  原始层  {fallback:>6d} 只  <- 清洗层缺失，已就地清洗")
+            print(f"    建议运行 python scripts/clean_data.py 补齐清洗层，"
+                  f"否则每次导出都要重清")
+        if st:
+            print("  就地清洗明细:")
+            for rule, n in sorted(st.items(), key=lambda x: -x[1]):
+                tag = "" if rule.startswith("[标记]") else "[已修改] "
+                print(f"    {tag}{rule}: {n:,} 行")
+    elif exporter.clean:
+        print("\n数据清洗: 未发现需处理的问题")
 
     exporter.write_calendar()
     exporter.write_instruments(spans, "all")
