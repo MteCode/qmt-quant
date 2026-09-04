@@ -150,6 +150,127 @@ def clean_bars_layer(store: Path, rebuild: bool, limit: int = 0,
             "per_symbol": per_symbol, "elapsed": time.time() - t0}
 
 
+def clean_financial_layer(store: Path, rebuild: bool, limit: int = 0) -> dict:
+    """财报清洗。目录结构是 financial/<报表>/<交易所>/<代码>.parquet。"""
+    import pandas as pd
+
+    from qmtquant.datafeed.cleaner import clean_financial
+
+    src_root = store / "financial"
+    dst_root = clean_dir(store) / "financial"
+    if not src_root.exists():
+        return {"error": "源目录不存在: financial"}
+
+    files = sorted(src_root.rglob("*.parquet"))
+    if limit:
+        files = files[:limit]
+    state = {} if rebuild else load_state(store).get("financial", {})
+    new_state = dict(state)
+
+    stats = {"symbols": 0, "skipped": 0, "rows_in": 0, "rows_out": 0}
+    rules, flags, per_symbol = {}, {}, []
+    t0 = time.time()
+
+    for i, p in enumerate(files, 1):
+        table = p.parent.parent.name
+        vt = f"{p.stem}.{p.parent.name}"
+        key = f"{table}/{vt}"
+        mtime = p.stat().st_mtime
+        if not rebuild and abs(state.get(key, {}).get("mtime", -1) - mtime) < 1e-6:
+            stats["skipped"] += 1
+            continue
+
+        try:
+            df = pd.read_parquet(p)
+        except (OSError, ValueError):
+            continue
+        n_in = len(df)
+        res = clean_financial(df, vt, table)
+
+        dst = dst_root / table / p.parent.name
+        dst.mkdir(parents=True, exist_ok=True)
+        res.df.to_parquet(dst / f"{p.stem}.parquet")
+
+        stats["symbols"] += 1
+        stats["rows_in"] += n_in
+        stats["rows_out"] += len(res.df)
+        for a in res.actions:
+            rules[a.rule] = rules.get(a.rule, 0) + a.n_rows
+        for f in res.flags:
+            flags[f.rule] = flags.get(f.rule, 0) + f.n_rows
+        if res.actions:
+            per_symbol.append({
+                "vt_symbol": key, "rows_in": n_in, "rows_out": len(res.df),
+                "actions": [{"rule": a.rule, "n": a.n_rows} for a in res.actions],
+                "flags": [],
+            })
+        new_state[key] = {"mtime": mtime, "rows": len(res.df),
+                          "cleaned_at": datetime.now().isoformat(timespec="seconds")}
+        if i % 600 == 0:
+            print(f"  {i}/{len(files)}  已清洗 {stats['symbols']}，"
+                  f"跳过 {stats['skipped']}  ({time.time() - t0:.0f}s)")
+
+    full = load_state(store)
+    full["financial"] = new_state
+    save_state(store, full)
+    return {**stats, "rules": rules, "flags": flags,
+            "per_symbol": per_symbol, "elapsed": time.time() - t0}
+
+
+def clean_flow_layer(store: Path, rebuild: bool) -> dict:
+    """资金流清洗。文件少但单个很大（龙虎榜 218 万行）。"""
+    import pandas as pd
+
+    from qmtquant.datafeed.cleaner import clean_flow
+
+    src_root = store / "money_flow"
+    dst_root = clean_dir(store) / "money_flow"
+    if not src_root.exists():
+        return {"error": "源目录不存在: money_flow"}
+
+    files = sorted(src_root.glob("*.parquet"))
+    state = {} if rebuild else load_state(store).get("money_flow", {})
+    new_state = dict(state)
+    stats = {"symbols": 0, "skipped": 0, "rows_in": 0, "rows_out": 0}
+    rules, flags, per_symbol = {}, {}, []
+    t0 = time.time()
+
+    for p in files:
+        mtime = p.stat().st_mtime
+        if not rebuild and abs(state.get(p.stem, {}).get("mtime", -1) - mtime) < 1e-6:
+            stats["skipped"] += 1
+            continue
+        try:
+            df = pd.read_parquet(p)
+        except (OSError, ValueError):
+            continue
+        n_in = len(df)
+        res = clean_flow(df, p.stem)
+        dst_root.mkdir(parents=True, exist_ok=True)
+        res.df.to_parquet(dst_root / p.name)
+
+        stats["symbols"] += 1
+        stats["rows_in"] += n_in
+        stats["rows_out"] += len(res.df)
+        for a in res.actions:
+            rules[a.rule] = rules.get(a.rule, 0) + a.n_rows
+        if res.actions:
+            per_symbol.append({
+                "vt_symbol": p.stem, "rows_in": n_in, "rows_out": len(res.df),
+                "actions": [{"rule": a.rule, "n": a.n_rows} for a in res.actions],
+                "flags": [],
+            })
+        new_state[p.stem] = {"mtime": mtime, "rows": len(res.df),
+                             "cleaned_at": datetime.now().isoformat(timespec="seconds")}
+        print(f"  {p.stem:<24s} {n_in:>9,} -> {len(res.df):>9,} 行")
+
+    full = load_state(store)
+    full["money_flow"] = new_state
+    save_state(store, full)
+    return {**stats, "rules": rules, "flags": flags,
+            "per_symbol": per_symbol, "elapsed": time.time() - t0}
+
+
 def write_report(store: Path, result: dict, interval: str) -> Path:
     d = clean_dir(store)
     d.mkdir(parents=True, exist_ok=True)
@@ -211,7 +332,11 @@ def main() -> int:
     p = argparse.ArgumentParser(description="数据清洗层")
     p.add_argument("--rebuild", action="store_true", help="全量重清")
     p.add_argument("--limit", type=int, default=0, help="只处理前 N 只，用于验证")
-    p.add_argument("--intervals", nargs="*", default=["1d"])
+    p.add_argument("--intervals", nargs="*", default=["1d", "1w"],
+                    help="要清洗的 K 线周期")
+    p.add_argument("--types", nargs="*",
+                    default=["bars", "financial", "flow"],
+                    help="要清洗的数据类型")
     p.add_argument("--report", action="store_true", help="只显示上次报告")
     args = p.parse_args()
 
@@ -228,29 +353,41 @@ def main() -> int:
     print(f"  模式   : {'全量重清' if args.rebuild else '增量'}")
     print("=" * 62)
 
-    for interval in args.intervals:
-        print(f"\n[{interval}]")
-        r = clean_bars_layer(store, args.rebuild, args.limit, interval)
+    def report(r: dict, tag: str) -> None:
         if "error" in r:
             print(f"  {r['error']}")
-            continue
-        print(f"  清洗 {r['symbols']:,} 只，跳过未变更 {r['skipped']:,} 只")
+            return
+        print(f"  清洗 {r['symbols']:,} 个，跳过未变更 {r['skipped']:,} 个")
         print(f"  行数 {r['rows_in']:,} -> {r['rows_out']:,}"
               f"（剔除 {r['rows_in'] - r['rows_out']:,}）")
         if r["rules"]:
             print("  已修改:")
             for k, v in sorted(r["rules"].items(), key=lambda x: -x[1]):
-                print(f"    {k:<28s} {v:>10,} 行")
+                print(f"    {k:<30s} {v:>10,} 行")
         if r["flags"]:
-            print("  仅标记:")
+            print("  仅标记（未修改，交由下游判断）:")
             for k, v in sorted(r["flags"].items(), key=lambda x: -x[1]):
-                print(f"    {k:<28s} {v:>10,} 行")
-        rp = write_report(store, r, interval)
+                print(f"    {k:<30s} {v:>10,}")
+        write_report(store, r, tag)
         print(f"  耗时 {r['elapsed'] / 60:.1f} 分钟")
-        print(f"  报告: {rp}")
 
-    print("\n下游现在应读取清洗层：")
-    print(f"  {clean_dir(store) / '1d'}")
+    if "bars" in args.types:
+        for interval in args.intervals:
+            print(f"\n[{interval} K 线]")
+            report(clean_bars_layer(store, args.rebuild, args.limit, interval),
+                   interval)
+
+    if "financial" in args.types:
+        print("\n[财务报表]")
+        report(clean_financial_layer(store, args.rebuild, args.limit),
+               "financial")
+
+    if "flow" in args.types:
+        print("\n[资金流]")
+        report(clean_flow_layer(store, args.rebuild), "money_flow")
+
+    print(f"\n清洗层: {clean_dir(store)}")
+    print(f"报告  : {clean_dir(store) / REPORT_FILE}")
     return 0
 
 
