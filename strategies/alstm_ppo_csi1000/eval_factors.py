@@ -74,6 +74,11 @@ FACTOR_LAG = {
     "margin_buy_ratio": 2,
     "margin_bal_chg": 2,
     "north_net_pct": 1,
+    # 公告类因子在 build_announcement_factors.py 里已按披露日滞后 1 日，
+    # 这里不再重复滞后 —— 重复会白白损失一天信息
+    "ann_reduce_20": 0, "ann_risk_20": 0, "ann_buyback_20": 0,
+    "ann_dilution_20": 0, "ann_unlock_20": 0, "ann_attention_20": 0,
+    "ann_incentive_20": 0, "ann_guarantee_20": 0, "ann_net_score_20": 0,
 }
 DEFAULT_LAG = 1
 
