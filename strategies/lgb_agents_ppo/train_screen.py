@@ -105,6 +105,20 @@ def attach_extra_factors(dataset, store_dir: str):
     return parts
 
 
+def _cs_normalize(y):
+    """标签截面标准化 —— 每个交易日内减均值除标准差。
+
+    目的有二：一是让量纲与正则参数匹配（见 train_one 的说明），
+    二是消除市场整体涨跌。模型该学的是「同一天里哪些股票更强」，
+    而不是「哪天大盘涨」—— 后者是择时问题，由第 3 层的 PPO 负责。
+    """
+    col = y.columns[0]
+    s = y[col]
+    z = s.groupby(level="datetime").transform(
+        lambda v: (v - v.mean()) / (v.std() + 1e-12))
+    return z.to_frame(col)
+
+
 def train_one(parts, seed: int, enable_sr: bool, enable_fs: bool,
               num_models: int, n_jobs: int) -> tuple:
     """训练一个 DoubleEnsemble，返回 (模型, 测试段预测)。"""
@@ -115,6 +129,22 @@ def train_one(parts, seed: int, enable_sr: bool, enable_fs: bool,
     x_tr, y_tr = parts["train"]
     x_va, y_va = parts["valid"]
     x_te, _ = parts["test"]
+
+    # 全空的特征列要剔除。Alpha158 的 VWAP0 依赖 $vwap 字段，
+    # 而本项目导出的 qlib 数据只有 OHLCV+amount+factor，该列 100% 为空
+    dead = [c for c in x_tr.columns if x_tr[c].isna().all()]
+    if dead:
+        x_tr = x_tr.drop(columns=dead)
+        x_va = x_va.drop(columns=dead)
+        x_te = x_te.drop(columns=dead)
+
+    # 标签必须做截面标准化。下面的 lambda_l1/l2 是 Qlib 官方 Alpha158
+    # 基准配置，配的是标准差约 1 的归一化标签；直接喂原始收益率
+    # （标准差仅 0.03）会让正则项完全压垮信号 —— 实测 IC +0.00205、
+    # t +0.54、特征重要性 gain 上限只有 6，模型 33 轮即早停等于没学到东西。
+    # 标准化后同一套参数得到 IC +0.02820、t +7.43、gain 上限 2897。
+    y_tr = _cs_normalize(y_tr)
+    y_va = _cs_normalize(y_va)
 
     model = DEnsembleModel(
         base_model="gbm",
@@ -133,7 +163,7 @@ def train_one(parts, seed: int, enable_sr: bool, enable_fs: bool,
         # LightGBM 超参：深度与叶子数压得较紧，这本身也是抗过拟合手段
         num_leaves=48, max_depth=6, learning_rate=0.05,
         subsample=0.85, colsample_bytree=0.85,
-        lambda_l1=80, lambda_l2=200,
+        lambda_l1=205, lambda_l2=580,
         num_threads=n_jobs, verbosity=-1,
     )
 
@@ -163,9 +193,16 @@ def train_one(parts, seed: int, enable_sr: bool, enable_fs: bool,
 
 
 class _PredDS:
+    """预测用的最小 dataset 适配器。
+
+    注意与训练侧的差别：``fit`` 取的是 ``col_set="__all"``，要 feature/label
+    两级列；而 ``predict`` 用 ``col_set="feature"``，拿到的应是**单层列**
+    并直接按特征名索引（``x_test.loc[:, feat_sub]``）。
+    包成两级会让子模型的特征名匹配不上，抛 KeyError。
+    """
+
     def __init__(self, x):
-        import pandas as pd
-        self._x = pd.concat({"feature": x}, axis=1)
+        self._x = x
 
     def prepare(self, segments, col_set="__all", data_key=None):
         return self._x
