@@ -124,6 +124,26 @@ class TestBacktestRules:
         engine.run()
         assert len(engine.trades) == 0
 
+    def test_missing_bar_not_filled(self):
+        """停牌在真实数据里表现为 **Bar 缺失**，而非 suspended 标志。
+
+        实测 QMT 的 suspendFlag 在 760 万行日线里恒为 0，
+        停牌日直接不返回 Bar —— 200 只在市股票中 178 只有日期缺口，
+        合计 19634 个停牌日。因此这条路径才是实际生效的那条，
+        必须单独固化，不能只测 suspended 标志。
+        """
+        # 只有一根 Bar：策略在这根上下买单，但没有下一根可供撮合。
+        # 委托按次日开盘成交，缺失下一根 Bar 即等同停牌
+        bars = make_bars([10])
+
+        engine = BacktestEngine(initial_capital=100_000)
+        engine.load_data(bars)
+        engine.add_strategy(BuyOnceStrategy, ["000001.SZSE"])
+        engine.run()
+        assert len(engine.trades) == 0
+        # 委托应仍挂在未成交队列里，而不是被静默丢弃
+        assert len(engine.pending_orders) == 1
+
     def test_commission_deducted(self):
         bars = make_bars([10, 10, 10])
         engine = BacktestEngine(initial_capital=100_000, cost=CostConfig())

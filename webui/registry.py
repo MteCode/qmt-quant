@@ -151,6 +151,16 @@ TASKS = [
         eta="约 10 秒",
     ),
     Task(
+        id="reconcile",
+        name="成交回报对账",
+        script=f"{STRATEGY}/reconcile.py",
+        desc="核对下单意图与实际成交：成交率、滑点、废单。只读不下单。"
+             "不对账等于蒙眼交易 —— 持续负滑点会悄悄吃掉收益。",
+        eta="约 10 秒",
+        params=[Param("date", "对账日期", "str", "",
+                      help="留空为今天")],
+    ),
+    Task(
         id="paper_trade",
         name="执行下单",
         script=f"{STRATEGY}/paper_trade.py",
