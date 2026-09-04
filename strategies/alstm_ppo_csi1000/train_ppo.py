@@ -305,6 +305,12 @@ def main():
     p.add_argument("--report", default=str(paths.BACKTEST_DIR))
     p.add_argument("--scores", default=None,
                     help="选股分数面板路径，默认用本策略的 ALSTM 分数")
+    p.add_argument("--seed", type=int, default=42,
+                    help="随机种子。PPO 方差极大 —— 仅换分数源，学出的平均"
+                         "仓位就从 30%% 跳到 70%%、回撤从 13.96%% 恶化到 "
+                         "33.29%%。必须多种子才能判断单次结果的可信度")
+    p.add_argument("--tag", default="",
+                    help="产物文件后缀，避免多种子实验互相覆盖")
     args = p.parse_args()
 
     from qmtquant.config import LOG_DIR, get_config
@@ -376,7 +382,7 @@ def main():
         clip_range=0.2,
         ent_coef=0.01,
         verbose=0,
-        seed=42,
+        seed=args.seed,
         device="cpu",
     )
     model.learn(total_timesteps=args.timesteps, callback=LogCallback())
@@ -465,7 +471,9 @@ def main():
 
     # 权重存到 models/，与回测结果分开 —— models/ 走 LFS 版本化
     paths.ensure_dirs()
-    model.save(str(paths.PPO_MODEL.with_suffix("")))
+    out_model = (paths.PPO_MODEL.with_name(
+        f"ppo_model{args.tag}.zip") if args.tag else paths.PPO_MODEL)
+    model.save(str(out_model.with_suffix("")))
     print(f"\n模型已保存: {paths.PPO_MODEL}")
     print(f"回测明细: {out.resolve()}")
     print(f"\n总耗时 {(time.time() - t0) / 60:.1f} 分钟")

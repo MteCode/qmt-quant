@@ -27,6 +27,38 @@ logger = logging.getLogger(__name__)
 class BacktestEngine:
     """历史回测引擎"""
 
+    def _adj_factor(self, vt_symbol: str) -> float | None:
+        """该标的的复权因子（后复权价 / 真实价）。
+
+        本地存的是后复权价，比真实价高出很多（茅台约 5.4 倍）。
+        整手约束作用在真实股数上，用后复权价直接取整会把高价股
+        静默剔出标的池 —— 实测 100 万/10 只时沪深300 有 36 只取整后为 0 股。
+
+        因子来自 `data/1d_raw/`（不复权价，由 download_adj_factor.py 下载）。
+        取不到返回 None，调用方退回按后复权价取整的旧行为并计数，
+        以便评估影响面 —— 静默降级比报错更危险。
+        """
+        if vt_symbol in self._factor_cache:
+            return self._factor_cache[vt_symbol]
+
+        factor = None
+        if self._raw_dir is not None:
+            code, _, ex = vt_symbol.rpartition(".")
+            p = self._raw_dir / ex / f"{code}.parquet"
+            if p.exists():
+                try:
+                    import pandas as pd
+                    raw = pd.read_parquet(p, columns=["close"])
+                    if not raw.empty:
+                        r = float(raw["close"].iloc[-1])
+                        a = self._last_adj_close.get(vt_symbol)
+                        if r > 0 and a and a > 0:
+                            factor = a / r
+                except (OSError, ValueError, KeyError):
+                    factor = None
+        self._factor_cache[vt_symbol] = factor
+        return factor
+
     def __init__(self, initial_capital: float = 1_000_000,
                  cost: CostConfig | None = None,
                  price_limit_ratio: float | None = None,
@@ -80,6 +112,18 @@ class BacktestEngine:
         self.undersized_orders: dict[str, int] = {}
         #: 被回撤控制拦下的买单数
         self.drawdown_blocked: int = 0
+
+        #: 不复权价目录，用于推导复权因子按真实股数取整。
+        #: 不存在则退回按后复权价取整，并在报告中提示
+        from ..config import get_config
+        try:
+            _raw = Path(get_config().data.store_dir) / "1d_raw"
+            self._raw_dir = _raw if _raw.exists() else None
+        except Exception:
+            self._raw_dir = None
+        self._factor_cache: dict[str, float | None] = {}
+        #: 各标的最后一根 Bar 的后复权收盘价，算因子用
+        self._last_adj_close: dict[str, float] = {}
         #: 回撤控制强制发出的减仓委托笔数
         self.risk_exit_orders: int = 0
         #: 上一次执行过强制减仓的档位，防止同一档位反复卖出
@@ -95,6 +139,9 @@ class BacktestEngine:
         grouped: dict[datetime, dict[str, BarData]] = defaultdict(dict)
         for bar in bars:
             grouped[bar.datetime][bar.vt_symbol] = bar
+            # 记末根收盘价，与不复权价相除得到复权因子（见 _adj_factor）
+            if bar.close_price > 0:
+                self._last_adj_close[bar.vt_symbol] = bar.close_price
         self.history = dict(sorted(grouped.items()))
         logger.info("已装载 %d 个时间截面，标的数 %d",
                     len(self.history), len({b.vt_symbol for b in bars}))
@@ -363,13 +410,28 @@ class BacktestEngine:
             self.drawdown_blocked += 1
             return ""
 
-        # 买入向下取整到一手
+        # 买入向下取整到一手。
+        #
+        # 取整必须按**真实价**而非后复权价：后复权价被抬高（茅台约 5.4 倍），
+        # 一手的名义成本同比例放大，会把高价股静默剔出标的池 ——
+        # 实测 100 万/10 只时沪深300 有 36 只取整后为 0 股，
+        # 而它们往往正是大盘蓝筹。
+        #
+        # 有复权因子时按真实价算股数，再换算回后复权口径的金额；
+        # 没有则退回旧行为并计数，便于评估影响面。
         if direction == Direction.LONG:
-            volume = int(volume // self.lot_size) * self.lot_size
+            factor = self._adj_factor(vt_symbol)
+            if factor and factor > 0:
+                # 后复权价 = 真实价 x 复权因子，故同样的钱能买到的
+                # **真实股数** 是后复权口径的 factor 倍。整手约束作用在
+                # 真实股数上，取整后再换算回后复权口径
+                real_shares = int(volume * factor // self.lot_size) * self.lot_size
+                volume = real_shares / factor
+            else:
+                volume = int(volume // self.lot_size) * self.lot_size
             if volume <= 0:
-                # 不足一手买不了。这在后复权数据上很常见 ——
-                # 价格被抬高后一手的成本可达实际的数倍，高价股会被静默排除。
-                # 计数以便在报告中告警，而不是无声地少一个候选标的。
+                # 不足一手买不了。计数以便在报告中告警，
+                # 而不是无声地少一个候选标的。
                 self.undersized_orders[vt_symbol] = (
                     self.undersized_orders.get(vt_symbol, 0) + 1)
                 return ""

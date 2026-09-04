@@ -124,6 +124,32 @@ class TestBacktestRules:
         engine.run()
         assert len(engine.trades) == 0
 
+    def test_lot_rounding_uses_real_price(self, monkeypatch):
+        """整手取整必须按真实股数，而非被抬高的后复权价。
+
+        后复权价比真实价高（茅台约 5.4 倍），一手的名义成本同比例放大。
+        直接按后复权价取整会把高价股静默剔出标的池 ——
+        实测 100 万/10 只时沪深300 有 36 只取整后为 0 股，
+        而它们往往正是大盘蓝筹。
+        """
+        engine = BacktestEngine(initial_capital=100_000)
+        # 后复权价 540、真实价 100 -> 因子 5.4
+        monkeypatch.setattr(engine, "_adj_factor", lambda vt: 5.4)
+
+        # 预算够买 50 个后复权单位；真实股数 = 50 x 5.4 = 270 -> 取整 200
+        vt_orderid = engine.send_order(
+            "s", "600519.SSE", Direction.LONG, 540, 50)
+        assert vt_orderid, "按真实价可买 200 股，不应被判为不足一手"
+        # 记录的是后复权口径的数量：200 / 5.4
+        assert engine.pending_orders[0].volume == pytest.approx(200 / 5.4)
+
+        # 无复权因子时退回旧行为：50 直接取整到 0，下不出去
+        engine2 = BacktestEngine(initial_capital=100_000)
+        monkeypatch.setattr(engine2, "_adj_factor", lambda vt: None)
+        assert engine2.send_order(
+            "s", "600519.SSE", Direction.LONG, 540, 50) == ""
+        assert engine2.undersized_orders.get("600519.SSE") == 1
+
     def test_missing_bar_not_filled(self):
         """停牌在真实数据里表现为 **Bar 缺失**，而非 suspended 标志。
 
