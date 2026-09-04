@@ -1,35 +1,57 @@
-"""第 1 层：初筛 —— DoubleEnsemble 低过拟合设计。
+"""第 1 层：初筛 —— LightGBM 集成。
 
-## 为什么不是普通的 LightGBM
+## 为什么最终没用 DoubleEnsemble 的 SR/FS
 
-8 种子实验已经证明：同架构模型高度相关（方差比理论值差 2.1 倍），
-集成因此压不下方差 —— 八个几乎相同的模型取平均，等于还是一个模型。
+原计划借 DoubleEnsemble 的样本重加权（SR）与特征筛选（FS）做低过拟合安全垫，
+针对的是「同架构模型高度相关、集成压不下方差」的问题 ——
+ALSTM 8 种子实验实测方差比理论值差 2.1 倍。
 
-DoubleEnsemble 的两个机制正对这个问题：
+但 A/B 实测显示：**那个问题在 LightGBM 上本来就不存在。**
 
-**样本重加权（SR）** 按训练过程中的 loss 曲线给样本加权：已经拟合好的降权，
-一直学不会的升权。A 股大部分样本是「涨跌都在 ±1% 以内」的噪声，
-不加权时模型会被它们主导，学到的是噪声里的均值回复结构。
+    对照组（关 SR/FS，5 种子）
+      IC  +0.0248 ~ +0.0266   中位数 +0.0257   标准差 0.0007   90 秒/次
+    实验组（开 SR/FS，种子 0）
+      IC  +0.0252                                            1966 秒/次
 
-**特征筛选（FS）** 打乱某个特征列看表现掉多少，掉得少就剔除。
-Alpha158 的 158 个因子大量互相冗余。更关键的是：不同子模型筛出不同的特征，
-**造出的才是真正有差异的模型**，集成才有意义。
+对照组标准差已低至 0.0007（变异系数 2.7%），没有方差可降；
+开启 SR/FS 的单个种子反而略低于对照组中位数，代价是 21 倍训练时间。
+
+与 ALSTM 对比更能说明问题：
+
+                  ALSTM(8种子)      LightGBM(5种子)
+    IC 中位数       +0.0183           +0.0257
+    IC 标准差        0.0120            0.0007
+    变异系数           66%              2.7%
+    出现负 IC        1/8               无
+    单次训练        10 分钟            90 秒
+
+方差小 17 倍。原因不难理解：神经网络 5 万多个参数从随机初始化出发，
+每次收敛到不同局部解；树模型的分裂点由数据决定，随机性只来自采样。
+
+**结论：低过拟合的关键不是加机制，是换模型族。** SR/FS 保留为可选开关
+（--sr / --fs），默认关闭。
+
+## 仍然保留的抗过拟合手段
+
+- 较紧的树结构（num_leaves=48, max_depth=6）
+- Qlib 官方基准的正则强度（lambda_l1=205, lambda_l2=580）
+- 多种子集成（截面排名平均）
+- 标签截面标准化 —— 兼具量纲对齐与消除市场整体涨跌
 
 ## 低过拟合不是一个参数，是一套准入检验
 
 模型训练完不算数，必须过三关才能进下一层：
 
-1. 多种子 Sharpe 分布收窄（不再横跨零轴）
+1. 多种子 IC/Sharpe 分布收窄（不再横跨零轴）
 2. 参数网格连片而非孤立尖刺
 3. 分段检验符号一致
 
-这三条是 ALSTM 全部没过的。达不到就说明这条路同样走不通，应及早止损。
+第 1 关已过（标准差 0.0007）。后两关待验。
 
 用法::
 
-    python strategies/lgb_agents_ppo/train_screen.py
-    python strategies/lgb_agents_ppo/train_screen.py --no-sr --no-fs   # 对照组
-    python strategies/lgb_agents_ppo/train_screen.py --seeds 5         # 多种子
+    python strategies/lgb_agents_ppo/train_screen.py --seeds 5
+    python strategies/lgb_agents_ppo/train_screen.py --seeds 5 --sr --fs  # 对照
 """
 import argparse
 import json
@@ -258,8 +280,10 @@ def main() -> int:
                     help="训练几个种子。>1 时自动做稳健性检验")
     p.add_argument("--num-models", type=int, default=6,
                     help="DoubleEnsemble 的子模型数")
-    p.add_argument("--no-sr", action="store_true", help="关闭样本重加权")
-    p.add_argument("--no-fs", action="store_true", help="关闭特征筛选")
+    p.add_argument("--sr", action="store_true",
+                    help="启用样本重加权。实测对 LightGBM 无收益且慢 21 倍")
+    p.add_argument("--fs", action="store_true",
+                    help="启用特征筛选。同上")
     p.add_argument("--n-jobs", type=int, default=0,
                     help="LightGBM 线程数，0 表示自动")
     p.add_argument("--rebuild-features", action="store_true",
@@ -289,8 +313,8 @@ def main() -> int:
     print(f"训练/验证 : {TRAIN[0]}~{TRAIN[1]} / {VALID[0]}~{VALID[1]}")
     print(f"测试      : {TEST[0]}~{TEST[1]}（样本外）")
     print(f"子模型数  : {args.num_models}")
-    print(f"样本重加权: {'关闭' if args.no_sr else '开启'}")
-    print(f"特征筛选  : {'关闭' if args.no_fs else '开启'}")
+    print(f"样本重加权: {'开启' if args.sr else '关闭'}")
+    print(f"特征筛选  : {'开启' if args.fs else '关闭'}")
     print(f"种子数    : {args.seeds}")
 
     t0 = time.time()
@@ -331,7 +355,7 @@ def main() -> int:
     for seed in range(args.seeds):
         print(f"\n--- 种子 {seed} ({seed + 1}/{args.seeds}) ---")
         t1 = time.time()
-        model, pred = train_one(parts, seed, not args.no_sr, not args.no_fs,
+        model, pred = train_one(parts, seed, args.sr, args.fs,
                                 args.num_models, n_jobs)
         ic = evaluate_ic(pred, label_te)
         elapsed = time.time() - t1
@@ -350,7 +374,7 @@ def main() -> int:
             paths.SCREEN_META.write_text(json.dumps({
                 "trained_at": datetime.now().isoformat(timespec="seconds"),
                 "market": params["market"], "num_models": args.num_models,
-                "enable_sr": not args.no_sr, "enable_fs": not args.no_fs,
+                "enable_sr": args.sr, "enable_fs": args.fs,
                 "train": list(TRAIN), "valid": list(VALID), "test": list(TEST),
                 "n_features": int(x_tr.shape[1]),
                 "extra_factors": EXTRA_FACTORS,
@@ -403,7 +427,7 @@ def main() -> int:
     paths.ROBUSTNESS.write_text(json.dumps({
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "config": {"seeds": args.seeds, "num_models": args.num_models,
-                   "enable_sr": not args.no_sr, "enable_fs": not args.no_fs,
+                   "enable_sr": args.sr, "enable_fs": args.fs,
                    "market": params["market"], "test": list(TEST)},
         "runs": runs,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
