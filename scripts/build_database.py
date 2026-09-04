@@ -112,6 +112,28 @@ CREATE TABLE IF NOT EXISTS data_issue (
 );
 CREATE INDEX IF NOT EXISTS ix_issue_sym ON data_issue(vt_symbol);
 
+-- 清洗动作汇总，从 data/clean/clean_report.json 导入。
+-- 这是「数据到底洗掉了什么」的可查询记录 —— 只看日志无法交叉核对
+CREATE TABLE IF NOT EXISTS clean_action (
+    dataset     TEXT NOT NULL,     -- 1d / financial / money_flow ...
+    rule        TEXT NOT NULL,
+    modified    INTEGER,           -- 1=已修改数据  0=仅标记
+    n_rows      INTEGER,
+    cleaned_at  TEXT,
+    PRIMARY KEY (dataset, rule, modified)
+);
+
+-- 逐标的的清洗明细，便于定位「哪只股票被洗掉最多」
+CREATE TABLE IF NOT EXISTS clean_detail (
+    dataset     TEXT NOT NULL,
+    vt_symbol   TEXT NOT NULL,
+    rows_in     INTEGER,
+    rows_out    INTEGER,
+    rule        TEXT,
+    n_rows      INTEGER,
+    PRIMARY KEY (dataset, vt_symbol, rule)
+);
+
 -- 增量重建用：记录每个标的的源文件 mtime
 CREATE TABLE IF NOT EXISTS build_state (
     source      TEXT NOT NULL,
@@ -390,12 +412,183 @@ def build_money_factors(conn, store: Path) -> dict:
     return {"rows": total}
 
 
+def build_clean_report(conn, store: Path) -> dict:
+    """把清洗报告导入数据库，让「洗掉了什么」变成可查询的。
+
+    只看日志无法交叉核对 —— 比如「某只股票被洗掉 2569 行」这条，
+    要能和 daily_bar 里该标的的实际行数对上，才谈得上验证清洗是否正确。
+    """
+    import json as _json
+
+    p = store / "clean" / "clean_report.json"
+    if not p.exists():
+        return {"error": "无清洗报告，请先运行 scripts/clean_data.py"}
+    try:
+        rep = _json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {"error": f"报告读取失败: {e}"}
+
+    conn.execute("DELETE FROM clean_action")
+    conn.execute("DELETE FROM clean_detail")
+    n_act = n_det = 0
+    for dataset, r in rep.items():
+        ts = r.get("cleaned_at", "")
+        for rule, n in (r.get("rules") or {}).items():
+            conn.execute(
+                "INSERT OR REPLACE INTO clean_action"
+                "(dataset,rule,modified,n_rows,cleaned_at) VALUES (?,?,?,?,?)",
+                (dataset, rule, 1, int(n), ts))
+            n_act += 1
+        for rule, n in (r.get("flags") or {}).items():
+            conn.execute(
+                "INSERT OR REPLACE INTO clean_action"
+                "(dataset,rule,modified,n_rows,cleaned_at) VALUES (?,?,?,?,?)",
+                (dataset, rule, 0, int(n), ts))
+            n_act += 1
+        for s in r.get("worst") or []:
+            for a in s.get("actions") or []:
+                conn.execute(
+                    "INSERT OR REPLACE INTO clean_detail"
+                    "(dataset,vt_symbol,rows_in,rows_out,rule,n_rows)"
+                    " VALUES (?,?,?,?,?,?)",
+                    (dataset, s["vt_symbol"], s.get("rows_in"),
+                     s.get("rows_out"), a["rule"], a["n"]))
+                n_det += 1
+    conn.commit()
+    return {"actions": n_act, "details": n_det, "datasets": list(rep)}
+
+
+def build_financial(conn, store: Path, limit: int = 0) -> dict:
+    """财报入库。各报表列数不同（Income 有 86 列），用 to_sql 自动建表。"""
+    import pandas as pd
+
+    root = store / "clean" / "financial"
+    if not root.exists():
+        return {"error": "清洗层无财报，请先运行 clean_data.py"}
+
+    by_table = {}
+    for p in sorted(root.rglob("*.parquet")):
+        by_table.setdefault(p.parent.parent.name, []).append(p)
+
+    total = 0
+    for table, files in by_table.items():
+        if limit:
+            files = files[:limit]
+        tname = f"fin_{table.lower()}"
+        conn.execute(f"DROP TABLE IF EXISTS {tname}")
+        n = 0
+        buf = []
+        for p in files:
+            try:
+                df = pd.read_parquet(p)
+            except (OSError, ValueError):
+                continue
+            if df.empty:
+                continue
+            df = df.copy()
+            df.insert(0, "vt_symbol", f"{p.stem}.{p.parent.name}")
+            buf.append(df)
+            if len(buf) >= 300:
+                out = pd.concat(buf, ignore_index=True)
+                out.to_sql(tname, conn, if_exists="append", index=False)
+                n += len(out)
+                buf = []
+        if buf:
+            out = pd.concat(buf, ignore_index=True)
+            out.to_sql(tname, conn, if_exists="append", index=False)
+            n += len(out)
+        if n:
+            conn.execute(
+                f"CREATE INDEX IF NOT EXISTS ix_{tname}_sym "
+                f"ON {tname}(vt_symbol)")
+        conn.commit()
+        total += n
+        print(f"  {tname:<20s} {n:>9,} 行")
+    return {"rows": total, "tables": list(by_table)}
+
+
+def build_money_flow(conn, store: Path) -> dict:
+    """资金流原始数据入库（龙虎榜、两融明细）。"""
+    import pandas as pd
+
+    root = store / "clean" / "money_flow"
+    if not root.exists():
+        return {"error": "清洗层无资金流"}
+
+    total = 0
+    for p in sorted(root.glob("*.parquet")):
+        tname = f"flow_{p.stem.lower()}"
+        try:
+            df = pd.read_parquet(p)
+        except (OSError, ValueError):
+            continue
+        conn.execute(f"DROP TABLE IF EXISTS {tname}")
+        # 单表最大 218 万行，分块写避免内存峰值
+        step = 200_000
+        for i in range(0, len(df), step):
+            df.iloc[i:i + step].to_sql(tname, conn, if_exists="append",
+                                       index=False)
+        if "trade_date" in df.columns:
+            conn.execute(f"CREATE INDEX IF NOT EXISTS ix_{tname}_date "
+                         f"ON {tname}(trade_date)")
+        conn.commit()
+        total += len(df)
+        print(f"  {tname:<24s} {len(df):>9,} 行")
+    return {"rows": total}
+
+
+def verify(conn, store: Path) -> None:
+    """清洗效果核对 —— 用 SQL 直接验证脏数据是否真的没了。"""
+    print("\n" + "=" * 60)
+    print("清洗效果核对")
+    print("=" * 60)
+
+    checks = [
+        ("日线非正价格", """
+            SELECT COUNT(*) FROM daily_bar
+            WHERE open<=0 OR high<=0 OR low<=0 OR close<=0"""),
+        ("日线最高<最低", """
+            SELECT COUNT(*) FROM daily_bar WHERE high < low"""),
+        ("日线成交量为负", """
+            SELECT COUNT(*) FROM daily_bar WHERE volume < 0"""),
+        ("日线重复(标的+日期)", """
+            SELECT COUNT(*)-COUNT(DISTINCT vt_symbol||date) FROM daily_bar"""),
+    ]
+    for name, sql in checks:
+        try:
+            n = conn.execute(sql).fetchone()[0]
+        except Exception as e:
+            print(f"  {name:<24s} 查询失败: {e}")
+            continue
+        mark = "通过" if n == 0 else f"**残留 {n:,} 行**"
+        print(f"  {name:<24s} {mark}")
+
+    # 财报时间逻辑
+    try:
+        n = conn.execute(
+            "SELECT COUNT(*) FROM fin_income "
+            "WHERE m_anntime < m_timetag").fetchone()[0]
+        print(f"  {'财报公告日早于报告期':<24s} "
+              f"{'通过' if n == 0 else f'**残留 {n:,} 行**'}")
+    except Exception:
+        pass
+
+    print("\n清洗动作汇总（可用 SQL 交叉核对）:")
+    rows = conn.execute(
+        "SELECT dataset, rule, modified, n_rows FROM clean_action "
+        "ORDER BY modified DESC, n_rows DESC LIMIT 12").fetchall()
+    for ds, rule, mod, n in rows:
+        tag = "已修改" if mod else "仅标记"
+        print(f"  [{tag}] {ds:<12s} {rule:<26s} {n:>10,}")
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="构建市场数据库")
     p.add_argument("--db", default=str(DB_PATH))
     p.add_argument("--rebuild", action="store_true", help="全量重建")
     p.add_argument("--tables", nargs="*",
-                    default=["bars", "instrument", "weight", "factor"],
+                    default=["bars", "instrument", "weight", "factor",
+                             "financial", "flow", "clean"],
                     help="要构建的表")
     p.add_argument("--limit", type=int, default=0,
                     help="只处理前 N 个标的，用于快速验证")
@@ -430,6 +623,24 @@ def main() -> int:
     if "factor" in args.tables:
         print("\n[资金流因子]")
         build_money_factors(conn, store)
+    if "clean" in args.tables:
+        print("\n[清洗记录]")
+        r = build_clean_report(conn, store)
+        if "error" in r:
+            print(f"  {r['error']}")
+        else:
+            print(f"  动作 {r['actions']} 条，明细 {r['details']} 条，"
+                  f"覆盖 {', '.join(r['datasets'])}")
+    if "financial" in args.tables:
+        print("\n[财务报表]")
+        r = build_financial(conn, store, args.limit)
+        if "error" in r:
+            print(f"  {r['error']}")
+    if "flow" in args.tables:
+        print("\n[资金流原始数据]")
+        r = build_money_flow(conn, store)
+        if "error" in r:
+            print(f"  {r['error']}")
     if "bars" in args.tables:
         print("\n[日线]（清洗后写入）")
         r = build_bars(conn, store, args.rebuild, args.limit)
@@ -440,10 +651,14 @@ def main() -> int:
     print("\n" + "=" * 60)
     print("数据库概况")
     print("=" * 60)
-    for t in ("daily_bar", "instrument", "index_weight",
-              "money_factor", "data_issue"):
+    names = [r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "ORDER BY name").fetchall()]
+    for t in names:
         n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-        print(f"  {t:<16s} {n:>12,} 行")
+        print(f"  {t:<22s} {n:>12,} 行")
+
+    verify(conn, store)
 
     print("\n清洗动作统计:")
     for rule, n, mod in conn.execute(
