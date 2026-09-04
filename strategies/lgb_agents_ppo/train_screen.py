@@ -124,6 +124,10 @@ def train_one(parts, seed: int, enable_sr: bool, enable_fs: bool,
         # sample_ratios 控制每轮特征筛选后保留的比例，长度须等于 bins_fs
         sample_ratios=[0.8, 0.7, 0.6, 0.5, 0.4],
         sub_weights=[1.0] * num_models,
+        # decay 必须显式给，Qlib 默认 None 会在 decay**k_th 处崩。
+        # 它控制重加权强度随子模型序号衰减：越靠后的子模型权重越平，
+        # 避免所有子模型都盯着同一批难样本 —— 那样又会退化成高度相关的集成
+        decay=0.5,
         epochs=28,
         seed=seed,
         # LightGBM 超参：深度与叶子数压得较紧，这本身也是抗过拟合手段
@@ -221,6 +225,8 @@ def main() -> int:
     p.add_argument("--no-fs", action="store_true", help="关闭特征筛选")
     p.add_argument("--n-jobs", type=int, default=0,
                     help="LightGBM 线程数，0 表示自动")
+    p.add_argument("--rebuild-features", action="store_true",
+                    help="强制重建特征缓存（改了因子定义后必须加）")
     args = p.parse_args()
 
     import numpy as np
@@ -251,15 +257,38 @@ def main() -> int:
     print(f"种子数    : {args.seeds}")
 
     t0 = time.time()
-    print("\n构建 Alpha158 特征...")
-    dataset = build_dataset(params["market"])
-    parts = attach_extra_factors(dataset, cfg.data.store_dir)
+    # 特征构建约 16 分钟且与种子无关，缓存后重跑只要几秒。
+    # 缓存键含市场与额外因子 —— 改了因子必须重建，否则会用到旧特征
+    cache = paths.MODELS_DIR / f"features_{params['market']}.pkl"
+    key = {"market": params["market"], "extra": EXTRA_FACTORS,
+           "segments": [list(TRAIN), list(VALID), list(TEST)]}
+    parts = label_te = None
+    if cache.exists() and not args.rebuild_features:
+        import pickle
+        try:
+            with open(cache, "rb") as f:
+                blob = pickle.load(f)
+            if blob.get("key") == key:
+                parts, label_te = blob["parts"], blob["label_te"]
+                print(f"\n复用特征缓存: {cache.name}")
+        except (OSError, pickle.PickleError, KeyError):
+            parts = None
+
+    if parts is None:
+        print("\n构建 Alpha158 特征...")
+        dataset = build_dataset(params["market"])
+        parts = attach_extra_factors(dataset, cfg.data.store_dir)
+        label_te = dataset.prepare("test", col_set="label", data_key="raw")
+        paths.ensure_dirs()
+        import pickle
+        with open(cache, "wb") as f:
+            pickle.dump({"key": key, "parts": parts, "label_te": label_te}, f)
+        print(f"  已缓存: {cache}")
+
     x_tr = parts["train"][0]
     print(f"  train {x_tr.shape}  valid {parts['valid'][0].shape}"
           f"  test {parts['test'][0].shape}")
     print(f"  完成，耗时 {time.time() - t0:.0f}s")
-
-    label_te = dataset.prepare("test", col_set="label", data_key="raw")
 
     runs, panels = [], []
     for seed in range(args.seeds):
