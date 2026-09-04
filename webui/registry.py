@@ -151,6 +151,15 @@ TASKS = [
         eta="约 10 秒",
     ),
     Task(
+        id="track_equity",
+        name="记录实盘净值",
+        script=f"{STRATEGY}/track_equity.py",
+        desc="每日记一笔总资产与回撤，并与回测对照。只读不下单。"
+             "漏记的日子补不回来 —— 券商查不到历史净值序列。",
+        eta="约 10 秒",
+        params=[Param("date", "记录日期", "str", "", help="留空为今天")],
+    ),
+    Task(
         id="reconcile",
         name="成交回报对账",
         script=f"{STRATEGY}/reconcile.py",
