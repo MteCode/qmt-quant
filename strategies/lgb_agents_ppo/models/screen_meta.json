@@ -1,0 +1,32 @@
+{
+  "trained_at": "2026-09-04T15:45:36",
+  "market": "csi1000",
+  "num_models": 6,
+  "enable_sr": false,
+  "enable_fs": false,
+  "train": [
+    "2016-01-01",
+    "2019-12-31"
+  ],
+  "valid": [
+    "2020-01-01",
+    "2021-12-31"
+  ],
+  "test": [
+    "2022-01-01",
+    "2026-08-27"
+  ],
+  "n_features": 159,
+  "extra_factors": {
+    "dragon_count_20": 1
+  },
+  "ic": {
+    "ic_mean": 0.0266,
+    "ic_std": 0.13045,
+    "icir": 0.2039,
+    "t": 6.745,
+    "t_raw": 6.788,
+    "ic_positive": 0.5785,
+    "n_periods": 1108
+  }
+}
