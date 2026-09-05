@@ -84,3 +84,6 @@ data/market.db*
 strategies/**/state/live_equity.csv
 data/announcement/
 data/universe/st_history.parquet
+
+# 搬家对账清单：本机某一时刻的快照，随目录一起拷走即可，不入库
+migration_manifest.json
