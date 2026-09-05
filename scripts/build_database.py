@@ -573,6 +573,25 @@ def verify(conn, store: Path) -> None:
     except Exception:
         pass
 
+    # 日期对齐检查。分批下载时新老标的的最后交易日会不一致 ——
+    # 实测全市场扩容后 2039 只到 09-04、2489 只停在 08-31、625 只更早。
+    # 截面策略在这种数据上会静默漏掉大半标的池，必须查出来
+    try:
+        mx = conn.execute("SELECT MAX(date) FROM daily_bar").fetchone()[0]
+        rows = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT vt_symbol, MAX(date) d "
+            "FROM daily_bar GROUP BY vt_symbol) WHERE d < ?", (mx,)).fetchall()
+        stale = rows[0][0] if rows else 0
+        total = conn.execute(
+            "SELECT COUNT(DISTINCT vt_symbol) FROM daily_bar").fetchone()[0]
+        print(f"\n数据新鲜度: 最新 {mx}，"
+              f"{total - stale}/{total} 只已跟上")
+        if stale:
+            print(f"  !! {stale} 只落后于最新交易日")
+            print(f"     退市股属正常；在市股票落后说明需补下载")
+    except Exception:
+        pass
+
     print("\n清洗动作汇总（可用 SQL 交叉核对）:")
     rows = conn.execute(
         "SELECT dataset, rule, modified, n_rows FROM clean_action "

@@ -148,23 +148,26 @@ def main() -> int:
 
     feed = XtDataFeed(cfg.data.store_dir, cfg.data.dividend_type)
     t0 = time.time()
-    ok = fail = 0
-    for i, vt in enumerate(todo, 1):
-        try:
-            r = feed.download([vt], args.start, args.end)
-            if r.get("ok"):
-                ok += 1
-            else:
-                fail += 1
-        except Exception:
-            fail += 1
-        if i % 100 == 0:
-            el = time.time() - t0
-            print(f"  {i}/{len(todo)}  成功 {ok} 失败 {fail}  "
-                  f"剩约 {el / i * (len(todo) - i) / 60:.0f} 分钟")
 
-    print(f"\n完成：成功 {ok}，失败 {fail}，"
+    def on_progress(done: int, total: int, cur: str) -> None:
+        if done % 100 and done != total:
+            return
+        el = time.time() - t0
+        eta = el / max(done, 1) * (total - done) / 60
+        print(f"  {done}/{total}  {cur:<14s} 剩约 {eta:.0f} 分钟")
+
+    # download_history 自带批量、断点续传与进度回调。
+    # 逐个调用 download()（那是 IndexFeed 的方法）会全部失败
+    r = feed.download_history(todo, args.start, args.end,
+                              skip_existing=not args.rebuild,
+                              progress=on_progress)
+    ok, fail = len(r.get("ok", [])), len(r.get("failed", []))
+    skipped = len(r.get("skipped", []))
+
+    print(f"\n完成：成功 {ok}，失败 {fail}，跳过 {skipped}，"
           f"耗时 {(time.time() - t0) / 60:.1f} 分钟")
+    if fail:
+        print(f"  失败样例: {', '.join(r['failed'][:5])}")
     total = len(list((store / "1d").rglob("*.parquet")))
     print(f"本地现有 {total} 只")
     print("\n下一步：")
