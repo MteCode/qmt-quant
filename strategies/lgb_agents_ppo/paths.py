@@ -22,6 +22,11 @@ FEATURE_REPORT = BACKTEST_DIR / "feature_selection.json"
 #: 多种子稳健性检验报告
 ROBUSTNESS = BACKTEST_DIR / "robustness.json"
 
+#: 最新目标持仓，下单脚本读这个
+LATEST_SIGNAL = SIGNALS_DIR / "target_latest.csv"
+#: 运行时状态。回撤峰值存这里，跨重启必须保留
+RISK_STATE = STATE_DIR / "risk_state.json"
+
 CONFIG_FILE = STRATEGY_DIR / "strategy.yaml"
 
 
