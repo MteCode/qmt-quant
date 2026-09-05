@@ -41,32 +41,15 @@ def _load_st_checker():
         return _ST_CHECKER
     _ST_LOADED = True
     try:
-        from ..config import get_config
-        p = Path(get_config().data.store_dir) / "universe" / "st_history.parquet"
-        if not p.exists():
+        from ..datafeed.st_history import get_checker, spans_by_symbol
+        _ST_CHECKER = get_checker()
+        if _ST_CHECKER is None:
             logger.info("无历史 ST 名单，涨跌停按板块判定"
                         "（ST 标的会被当作 10%% 处理）")
-            return None
-        df = pd.read_parquet(p)
-        by_sym: dict = {}
-        for r in df.itertuples():
-            by_sym.setdefault(r.vt_symbol, []).append((r.start_date, r.end_date))
-
-        def is_st(vt_symbol, dt):
-            spans = by_sym.get(vt_symbol)
-            if not spans:
-                return False
-            d = pd.Timestamp(dt)
-            for st, ed in spans:
-                if pd.isna(st):
-                    continue
-                if d >= st and (pd.isna(ed) or d <= ed):
-                    return True
-            return False
-
-        logger.info("已加载历史 ST 名单：%d 只标的 %d 个区间",
-                    len(by_sym), len(df))
-        _ST_CHECKER = is_st
+        else:
+            by_sym = spans_by_symbol()
+            logger.info("已加载历史 ST 名单：%d 只标的 %d 个区间",
+                        len(by_sym), sum(len(v) for v in by_sym.values()))
     except Exception as e:
         logger.warning("加载历史 ST 名单失败: %s", e)
     return _ST_CHECKER

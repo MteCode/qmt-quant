@@ -3,6 +3,11 @@ config/config.yaml
 config/*.local.yaml
 .env
 
+# QMT 客户端导出的账户文件（<资金账号>_<席位>_<类型>.csv）。
+# 内含资金账号、余额、持仓明细与成交流水 —— 运行 miniQMT 时会自动
+# 落在工作目录，很容易被 git add -A 顺手带进提交
+[0-9]*_[0-9]*_*.csv
+
 # 数据与日志
 data/
 logs/

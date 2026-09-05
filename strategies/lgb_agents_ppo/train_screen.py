@@ -73,10 +73,32 @@ TEST = ("2022-01-01", "2026-08-27")
 
 #: 额外因子及其可获得滞后（交易日）。与 eval_factors.FACTOR_LAG 一致 ——
 #: 因子按 trade_date 索引，那是数据「所属」日期而非「拿得到」日期，
-#: 不滞后即为前视偏差
+#: 不滞后即为前视偏差。
+#:
+#: fund_* 已在 build_fundamental_factors.py 里滞后过，这里注册 0，
+#: 再滞后就是双重滞后、白丢一天信息。
+#:
+#: 只收过了三关检验（|t|>=2、覆盖充足、与主信号不冗余）的因子，
+#: 名单见 backtest/factor_eval.json
 EXTRA_FACTORS = {
     "dragon_count_20": 1,
+    "fund_turnover": 0,   # 自由流通换手率  IC -0.0890 (t=-4.58)
+    "fund_bp": 0,         # 账面市值比      IC +0.0656 (t=+2.82)
+    "fund_size": 0,       # ln(总市值)      IC -0.0530 (t=-3.13)
+    "fund_sp": 0,         # 营收市值比      IC +0.0394 (t=+2.11)
 }
+
+#: 缺失值的含义因因子而异，必须逐个指定 —— 这里错过两次了。
+#:
+#: 计数型（龙虎榜上榜次数、公告条数）缺失 = 事件没发生 = 0。
+#: 早先把它当「未知」丢给模型，排序时缺失被当中性值，
+#: 结果公告因子测出 +0.352 的假 Sharpe，真实值是 -0.061。
+#:
+#: 但基本面因子反过来：fund_size 缺失是「这天没数据」，不是
+#: 「市值 = e^0 = 1 元」。填 0 会造出一批伪超小盘股，而 size
+#: 恰恰是负向因子 —— 模型会把这批数据缺失的票排到最前面去买。
+#: 因此留 NaN，交给 LightGBM 原生的缺失分支处理。
+FILL_ZERO = {"dragon_count_20", "dragon_inst_net"}
 
 
 def build_dataset(market: str):
@@ -118,13 +140,52 @@ def attach_extra_factors(dataset, store_dir: str):
         stacked = panel.stack()
         stacked.index.names = ["datetime", "instrument"]
 
+        zero = name in FILL_ZERO
+        cov = []
         for seg, (x, y) in parts.items():
             aligned = stacked.reindex(x.index)
-            # 计数型因子缺失即 0 次（该股当期未上榜），不是未知
-            x[name] = aligned.fillna(0.0).values
-        print(f"  [加入] {name}（滞后 {lag} 日）")
+            cov.append(float(aligned.notna().mean()))
+            # 缺失语义见 FILL_ZERO 的说明：计数型填 0，基本面留 NaN
+            x[name] = (aligned.fillna(0.0) if zero else aligned).values
+        print(f"  [加入] {name}（滞后 {lag} 日，"
+              f"缺失{'填0' if zero else '留NaN'}，"
+              f"覆盖 {min(cov):.0%}~{max(cov):.0%}）")
 
     return parts
+
+
+def drop_st(parts, label_te, mode: str):
+    """从训练/验证/测试数据里剔除 ST。
+
+    ST 的涨跌停是 5% 而非 10%，流动性差、有退市风险，价格行为与常规股
+    不是一回事。混在训练集里，模型会把 ST 的特有形态（长期跌停、
+    重组前的异动）当成普遍规律学走。
+
+    ``span`` 只剔除真正处于 ST 的时间段（无前视，保留摘帽后的干净数据）；
+    ``symbol`` 把历史上当过 ST 的标的整只剔除（更保守，样本损失更大）。
+    """
+    from qmtquant.datafeed.st_history import ever_st, st_mask
+
+    if mode == "none":
+        return parts, label_te, {}
+    if not ever_st():
+        print("  [跳过] 无 ST 历史名单，先跑 scripts/download_st_history.py")
+        return parts, label_te, {}
+
+    stats = {}
+    out = {}
+    for seg, (x, y) in parts.items():
+        m = st_mask(x.index, mode)
+        keep = ~m.values
+        stats[seg] = {"before": len(x), "removed": int(m.sum()),
+                      "after": int(keep.sum())}
+        out[seg] = (x[keep], y[keep])
+
+    if label_te is not None:
+        m = st_mask(label_te.index, mode)
+        label_te = label_te[~m.values]
+
+    return out, label_te, stats
 
 
 def _cs_normalize(y):
@@ -288,6 +349,10 @@ def main() -> int:
                     help="LightGBM 线程数，0 表示自动")
     p.add_argument("--rebuild-features", action="store_true",
                     help="强制重建特征缓存（改了因子定义后必须加）")
+    p.add_argument("--st-mode", choices=["span", "symbol", "none"],
+                    default="span",
+                    help="ST 剔除口径：span=只剔 ST 期间（默认，无前视）；"
+                         "symbol=历史上当过 ST 的整只剔除；none=不剔")
     args = p.parse_args()
 
     import numpy as np
@@ -346,6 +411,16 @@ def main() -> int:
             pickle.dump({"key": key, "parts": parts, "label_te": label_te}, f)
         print(f"  已缓存: {cache}")
 
+    # ST 剔除放在缓存之后 —— 特征缓存存的是未过滤数据，
+    # 换口径重跑不必再花 16 分钟重建特征
+    if args.st_mode != "none":
+        print(f"\n剔除 ST（口径 {args.st_mode}）...")
+        parts, label_te, st_stats = drop_st(parts, label_te, args.st_mode)
+        for seg, s in st_stats.items():
+            pct = s["removed"] / s["before"] * 100 if s["before"] else 0
+            print(f"  {seg:<6s} {s['before']:>9,} -> {s['after']:>9,}"
+                  f"   剔除 {s['removed']:>7,} ({pct:.2f}%)")
+
     x_tr = parts["train"][0]
     print(f"  train {x_tr.shape}  valid {parts['valid'][0].shape}"
           f"  test {parts['test'][0].shape}")
@@ -378,6 +453,7 @@ def main() -> int:
                 "train": list(TRAIN), "valid": list(VALID), "test": list(TEST),
                 "n_features": int(x_tr.shape[1]),
                 "extra_factors": EXTRA_FACTORS,
+                "st_mode": args.st_mode,
                 "ic": ic,
             }, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -428,7 +504,8 @@ def main() -> int:
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "config": {"seeds": args.seeds, "num_models": args.num_models,
                    "enable_sr": args.sr, "enable_fs": args.fs,
-                   "market": params["market"], "test": list(TEST)},
+                   "market": params["market"], "test": list(TEST),
+                   "st_mode": args.st_mode},
         "runs": runs,
     }, ensure_ascii=False, indent=2), encoding="utf-8")
 

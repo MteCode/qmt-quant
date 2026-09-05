@@ -79,6 +79,13 @@ FACTOR_LAG = {
     "ann_reduce_20": 0, "ann_risk_20": 0, "ann_buyback_20": 0,
     "ann_dilution_20": 0, "ann_unlock_20": 0, "ann_attention_20": 0,
     "ann_incentive_20": 0, "ann_guarantee_20": 0, "ann_net_score_20": 0,
+    # 基本面因子同样在 build_fundamental_factors.py 里滞后过：
+    # daily_basic 线整体 shift(1)，财报线在 as-of 之后 shift(1)。
+    # 这里再滞后就是双重滞后
+    "fund_bp": 0, "fund_ep": 0, "fund_sp": 0, "fund_dp": 0,
+    "fund_size": 0, "fund_turnover": 0, "fund_vol_ratio": 0,
+    "fund_is_loss": 0, "fund_bps": 0, "fund_cfp": 0, "fund_roe": 0,
+    "fund_gross_margin": 0, "fund_rev_growth": 0, "fund_profit_growth": 0,
 }
 DEFAULT_LAG = 1
 
