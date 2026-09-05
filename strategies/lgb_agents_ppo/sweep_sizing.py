@@ -1,5 +1,14 @@
 """仓位与持仓只数的可行性扫描。
 
+## 口径说明（容易看错的地方）
+
+「仓位」是靠**缩小本金**实现的：exposure=30% 就是拿 15 万跑满仓，
+另外 35 万不进引擎。因此引擎返回的收益率和回撤都是**投入部分**的口径。
+
+本脚本输出前一律按仓位折算回**账户口径**。不折算的话，30% 仓位下
+28.92% 的回撤看着超了 20% 的硬约束，而它在 50 万账户上其实只有 8.68%。
+Sharpe 是比率，分子分母同比例缩放后不变，不需要折算。
+
 ## 要回答的问题
 
 之前的回测用 100 万本金、50 只持仓、满仓运行 —— 每只 2 万，能买满一手。
@@ -42,6 +51,8 @@ import paths  # noqa: E402
 RESULT_JSON = paths.BACKTEST_DIR / "sizing.json"
 
 EXPOSURES = [0.3, 0.5, 0.8, 1.0]
+#: 账户级最大回撤上限。这是硬约束，不是偏好
+DRAWDOWN_LIMIT = 0.20
 HOLDINGS = [5, 10, 15, 20, 30]
 LOT = 100
 
@@ -192,6 +203,8 @@ def main() -> int:
     print(f"{'仓位':>6s}{'持仓':>6s}{'单只金额':>10s}{'可行率':>8s}"
           f"{'收益均值':>10s}{'最差':>10s}{'最好':>10s}"
           f"{'Sharpe':>9s}{'标准差':>8s}{'最深回撤':>9s}")
+    print("  收益与回撤均为**账户口径**（已按仓位折算，"
+          f"回撤上限 {DRAWDOWN_LIMIT:.0%}）")
     print("-" * 90)
 
     # 相位在 [0, rebalance) 内均匀取点
@@ -207,11 +220,20 @@ def main() -> int:
             # 每个相位各跑一次，取分布 —— 单相位的估计方差大到没有意义
             ms = [run_bt(scores, cfg, bars, universe, symbols,
                          k, args.rebalance, capital * exp,
-                         use_risk=not args.no_risk, phase=ph)
+                         use_risk=not args.no_risk, phase=ph,
+                         exposure=exp)
                   for ph in phases]
-            ret = np.array([m["total_return"] for m in ms])
+            # 仓位是靠**缩小本金**实现的（initial_capital = 本金 x 仓位），
+            # 所以引擎返回的收益率和回撤都是「投入部分」的口径。
+            # 剩下的 (1-仓位) 是现金，账户层面要按仓位折算 ——
+            # 不折算就会把 30% 仓位下 28.92% 的回撤当成超标，
+            # 而它在 50 万账户上其实只有 8.68%。
+            # 「回撤 <= 20%」这条硬约束说的是账户，必须按账户口径判。
+            ret = np.array([m["total_return"] for m in ms]) * exp
+            ddn = np.array([m["max_drawdown"] for m in ms]) * exp
+            # Sharpe 是比率，同比例缩放分子分母后不变，无需折算
             shp = np.array([m["sharpe"] for m in ms])
-            ddn = np.array([m["max_drawdown"] for m in ms])
+            dd_ok = ddn <= DRAWDOWN_LIMIT
             row = {"exposure": exp, "holdings": k, **fe,
                    "phases": list(phases),
                    "total_return": float(ret.mean()),
@@ -225,7 +247,8 @@ def main() -> int:
                    "sharpe_max": float(shp.max()),
                    # 所有相位都达标才算真达标 —— 只要有一个相位爆掉，
                    # 实盘就可能正好撞上那个相位
-                   "drawdown_ok": all(m["drawdown_ok"] for m in ms),
+                   "drawdown_ok": bool(dd_ok.all()),
+                   "account_basis": True,
                    "total_trades": int(np.mean([m["total_trades"] for m in ms]))}
             rows.append(row)
             print(f"{exp:>6.0%}{k:>6d}{fe['per_name']:>10,.0f}"

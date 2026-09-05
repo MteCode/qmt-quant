@@ -107,24 +107,38 @@ def combine(panels: list):
 
 def backtest(scores, cfg, bars, universe, symbols,
              holdings: int, rebalance: int, capital: float,
-             use_risk: bool = True, phase: int = 0) -> dict:
+             use_risk: bool = True, phase: int = 0,
+             exposure: float = 1.0) -> dict:
     """跑组合回测，返回指标字典。
 
     ``use_risk=False`` 关掉回撤控制器。**这只是诊断用途** ——
     实盘必须开着。它的作用是把两件事分开：信号本身赚不赚钱，
     和风控层在反复砍仓时自己损耗了多少。两者混在一起时，
     看到一个差的 Sharpe 无法判断该改信号还是该改风控参数。
+
+    ``exposure`` 修正一处回测与实盘的不一致。仓位在回测里是靠
+    **缩小本金**实现的（30% 仓位 = 拿 15 万跑满仓），于是回撤控制器
+    看到的是投入部分的净值曲线。但实盘账户里那 35 万现金是在的，
+    控制器看到的是 50 万口径 —— 同一段行情，两边算出的回撤差 3.3 倍。
+
+    实测后果：档位是 6%/9%/12%，30% 仓位下账户只回撤 3.6% 就被全平，
+    而硬约束是 20%。回测里风控疯狂砍仓，实盘根本不会触发。
+    传入 exposure 后按 1/exposure 放大阈值，让控制器在**账户口径**
+    的同一位置触发。
     """
     from qmtquant.engine.backtest_engine import BacktestEngine
     from qmtquant.risk.drawdown import DrawdownConfig, DrawdownController
     from qmtquant.strategy.signal_rank import SignalRankStrategy
 
     r = cfg.risk
+    # 阈值按仓位放大，还原到账户口径。上限 0.95 —— 再高就等于没有风控，
+    # 而且投入部分亏 95% 这种情形本来也不该靠回撤控制器兜底
+    sc = 1.0 / max(min(exposure, 1.0), 0.05)
     drawdown = DrawdownController(DrawdownConfig(
-        close_only_threshold=r.drawdown_close_only,
-        reduce_threshold=r.drawdown_reduce,
+        close_only_threshold=min(r.drawdown_close_only * sc, 0.95),
+        reduce_threshold=min(r.drawdown_reduce * sc, 0.95),
         reduce_keep_ratio=r.drawdown_reduce_keep,
-        flat_threshold=r.drawdown_flat,
+        flat_threshold=min(r.drawdown_flat * sc, 0.95),
         recovery_ratio=r.drawdown_recovery_ratio,
         min_observations=r.drawdown_min_observations,
         max_freeze_observations=r.drawdown_max_freeze)) if use_risk else None
