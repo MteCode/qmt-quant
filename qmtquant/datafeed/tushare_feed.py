@@ -82,7 +82,16 @@ class TushareClient:
     """
 
     def __init__(self, cfg: TushareConfig | None = None) -> None:
-        self.cfg = cfg or TushareConfig()
+        # 不传 cfg 时要从 config.yaml 读，不能退回空的默认值 ——
+        # 那样即使配置文件里写了 token 也会报「未配置」，
+        # 而错误信息还指引用户去配一个已经配好的东西
+        if cfg is None:
+            try:
+                from ..config import get_config
+                cfg = get_config().tushare
+            except Exception:
+                cfg = TushareConfig()
+        self.cfg = cfg
         self._token = resolve_token(self.cfg)
         self._pro = None
         #: 最近一分钟内的调用时间戳，用于滑动窗口限流

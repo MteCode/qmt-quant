@@ -124,6 +124,30 @@ class TestBacktestRules:
         engine.run()
         assert len(engine.trades) == 0
 
+    def test_st_uses_5pct_limit(self, monkeypatch):
+        """ST 标的涨跌停 5%，且必须按**当日**状态判定。
+
+        某只股票 2023 年被 ST、2025 年摘帽，按当前状态回测 2023 年
+        会用 10% 撮合本该 5% 的标的，让本该拒单的委托成交，
+        系统性高估可成交性。
+        """
+        import pandas as pd
+
+        engine = BacktestEngine()
+        # 只在 2023 年是 ST
+        monkeypatch.setattr(
+            engine, "_is_st",
+            lambda vt, dt: pd.Timestamp(dt).year == 2023)
+
+        d2023 = pd.Timestamp("2023-06-01")
+        d2025 = pd.Timestamp("2025-06-01")
+        assert engine._limit_ratio("600000.SSE", d2023) == 0.05
+        assert engine._limit_ratio("600000.SSE", d2025) == 0.10
+        # 不传日期时退回按板块判定，不应误用 5%
+        assert engine._limit_ratio("600000.SSE") == 0.10
+        # 创业板非 ST 日仍是 20%
+        assert engine._limit_ratio("300750.SZSE", d2025) == 0.20
+
     def test_lot_rounding_uses_real_price(self, monkeypatch):
         """整手取整必须按真实股数，而非被抬高的后复权价。
 

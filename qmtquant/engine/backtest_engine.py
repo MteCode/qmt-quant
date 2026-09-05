@@ -9,11 +9,13 @@
 import logging
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 
 from ..config import CostConfig
-from ..core.constants import Direction, OrderType, Status, get_price_limit
+from ..core.constants import (Direction, OrderType, ST_PRICE_LIMIT,
+                              Status, get_price_limit)
 from ..core.objects import BarData, OrderData, OrderRequest, TradeData
 from ..gateway.sim_gateway import calc_cost
 from ..risk.drawdown import DrawdownController, DrawdownLevel
@@ -22,6 +24,53 @@ from ..utils.symbol import normalize, split_vt_symbol
 from .performance import PerformanceStats, calculate_stats
 
 logger = logging.getLogger(__name__)
+
+#: 历史 ST 判定器。模块级缓存 —— 回测里会调用几十万次，不能每次读文件
+_ST_CHECKER = None
+_ST_LOADED = False
+
+
+def _load_st_checker():
+    """加载历史 ST 判定器。缺数据时返回 None，调用方退回按板块判定。
+
+    ST 涨跌停 5%%，不区分会让本该拒单的委托成交，高估可成交性。
+    数据由 scripts/download_st_history.py 从 Tushare namechange 生成。
+    """
+    global _ST_CHECKER, _ST_LOADED
+    if _ST_LOADED:
+        return _ST_CHECKER
+    _ST_LOADED = True
+    try:
+        from ..config import get_config
+        p = Path(get_config().data.store_dir) / "universe" / "st_history.parquet"
+        if not p.exists():
+            logger.info("无历史 ST 名单，涨跌停按板块判定"
+                        "（ST 标的会被当作 10%% 处理）")
+            return None
+        df = pd.read_parquet(p)
+        by_sym: dict = {}
+        for r in df.itertuples():
+            by_sym.setdefault(r.vt_symbol, []).append((r.start_date, r.end_date))
+
+        def is_st(vt_symbol, dt):
+            spans = by_sym.get(vt_symbol)
+            if not spans:
+                return False
+            d = pd.Timestamp(dt)
+            for st, ed in spans:
+                if pd.isna(st):
+                    continue
+                if d >= st and (pd.isna(ed) or d <= ed):
+                    return True
+            return False
+
+        logger.info("已加载历史 ST 名单：%d 只标的 %d 个区间",
+                    len(by_sym), len(df))
+        _ST_CHECKER = is_st
+    except Exception as e:
+        logger.warning("加载历史 ST 名单失败: %s", e)
+    return _ST_CHECKER
+
 
 
 class BacktestEngine:
@@ -122,6 +171,9 @@ class BacktestEngine:
         except Exception:
             self._raw_dir = None
         self._factor_cache: dict[str, float | None] = {}
+        #: 历史 ST 判定器。有则按当日状态用 5% 涨跌停，
+        #: 无则退回按板块判定 —— 会高估 ST 标的的可成交性
+        self._is_st = _load_st_checker()
         #: 各标的最后一根 Bar 的后复权收盘价，算因子用
         self._last_adj_close: dict[str, float] = {}
         #: 回撤控制强制发出的减仓委托笔数
@@ -240,7 +292,7 @@ class BacktestEngine:
 
             prev = self._prev_bars.get(req.vt_symbol)
             pre_close = prev.close_price if prev else bar.open_price
-            ratio = self._limit_ratio(req.vt_symbol)
+            ratio = self._limit_ratio(req.vt_symbol, bar.datetime)
             limit_up = round(pre_close * (1 + ratio), 2)
             limit_down = round(pre_close * (1 - ratio), 2)
 
@@ -267,10 +319,23 @@ class BacktestEngine:
             price = max(min(price, limit_up), limit_down)
             self._fill(req, price)
 
-    def _limit_ratio(self, vt_symbol: str) -> float:
-        """该标的的涨跌停幅度。显式指定时用指定值，否则按板块自动判定。"""
+    def _limit_ratio(self, vt_symbol: str, dt=None) -> float:
+        """该标的的涨跌停幅度。
+
+        优先级：显式指定 > 当日 ST 状态（5%）> 按板块判定（10/20/30%）。
+
+        ST 必须按**当日**状态判定，不能用当前状态：某只股票 2023 年被 ST、
+        2025 年摘帽，按当前状态回测 2023 年会用 10% 撮合本该 5% 的标的，
+        让本该拒单的委托成交，系统性高估可成交性。
+        """
         if self.price_limit_ratio is not None:
             return self.price_limit_ratio
+        if dt is not None and self._is_st is not None:
+            try:
+                if self._is_st(vt_symbol, dt):
+                    return ST_PRICE_LIMIT
+            except Exception:
+                pass
         return get_price_limit(vt_symbol)
 
     def _fill(self, req: OrderRequest, price: float) -> None:
