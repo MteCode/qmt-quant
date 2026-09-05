@@ -68,3 +68,4 @@ data/clean/
 data/market.db*
 strategies/**/state/live_equity.csv
 data/announcement/
+data/universe/st_history.parquet

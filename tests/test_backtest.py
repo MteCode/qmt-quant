@@ -1,4 +1,5 @@
 """回测引擎测试：重点验证 A 股规则与无前视偏差。"""
+from pathlib import Path
 import pandas as pd
 import pytest
 
@@ -123,6 +124,35 @@ class TestBacktestRules:
         engine.add_strategy(BuyOnceStrategy, ["000001.SZSE"])
         engine.run()
         assert len(engine.trades) == 0
+
+    def test_st_checker_handles_multiple_spans(self):
+        """同一标的可能有多段 ST 区间，判定必须逐段检查。
+
+        实测 300472.SZSE 有两段连续区间（2025-05-06~2026-09-02、
+        2026-09-03 至今）；620 只标的最后一段已结束但更早还有区间。
+        只看最后一段或只看首段都会错。
+        """
+        import pandas as pd
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+        from download_st_history import build_checker
+
+        df = pd.DataFrame([
+            {"vt_symbol": "000001.SZSE", "name": "ST甲",
+             "start_date": pd.Timestamp("2020-01-01"),
+             "end_date": pd.Timestamp("2020-12-31"), "reason": ""},
+            {"vt_symbol": "000001.SZSE", "name": "*ST甲",
+             "start_date": pd.Timestamp("2023-01-01"),
+             "end_date": pd.NaT, "reason": ""},
+        ])
+        is_st = build_checker(df)
+
+        assert not is_st("000001.SZSE", "2019-06-01")   # 首段之前
+        assert is_st("000001.SZSE", "2020-06-01")       # 首段之内
+        assert not is_st("000001.SZSE", "2021-06-01")   # 两段之间已摘帽
+        assert is_st("000001.SZSE", "2024-06-01")       # 次段之内
+        assert is_st("000001.SZSE", "2030-01-01")       # end_date 为空=至今
+        assert not is_st("600000.SSE", "2020-06-01")    # 从未 ST
 
     def test_st_uses_5pct_limit(self, monkeypatch):
         """ST 标的涨跌停 5%，且必须按**当日**状态判定。
