@@ -106,8 +106,15 @@ def combine(panels: list):
 
 
 def backtest(scores, cfg, bars, universe, symbols,
-             holdings: int, rebalance: int, capital: float) -> dict:
-    """跑组合回测，返回指标字典。"""
+             holdings: int, rebalance: int, capital: float,
+             use_risk: bool = True, phase: int = 0) -> dict:
+    """跑组合回测，返回指标字典。
+
+    ``use_risk=False`` 关掉回撤控制器。**这只是诊断用途** ——
+    实盘必须开着。它的作用是把两件事分开：信号本身赚不赚钱，
+    和风控层在反复砍仓时自己损耗了多少。两者混在一起时，
+    看到一个差的 Sharpe 无法判断该改信号还是该改风控参数。
+    """
     from qmtquant.engine.backtest_engine import BacktestEngine
     from qmtquant.risk.drawdown import DrawdownConfig, DrawdownController
     from qmtquant.strategy.signal_rank import SignalRankStrategy
@@ -120,14 +127,15 @@ def backtest(scores, cfg, bars, universe, symbols,
         flat_threshold=r.drawdown_flat,
         recovery_ratio=r.drawdown_recovery_ratio,
         min_observations=r.drawdown_min_observations,
-        max_freeze_observations=r.drawdown_max_freeze))
+        max_freeze_observations=r.drawdown_max_freeze)) if use_risk else None
 
     engine = BacktestEngine(initial_capital=capital, cost=cfg.cost,
                             drawdown=drawdown)
     engine.load_data(bars)
     engine.set_universe(universe)
     engine.add_strategy(SignalRankStrategy, symbols, {
-        "max_holdings": holdings, "rebalance_days": rebalance})
+        "max_holdings": holdings, "rebalance_days": rebalance,
+        "rebalance_phase": phase})
     engine.strategy.scores = scores
     engine.strategy._score_dates = scores.index.to_numpy()
     stats = engine.run()
@@ -141,7 +149,8 @@ def backtest(scores, cfg, bars, universe, symbols,
         "win_rate": stats.win_rate,
         "total_trades": stats.total_trades,
         "drawdown_ok": stats.drawdown_ok,
-        "peak_resets": drawdown.state.peak_resets,
+        "peak_resets": drawdown.state.peak_resets if drawdown else 0,
+        "risk_exit_orders": getattr(engine, "risk_exit_orders", 0),
     }
 
 

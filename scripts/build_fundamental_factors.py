@@ -364,8 +364,13 @@ def main() -> int:
         factors[f"fund_{name}"] = panel
     print(f"  得到 {len(db)} 个因子")
 
-    # ---- 线路二：财报（按公告日 as-of + TTM，覆盖窄但含盈利质量与成长）
-    fin_root = store / "financial" / "PershareIndex"
+    # ---- 线路二：财报（按公告日 as-of + TTM，含盈利质量与成长）
+    # 优先读清洗层。原始层里有 5 万多行公告日早于报告期 ——
+    # 报告期还没结束就「公告」了，那是数据错误，按它对齐就是开天眼
+    fin_root = store / "clean" / "financial" / "PershareIndex"
+    from_clean = fin_root.exists()
+    if not from_clean:
+        fin_root = store / "financial" / "PershareIndex"
     symbols = sorted({(f"{q.stem}.{q.parent.name}", q)
                       for q in fin_root.rglob("*.parquet")}) \
         if fin_root.exists() else []
@@ -375,7 +380,8 @@ def main() -> int:
         print("      补齐：python scripts/download_financial.py --sector 沪深A股")
         panels = {}
     else:
-        print(f"\n[2/2] 财报 —— 盈利质量 / 成长（{len(symbols)} 只）")
+        src = "清洗层" if from_clean else "原始层（未清洗！先跑 scripts/clean_data.py）"
+        print(f"\n[2/2] 财报 —— 盈利质量 / 成长（{len(symbols)} 只，来自{src}）")
         print(f"  TTM 转换: {', '.join(FLOW.values())}"
               f"   直接使用: {', '.join(STOCK.values())}")
         panels, n_ok = build_panels(fin_root, symbols, grid)

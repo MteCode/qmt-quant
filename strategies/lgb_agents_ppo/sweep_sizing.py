@@ -51,6 +51,26 @@ def load_prices(store: Path, use_raw: bool = True):
     import pandas as pd
 
     if use_raw:
+        # daily_basic 的 close 是不复权价，覆盖全市场 5800 只。
+        # 可行性判断必须用真实价 —— 后复权价被整体抬高，
+        # 会把本来买得起的票判成买不起（茅台后复权约 5.4 倍）
+        db = store / "factor" / "daily_basic"
+        files = sorted(db.glob("*.parquet"))
+        if files:
+            frames = []
+            for f in files:
+                try:
+                    frames.append(pd.read_parquet(
+                        f, columns=["symbol", "trade_date", "close"]))
+                except (OSError, ValueError, KeyError):
+                    continue
+            if frames:
+                d = pd.concat(frames, ignore_index=True)
+                d["trade_date"] = pd.to_datetime(d["trade_date"])
+                panel = d.pivot_table(index="trade_date", columns="symbol",
+                                      values="close", aggfunc="last")
+                return panel.sort_index(), "不复权（真实价，daily_basic）"
+
         raw_root = store / "1d_raw"
         if raw_root.exists() and any(raw_root.rglob("*.parquet")):
             cols = {}
@@ -114,8 +134,16 @@ def main() -> int:
     p.add_argument("--capital", type=float, default=None)
     p.add_argument("--rebalance", type=int, default=20)
     p.add_argument("--index", default="000852.SH")
+    p.add_argument("--phases", type=int, default=5,
+                    help="跑几个调仓相位取分布。实测同一配置仅改变相位，"
+                         "4 年半累计收益从 -9.62%% 到 +73.02%% —— "
+                         "单相位回测测的是运气不是策略")
+    p.add_argument("--no-risk", action="store_true",
+                    help="关掉回撤控制器。仅用于诊断 —— 把「信号赚不赚钱」"
+                         "和「风控层反复砍仓的自我损耗」分开看，实盘必须开着")
     args = p.parse_args()
 
+    import numpy as np
     import pandas as pd
 
     from qmtquant.config import LOG_DIR, get_config
@@ -161,52 +189,83 @@ def main() -> int:
     rebal = scores.index[::args.rebalance]
 
     print("\n" + "-" * 74)
-    print(f"{'仓位':>6s}{'持仓':>6s}{'单只金额':>10s}{'可买满':>8s}"
-          f"{'可行率':>8s}{'总收益':>10s}{'最大回撤':>10s}{'Sharpe':>9s}")
-    print("-" * 74)
+    print(f"{'仓位':>6s}{'持仓':>6s}{'单只金额':>10s}{'可行率':>8s}"
+          f"{'收益均值':>10s}{'最差':>10s}{'最好':>10s}"
+          f"{'Sharpe':>9s}{'标准差':>8s}{'最深回撤':>9s}")
+    print("-" * 90)
+
+    # 相位在 [0, rebalance) 内均匀取点
+    phases = [round(i * args.rebalance / args.phases)
+              for i in range(args.phases)]
+    print(f"调仓相位: {phases}（每个配置各跑一遍取分布）")
 
     rows = []
     t0 = time.time()
     for exp in EXPOSURES:
         for k in HOLDINGS:
             fe = feasibility(scores, prices, capital, exp, k, rebal)
-            # 回测：持仓 k 只，本金按实际投入额（仓位 x 本金）
-            m = run_bt(scores, cfg, bars, universe, symbols,
-                       k, args.rebalance, capital * exp)
+            # 每个相位各跑一次，取分布 —— 单相位的估计方差大到没有意义
+            ms = [run_bt(scores, cfg, bars, universe, symbols,
+                         k, args.rebalance, capital * exp,
+                         use_risk=not args.no_risk, phase=ph)
+                  for ph in phases]
+            ret = np.array([m["total_return"] for m in ms])
+            shp = np.array([m["sharpe"] for m in ms])
+            ddn = np.array([m["max_drawdown"] for m in ms])
             row = {"exposure": exp, "holdings": k, **fe,
-                   "total_return": m["total_return"],
-                   "max_drawdown": m["max_drawdown"],
-                   "sharpe": m["sharpe"],
-                   "drawdown_ok": m["drawdown_ok"],
-                   "total_trades": m["total_trades"]}
+                   "phases": list(phases),
+                   "total_return": float(ret.mean()),
+                   "return_min": float(ret.min()),
+                   "return_max": float(ret.max()),
+                   "max_drawdown": float(ddn.mean()),
+                   "drawdown_worst": float(ddn.max()),
+                   "sharpe": float(shp.mean()),
+                   "sharpe_std": float(shp.std(ddof=1)) if len(shp) > 1 else 0.0,
+                   "sharpe_min": float(shp.min()),
+                   "sharpe_max": float(shp.max()),
+                   # 所有相位都达标才算真达标 —— 只要有一个相位爆掉，
+                   # 实盘就可能正好撞上那个相位
+                   "drawdown_ok": all(m["drawdown_ok"] for m in ms),
+                   "total_trades": int(np.mean([m["total_trades"] for m in ms]))}
             rows.append(row)
             print(f"{exp:>6.0%}{k:>6d}{fe['per_name']:>10,.0f}"
-                  f"{fe['feasible']:>8.1f}{fe['feasible_pct']:>8.0%}"
-                  f"{m['total_return']:>+10.2%}{m['max_drawdown']:>10.2%}"
-                  f"{m['sharpe']:>+9.3f}")
+                  f"{fe['feasible_pct']:>8.0%}"
+                  f"{ret.mean():>+10.2%}{ret.min():>+10.2%}{ret.max():>+10.2%}"
+                  f"{shp.mean():>+9.3f}{shp.std(ddof=1) if len(shp) > 1 else 0:>8.3f}"
+                  f"{ddn.max():>9.2%}")
         print()
 
     # ---- 结论
     print("-" * 74)
+    # 挑配置看的是**所有相位都站得住**，不是均值好看。
+    # 均值高但最差相位巨亏的配置，实盘可能正好撞上那个相位
     good = [r for r in rows if r["feasible_pct"] >= 0.9
-            and r["drawdown_ok"] and r["sharpe"] > 0]
+            and r["drawdown_ok"] and r["sharpe_min"] > 0]
     if good:
-        best = max(good, key=lambda r: r["sharpe"])
-        print(f"可执行且达标的配置（可行率>=90%、回撤达标、Sharpe>0）"
-              f"共 {len(good)} 个，最优：")
+        best = max(good, key=lambda r: r["sharpe_min"])
+        print(f"全相位稳健的配置（可行率>=90%、各相位回撤均达标、"
+              f"最差相位 Sharpe>0）共 {len(good)} 个，最优：")
         print(f"  仓位 {best['exposure']:.0%}  持仓 {best['holdings']} 只  "
               f"单只 {best['per_name']:,.0f} 元")
-        print(f"  收益 {best['total_return']:+.2%}  "
-              f"回撤 {best['max_drawdown']:.2%}  "
-              f"Sharpe {best['sharpe']:+.3f}")
+        print(f"  收益 {best['return_min']:+.2%} ~ {best['return_max']:+.2%}"
+              f"（均值 {best['total_return']:+.2%}）")
+        print(f"  Sharpe {best['sharpe_min']:+.3f} ~ {best['sharpe_max']:+.3f}"
+              f"（均值 {best['sharpe']:+.3f}）")
+        print(f"  最深回撤 {best['drawdown_worst']:.2%}")
     else:
-        print("!! 没有配置同时满足：可行率>=90%、回撤达标、Sharpe>0")
+        print("!! 没有配置在**所有相位**上都满足：可行率>=90%、"
+              "回撤达标、Sharpe>0")
         feas = [r for r in rows if r["feasible_pct"] >= 0.9]
         if feas:
             b = max(feas, key=lambda r: r["sharpe"])
-            print(f"   可行率达标中最好的：仓位 {b['exposure']:.0%} / "
-                  f"{b['holdings']} 只 -> Sharpe {b['sharpe']:+.3f}"
-                  f"  回撤 {b['max_drawdown']:.2%}")
+            print(f"   按均值最好的：仓位 {b['exposure']:.0%} / "
+                  f"{b['holdings']} 只")
+            print(f"   Sharpe 均值 {b['sharpe']:+.3f}，但相位间跨度 "
+                  f"{b['sharpe_min']:+.3f} ~ {b['sharpe_max']:+.3f}")
+            print(f"   收益跨度 {b['return_min']:+.2%} ~ {b['return_max']:+.2%}"
+                  f"  最深回撤 {b['drawdown_worst']:.2%}")
+            print("\n   跨度大说明这个结果不可靠 —— 实盘从哪天开始"
+                  "就决定了成败，那不是策略，是运气")
 
     paths.ensure_dirs()
     RESULT_JSON.write_text(json.dumps({

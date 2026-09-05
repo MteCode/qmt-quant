@@ -18,10 +18,21 @@ logger = logging.getLogger(__name__)
 class PortfolioStrategy(StrategyBase):
     """按周期调仓的等权选股策略基类"""
 
-    parameters = ["rebalance_days", "max_holdings", "cash_buffer", "price_buffer"]
+    parameters = ["rebalance_days", "max_holdings", "cash_buffer",
+                  "price_buffer", "rebalance_phase"]
 
     #: 每隔多少个交易日调仓一次
     rebalance_days: int = 20
+    #: 调仓相位 —— 从第几根 Bar 开始起算周期。
+    #:
+    #: 这不是可调参数，是**评估工具**。实测同一份信号、同一组参数，
+    #: 20 日调仓下仅改变相位（0/4/8/12/16），4 年半累计收益从
+    #: -9.62% 到 +73.02%，横跨 82 个百分点。
+    #:
+    #: 也就是说单相位回测的估计方差极大 —— 它测的不是策略好坏，
+    #: 而是「你碰巧从哪天开始」。任何周期调仓策略都必须跑遍相位
+    #: 看分布，只跑一次得到的数字没有意义。
+    rebalance_phase: int = 0
     #: 最多同时持有多少只
     max_holdings: int = 10
     #: 预留现金比例，防止因价格波动导致买单资金不足
@@ -60,7 +71,7 @@ class PortfolioStrategy(StrategyBase):
 
         if not self.trading:
             return
-        if self._bar_count % self.rebalance_days != 0:
+        if (self._bar_count - self.rebalance_phase) % self.rebalance_days != 0:
             return
 
         candidates = [s for s in self.engine.get_universe()

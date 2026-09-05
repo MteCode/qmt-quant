@@ -85,8 +85,20 @@ EXTRA_FACTORS = {
     "fund_turnover": 0,   # 自由流通换手率  IC -0.0890 (t=-4.58)
     "fund_bp": 0,         # 账面市值比      IC +0.0656 (t=+2.82)
     "fund_size": 0,       # ln(总市值)      IC -0.0530 (t=-3.13)
-    "fund_sp": 0,         # 营收市值比      IC +0.0394 (t=+2.11)
+    "fund_sp": 0,         # 营收市值比      IC +0.0399 (t=+2.13)
 }
+
+#: 过了单变量三关、但加进来反而变差的因子。留在这里是为了不再试第二遍。
+#:
+#: 三关检验测的是**单变量**表现，测不出边际贡献。fund_cfp 单看
+#: IC +0.0371 (t=+2.00) 达标，加进模型后：
+#:
+#:     4 因子   IC 中位数 +0.0296   标准差 0.0002
+#:     5 因子   IC 中位数 +0.0287   标准差 0.0004
+#:
+#: IC 掉了、方差翻倍。t=2.00 本就是擦边过，信息多半已被 bp/sp 覆盖，
+#: 剩下的是噪声。三关是准入门槛，不是纳入理由。
+REJECTED_BY_MARGIN = {"fund_cfp"}
 
 #: 缺失值的含义因因子而异，必须逐个指定 —— 这里错过两次了。
 #:
@@ -115,21 +127,34 @@ def build_dataset(market: str):
         "train": TRAIN, "valid": VALID, "test": TEST})
 
 
-def attach_extra_factors(dataset, store_dir: str):
-    """把额外因子拼进特征矩阵。
+def extract_base(dataset):
+    """只取 Alpha158，不拼额外因子。这一步要 20 分钟，值得单独缓存。"""
+    parts = {}
+    for seg in ("train", "valid", "test"):
+        parts[seg] = (dataset.prepare(seg, col_set="feature"),
+                      dataset.prepare(seg, col_set="label", data_key="raw"))
+    return parts
 
-    返回拼接后的三段数据。Qlib 的 handler 不便直接扩展，
-    因此在 prepare 之后手工对齐 —— 代价是要自己处理索引与缺失。
+
+def attach_extra_factors(parts, store_dir: str):
+    """把额外因子拼进特征矩阵。原地修改并返回 parts。
+
+    Qlib 的 handler 不便直接扩展，因此在 prepare 之后手工对齐 ——
+    代价是要自己处理索引与缺失。
+
+    先剥掉已有的额外因子列再拼。这样缓存里存的永远是纯 Alpha158，
+    换一组因子重跑不必再花 20 分钟重算特征 —— 因子迭代阶段
+    这个差别是「几秒」和「二十分钟」。
     """
     import pandas as pd
 
-    parts = {}
-    for seg in ("train", "valid", "test"):
-        x = dataset.prepare(seg, col_set="feature")
-        y = dataset.prepare(seg, col_set="label", data_key="raw")
-        parts[seg] = (x, y)
-
     factor_dir = Path(store_dir) / "qlib_data" / "money_factors"
+    known = {p.stem for p in factor_dir.glob("*.parquet")}
+    for seg, (x, _) in parts.items():
+        stale = [c for c in x.columns if c in known]
+        if stale:
+            x.drop(columns=stale, inplace=True)
+
     for name, lag in EXTRA_FACTORS.items():
         p = factor_dir / f"{name}.parquet"
         if not p.exists():
@@ -383,10 +408,11 @@ def main() -> int:
     print(f"种子数    : {args.seeds}")
 
     t0 = time.time()
-    # 特征构建约 16 分钟且与种子无关，缓存后重跑只要几秒。
-    # 缓存键含市场与额外因子 —— 改了因子必须重建，否则会用到旧特征
+    # Alpha158 构建约 20 分钟且与种子、与额外因子都无关，单独缓存。
+    # 缓存键**不含** EXTRA_FACTORS —— 存的是纯 Alpha158，
+    # 额外因子每次现拼（几秒）。因子迭代阶段这个差别是二十分钟对几秒
     cache = paths.MODELS_DIR / f"features_{params['market']}.pkl"
-    key = {"market": params["market"], "extra": EXTRA_FACTORS,
+    key = {"market": params["market"],
            "segments": [list(TRAIN), list(VALID), list(TEST)]}
     parts = label_te = None
     if cache.exists() and not args.rebuild_features:
@@ -394,7 +420,9 @@ def main() -> int:
         try:
             with open(cache, "rb") as f:
                 blob = pickle.load(f)
-            if blob.get("key") == key:
+            k = dict(blob.get("key") or {})
+            k.pop("extra", None)      # 兼容旧缓存：旧键里带 extra
+            if k == key:
                 parts, label_te = blob["parts"], blob["label_te"]
                 print(f"\n复用特征缓存: {cache.name}")
         except (OSError, pickle.PickleError, KeyError):
@@ -403,7 +431,7 @@ def main() -> int:
     if parts is None:
         print("\n构建 Alpha158 特征...")
         dataset = build_dataset(params["market"])
-        parts = attach_extra_factors(dataset, cfg.data.store_dir)
+        parts = extract_base(dataset)
         label_te = dataset.prepare("test", col_set="label", data_key="raw")
         paths.ensure_dirs()
         import pickle
@@ -411,8 +439,12 @@ def main() -> int:
             pickle.dump({"key": key, "parts": parts, "label_te": label_te}, f)
         print(f"  已缓存: {cache}")
 
-    # ST 剔除放在缓存之后 —— 特征缓存存的是未过滤数据，
-    # 换口径重跑不必再花 16 分钟重建特征
+    # 额外因子每次现拼。缓存里是纯 Alpha158，这一步只要几秒
+    print(f"\n拼接额外因子（{len(EXTRA_FACTORS)} 个）...")
+    parts = attach_extra_factors(parts, cfg.data.store_dir)
+
+    # ST 剔除同样放在缓存之后 —— 缓存存的是未过滤数据，
+    # 换口径重跑不必再花 20 分钟重建特征
     if args.st_mode != "none":
         print(f"\n剔除 ST（口径 {args.st_mode}）...")
         parts, label_te, st_stats = drop_st(parts, label_te, args.st_mode)

@@ -41,7 +41,7 @@ MIN_TURNOVER = 50_000_000
 class SignalRankStrategy(PortfolioStrategy):
     """按外部分数从高到低选股，等权持有"""
 
-    parameters = ["max_holdings", "rebalance_days"]
+    parameters = ["max_holdings", "rebalance_days", "rebalance_phase"]
     variables = ["inited", "trading", "pos", "last_selection",
                  "rebalance_count"]
 
@@ -80,6 +80,7 @@ class SignalRankStrategy(PortfolioStrategy):
         """参数寻优会从 DataFrame 传 float64，用作下标会 TypeError"""
         self.max_holdings = int(self.max_holdings)
         self.rebalance_days = int(self.rebalance_days)
+        self.rebalance_phase = int(self.rebalance_phase)
 
     def _validate(self) -> None:
         if self.max_holdings < 1:
@@ -87,13 +88,18 @@ class SignalRankStrategy(PortfolioStrategy):
         if self.rebalance_days < 1:
             raise ValueError(
                 f"rebalance_days 至少为 1，实际 {self.rebalance_days}")
+        if not 0 <= self.rebalance_phase < self.rebalance_days:
+            raise ValueError(
+                f"rebalance_phase 须在 [0, {self.rebalance_days}) 内，"
+                f"实际 {self.rebalance_phase}")
 
     # ------------------------------------------------------------ 生命周期
 
     def on_init(self) -> None:
         n = 0 if self.scores is None else len(self.scores)
         self.write_log(f"初始化 分数面板 {n} 期 持仓{self.max_holdings}只 "
-                       f"每{self.rebalance_days}日调仓")
+                       f"每{self.rebalance_days}日调仓 "
+                       f"相位{self.rebalance_phase}")
 
     def on_stop(self) -> None:
         self.write_log(f"策略停止。调仓 {self.rebalance_count} 次")
