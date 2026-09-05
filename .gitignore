@@ -30,6 +30,16 @@ reports/**/*.html
 !strategies/**/models/*.zip
 !strategies/**/models/*.pt
 
+# 但**中间缓存不算产物**。features_*.pkl 是 Alpha158 的计算缓存，
+# 1.6 GB 一份，且每次改因子都会重写。它曾以普通 git 对象进了两次历史
+# （1644 MB + 1568 MB），把 .git 撑到 2.3 GB，并且超过 GitHub 的
+# 100 MB 单文件上限，导致整个仓库推不上去。
+#
+# 判断标准：能从源数据重算出来的就不入库。这份缓存 20 分钟可重建，
+# 而 scores.parquet 是训练结果、重训即永久丢失，两者性质不同。
+strategies/**/models/features_*.pkl
+strategies/**/models/*_cache.pkl
+
 # 策略运行时状态：回撤峰值是本机实盘记录，不该跟着代码走。
 # 换机器要手动迁移，删掉等于抹掉回撤记忆（见 drawdown.py）
 strategies/**/state/
