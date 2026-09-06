@@ -1,0 +1,24 @@
+{
+  "symbol": "920368.BSE",
+  "model": "LightGBMClassifier",
+  "horizon_bars": 15,
+  "features": [
+    "ret1",
+    "ret3",
+    "ret5",
+    "ret10",
+    "ma_gap",
+    "rsi",
+    "vol_z",
+    "vwap_gap",
+    "tod"
+  ],
+  "train_start": "2025-09-08 09:30:00",
+  "train_end": "2026-05-25 15:00:00",
+  "test_start": "2026-05-26 09:30:00",
+  "test_end": "2026-09-04 14:45:00",
+  "train_samples": 40488,
+  "test_samples": 17578,
+  "accuracy": 0.5774263283650017,
+  "auc": 0.5272970854085962
+}
