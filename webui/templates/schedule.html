@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}定时任务 · 量化管理台{% endblock %}
+{% block body %}
+
+<div class="row" style="justify-content:space-between">
+  <div>
+    <h1>定时任务</h1>
+    <div class="sub">管理台进程运行期间生效 —— 关掉服务，定时也随之停止</div>
+  </div>
+  <span class="tag {{ 't-ok' if scheduler_on else 't-err' }}">
+    调度线程{{ '运行中' if scheduler_on else '未启动' }}</span>
+</div>
+
+<div class="note">
+  <b>交易日按周一至周五判定，不含法定节假日。</b>
+  节假日会照常触发，但下载脚本取不到新数据、导出重跑相同内容，结果无害，
+  日志中会提示「日历最后一天未推进」。<br>
+  <b>错过会在窗口内补跑</b>：若 08:40 的计划因关机未执行，开机后扫描会立刻补上。
+  但补跑有有效期 —— 晚上 9 点才来跑「盘前补齐」没有意义，
+  因此盘前窗口设 2 小时（过了开盘即失效），盘后设 8 小时（当晚开机补上今日数据仍有用）。
+</div>
+
+{% for s in schedules %}
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:12px">
+    <div>
+      <b style="font-size:14.5px">{{ s.name }}</b>
+      <span class="tag t-mut" style="margin-left:8px">{{ s.task_name }}</span>
+      {% if s.ran_today %}<span class="tag t-ok">今日已执行</span>{% endif %}
+    </div>
+    <label class="row" style="gap:6px;cursor:pointer">
+      <input type="checkbox" style="width:auto" {{ 'checked' if s.enabled }}
+             onchange="toggle('{{ s.id }}', this.checked)">
+      <span style="font-size:13px">{{ '已启用' if s.enabled else '已停用' }}</span>
+    </label>
+  </div>
+
+  <div class="grid" style="grid-template-columns:110px 110px 1fr auto;align-items:end;gap:14px">
+    <label style="font-size:12px;color:var(--muted)">
+      触发时间
+      <input id="t-{{ s.id }}" value="{{ s.time }}" style="margin-top:4px">
+    </label>
+
+    <label style="font-size:12px;color:var(--muted)">
+      补跑窗口(小时)
+      <input id="c-{{ s.id }}" value="{{ s.catchup_hours }}" style="margin-top:4px">
+    </label>
+
+    <div style="font-size:12px;color:var(--muted)">
+      执行日
+      <div class="row" style="gap:10px;margin-top:7px">
+        {% for i in range(7) %}
+        <label class="row" style="gap:4px;cursor:pointer">
+          <input type="checkbox" style="width:auto" value="{{ i }}"
+                 data-sched="{{ s.id }}"
+                 {{ 'checked' if i in s.weekdays }}>
+          <span>周{{ weekday_names[i] }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="row">
+      <button onclick="save('{{ s.id }}')">保存</button>
+      <button class="primary" onclick="runNow('{{ s.id }}')">立即执行</button>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:12px;font-size:12px;color:var(--muted);gap:18px">
+    <span>下次：<b style="color:var(--ink)">{{ s.next_hint }}</b></span>
+    {% if s.params %}
+    <span>参数：{% for k, v in s.params.items() %}{{ k }}={{ v }} {% endfor %}</span>
+    {% endif %}
+    {% if s.last_run_date %}
+    <span>上次：{{ s.last_run_date }}
+      {% if s.last_job_id %}
+      · <a href="/jobs/{{ s.last_job_id }}">查看日志</a>{% endif %}
+    </span>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+<h2>建议的一天</h2>
+<div class="card">
+  <table>
+    <thead><tr><th style="width:90px">时间</th><th>动作</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>08:40</td><td>盘前补齐行情</td>
+          <td style="color:var(--muted)">补昨夜遗漏，为信号生成备好数据</td></tr>
+      <tr><td>09:15</td><td>生成交易信号</td>
+          <td style="color:var(--muted)">基于前一日收盘数据，开盘前算好</td></tr>
+      <tr><td>09:31</td><td>执行下单</td>
+          <td style="color:var(--muted)">避开集合竞价；建议先预览再执行</td></tr>
+      <tr><td>15:20</td><td>盘后更新行情</td>
+          <td style="color:var(--muted)">收盘 20 分钟后，日线已定稿</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:12px;font-size:12.5px;color:var(--muted)">
+    信号生成与下单没有做成定时任务 —— 下单会产生真实委托，
+    应当人工确认后再执行。到<a href="/tasks">运行任务</a>页手动触发。
+  </div>
+</div>
+
+{% endblock %}
+{% block script %}
+<script>
+async function toggle(id, on){
+  await fetch('/api/schedule/'+id+'/enabled', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({enabled:on})});
+  location.reload();
+}
+
+async function save(id){
+  const time = document.getElementById('t-'+id).value;
+  const days = [...document.querySelectorAll(`input[data-sched="${id}"]:checked`)]
+    .map(e => parseInt(e.value));
+  const catchup = parseFloat(document.getElementById('c-'+id).value);
+  const r = await fetch('/api/schedule/'+id, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({time, weekdays: days, catchup_hours: catchup})});
+  const d = await r.json();
+  if(d.ok){ location.reload(); } else { alert('保存失败：'+d.error); }
+}
+
+async function runNow(id){
+  if(!confirm('立即执行该任务？')) return;
+  const r = await fetch('/api/schedule/'+id+'/run', {method:'POST'});
+  const d = await r.json();
+  if(d.ok){ location.href = '/jobs/'+d.job_id; }
+  else { alert('启动失败：'+d.error); }
+}
+</script>
+{% endblock %}

@@ -71,7 +71,7 @@ def save_state(store: Path, state: dict) -> None:
 
 
 def clean_bars_layer(store: Path, rebuild: bool, limit: int = 0,
-                     interval: str = "1d") -> dict:
+                     interval: str = "1d", symbols: set[str] | None = None) -> dict:
     """把 data/<interval>/ 清洗到 data/clean/<interval>/。"""
     import pandas as pd
 
@@ -83,6 +83,9 @@ def clean_bars_layer(store: Path, rebuild: bool, limit: int = 0,
         return {"error": f"源目录不存在: {src_root}"}
 
     files = sorted(src_root.rglob("*.parquet"))
+    if symbols:
+        files = [p for p in files if f"{p.stem}.{p.parent.name}" in symbols
+                 or p.stem in symbols]
     if limit:
         files = files[:limit]
 
@@ -338,6 +341,8 @@ def main() -> int:
                     default=["bars", "financial", "flow"],
                     help="要清洗的数据类型")
     p.add_argument("--report", action="store_true", help="只显示上次报告")
+    p.add_argument("--symbols", nargs="*", default=[],
+                   help="仅处理指定标的，例如 920368.BSE")
     args = p.parse_args()
 
     from qmtquant.config import get_config
@@ -374,7 +379,8 @@ def main() -> int:
     if "bars" in args.types:
         for interval in args.intervals:
             print(f"\n[{interval} K 线]")
-            report(clean_bars_layer(store, args.rebuild, args.limit, interval),
+            report(clean_bars_layer(store, args.rebuild, args.limit, interval,
+                                    set(args.symbols) or None),
                    interval)
 
     if "financial" in args.types:

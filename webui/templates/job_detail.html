@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{{ job.task_name }} · 运行记录{% endblock %}
+{% block body %}
+
+<div class="row" style="justify-content:space-between">
+  <div>
+    <h1>{{ job.task_name }}</h1>
+    <div class="sub">{{ job.id }}</div>
+  </div>
+  <div class="row">
+    <span id="badge">
+      {% if job.status=='running' %}<span class="tag t-run">运行中</span>
+      {% elif job.status=='success' %}<span class="tag t-ok">成功</span>
+      {% elif job.status=='failed' %}<span class="tag t-err">失败 ({{ job.returncode }})</span>
+      {% elif job.status=='killed' %}<span class="tag t-warn">已停止</span>
+      {% else %}<span class="tag t-mut">{{ job.status }}</span>{% endif %}
+    </span>
+    {% if job.status=='running' %}
+    <button class="danger" onclick="stopJob()">停止任务</button>
+    {% endif %}
+    <a class="btn" href="/jobs">返回列表</a>
+  </div>
+</div>
+
+<div class="card">
+  <table>
+    <tr><td style="width:110px">启动时间</td>
+        <td>{{ job.started_at.replace('T',' ') }}</td></tr>
+    <tr><td>结束时间</td>
+        <td>{{ job.finished_at.replace('T',' ') if job.finished_at else '—' }}</td></tr>
+    <tr><td>耗时</td><td>{{ job.duration_s|dur }}</td></tr>
+    <tr><td>命令</td>
+        <td><code style="font-size:12px;word-break:break-all">
+          {{ job.cmd|join(' ') }}</code></td></tr>
+  </table>
+</div>
+
+<h2>日志</h2>
+<pre class="log" id="log">{{ log }}</pre>
+
+{% endblock %}
+{% block script %}
+<script>
+const running = {{ 'true' if job.status=='running' else 'false' }};
+const logEl = document.getElementById('log');
+
+async function stopJob(){
+  if(!confirm('确定停止该任务？')) return;
+  await fetch('/api/stop/{{ job.id }}', {method:'POST'});
+  location.reload();
+}
+
+if(running){
+  // 只在用户已滚到底部时才自动跟随，避免翻看历史日志时被拽走
+  setInterval(async ()=>{
+    const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+    const r = await fetch('/api/log/{{ job.id }}');
+    const d = await r.json();
+    logEl.textContent = d.log;
+    if(atBottom) logEl.scrollTop = logEl.scrollHeight;
+    if(d.status !== 'running') location.reload();
+  }, 3000);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+</script>
+{% endblock %}

@@ -21,13 +21,16 @@
 import argparse
 from datetime import datetime
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
+from pathlib import Path
 from plotly.offline import get_plotlyjs
 
 from . import data_browser, jobs, loaders, scheduler
 from .registry import TASKS, TASK_BY_ID
 
 app = Flask(__name__)
+INTRADAY_DIR = Path(__file__).resolve().parents[1] / "strategies" / "intraday_t_920368" / "backtest"
+INTRADAY_MODEL_DIR = Path(__file__).resolve().parents[1] / "strategies" / "intraday_t_920368" / "models"
 
 
 @app.template_filter("dur")
@@ -70,6 +73,57 @@ def experiments():
         sweep=loaders.sweep_figure(),
         subperiod=loaders.subperiod_table(),
     )
+
+
+@app.route("/backtests")
+def backtests():
+    """已保存模型回测成绩单。"""
+    return render_template("backtests.html", results=loaders.backtest_results())
+
+
+@app.route("/intraday-t-920368")
+def intraday_t_page():
+    import json
+    summary = {}
+    metrics = {}
+    metric_path = INTRADAY_MODEL_DIR / "gbm_metrics.json"
+    if not metric_path.exists():
+        metric_path = INTRADAY_MODEL_DIR / "model_metrics.json"
+    for p, target in [(INTRADAY_DIR / "summary.json", summary), (metric_path, metrics)]:
+        if p.exists():
+            try:
+                target.update(json.loads(p.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+    return render_template("intraday_t.html", summary=summary, metrics=metrics)
+
+
+@app.route("/intraday-t-920368/report.html")
+def intraday_t_report():
+    report = INTRADAY_DIR / "report.html"
+    if not report.exists():
+        return "报告尚未生成", 404
+    return send_file(report)
+
+
+@app.route("/api/intraday-t-920368")
+def api_intraday_t():
+    import json
+    f = request.args.get("file", "")
+    if f in {"equity", "trades"}:
+        p = INTRADAY_DIR / f"{f}.csv"
+        if not p.exists():
+            return jsonify(ok=False, error="文件不存在"), 404
+        return send_file(p, mimetype="text/csv", as_attachment=False)
+    out = {}
+    metric_path = INTRADAY_MODEL_DIR / "gbm_metrics.json"
+    if not metric_path.exists():
+        metric_path = INTRADAY_MODEL_DIR / "model_metrics.json"
+    for name, p in (("summary", INTRADAY_DIR / "summary.json"), ("model", metric_path)):
+        if p.exists():
+            try: out[name] = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError): out[name] = {}
+    return jsonify(out)
 
 
 @app.route("/tasks")
@@ -226,6 +280,12 @@ def api_stop(job_id):
 @app.get("/api/jobs")
 def api_jobs():
     return jsonify(jobs.list_jobs(limit=30))
+
+
+@app.get("/api/backtests")
+def api_backtests():
+    """以 JSON 形式提供成绩单，便于外部监控或二次展示。"""
+    return jsonify(loaders.backtest_results())
 
 
 @app.get("/api/log/<job_id>")

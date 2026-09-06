@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}920368 日内做T{% endblock %}
+{% block body %}
+<h1>920368.BSE 日内做 T 策略</h1>
+<div class="sub">1分钟行情 · 底仓 100,000 元 · T 仓 100,000 元 · 每个交易日评估，满足信号才执行一轮</div>
+{% if not summary %}<div class="empty">尚未找到回测结果，请先运行 strategies/intraday_t_920368/run_backtest.py。</div>{% else %}
+<div class="grid g4">
+  <div class="kpi"><div class="l">样本外区间</div><div class="v" style="font-size:16px">{{ summary.start_date }} ~ {{ summary.end_date }}</div><div class="s">{{ summary.oos_days }} 个交易日</div></div>
+  <div class="kpi {{ 'good' if summary.drawdown_ok else 'bad' }}"><div class="l">最大回撤</div><div class="v">{{ '%.2f'|format(summary.max_drawdown * 100) }}%</div><div class="s">上限 15%</div></div>
+  <div class="kpi {{ 'good' if summary.total_return >= 0 else 'bad' }}"><div class="l">总收益</div><div class="v">{{ '%.2f'|format(summary.total_return * 100) }}%</div><div class="s">期末 {{ '%.0f'|format(summary.final_capital) }} 元</div></div>
+  <div class="kpi"><div class="l">交易笔数</div><div class="v">{{ summary.total_trades }}</div><div class="s">手续费 {{ '%.2f'|format(summary.total_commission) }} 元</div></div>
+  <div class="kpi {{ 'good' if summary.t_realized_pnl >= 0 else 'bad' }}"><div class="l">T累计实现盈亏</div><div class="v">{{ '%.2f'|format(summary.t_realized_pnl) }} 元</div><div class="s">完成 {{ summary.t_rounds }} 轮</div></div>
+  <div class="kpi"><div class="l">每股降本</div><div class="v">{{ '%.4f'|format(summary.t_cost_reduction_per_share) }} 元</div><div class="s">仅统计已完成卖高买低</div></div>
+</div>
+<div class="card"><div class="row"><a class="btn primary" href="/intraday-t-920368/report.html" target="_blank">打开可视化回测报告</a><a class="btn" href="/api/intraday-t-920368">查看 JSON</a></div></div>
+<div class="grid g2">
+<div class="card"><h2>策略与风控</h2><table><tbody>
+<tr><td>底仓</td><td class="num">100,000 元（正常情况下每日不动）</td></tr><tr><td>T仓</td><td class="num">100,000 元（10:15 卖出，14:30 当日回补）</td></tr><tr><td>风控规则</td><td class="num">{{ summary.risk_rule }}</td></tr><tr><td>做T依据</td><td class="num">{{ summary.signal_rule }}</td></tr><tr><td>执行原则</td><td class="num">无价差或模型依据时不主动卖出；已卖出仓位14:30必须回补，不留隔夜裸卖仓</td></tr><tr><td>回撤合规</td><td class="num">{{ '通过' if summary.drawdown_ok else '未通过' }}</td></tr>
+</tbody></table></div>
+<div class="card"><h2>模型训练</h2><table><tbody>
+<tr><td>模型</td><td class="num">{{ metrics.model or 'LightGBMClassifier' }}</td></tr><tr><td>训练样本</td><td class="num">{{ metrics.train_samples }}</td></tr><tr><td>测试样本</td><td class="num">{{ metrics.test_samples }}</td></tr><tr><td>测试准确率</td><td class="num">{{ '%.2f'|format(metrics.accuracy * 100) }}%</td></tr><tr><td>AUC</td><td class="num">{{ '%.3f'|format(metrics.auc) }}</td></tr>
+</tbody></table></div></div>
+<div class="card"><h2>下载结果文件</h2><div class="row"><a href="/intraday-t-920368/report.html" target="_blank">report.html</a><a href="/api/intraday-t-920368?file=equity">equity.csv</a><a href="/api/intraday-t-920368?file=trades">trades.csv</a></div></div>
+{% endif %}
+{% endblock %}

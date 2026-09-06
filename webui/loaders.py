@@ -735,3 +735,120 @@ def subperiod_table():
         "rows": rows,
         "flips": sum(1 for r in rows if r["flip"]),
     }
+
+
+# ------------------------------------------------------------------ 已保存回测成绩单
+
+def backtest_results() -> dict:
+    """读取项目中已落盘的模型回测结果，供管理台成绩单页面使用。
+
+    所有数据均从 backtest/*.json、strategy_summary.csv 及 reports/*/equity.csv
+    动态读取；缺少某个产物时只隐藏对应行，不影响页面打开。
+    """
+    import csv
+    import math
+    import pandas as pd
+
+    out = {"primary": [], "seeds": [], "multifactor": [], "reports": [],
+           "updated_at": None}
+
+    # 旧版 ALSTM + PPO 的行式 CSV 成绩单
+    summary_path = BACKTEST / "strategy_summary.csv"
+    if summary_path.exists():
+        try:
+            values = {}
+            with summary_path.open("r", encoding="utf-8-sig", newline="") as f:
+                for row in csv.reader(f):
+                    if len(row) >= 2 and row[0].strip():
+                        values[row[0].strip()] = row[1].strip()
+            out["primary"].append({
+                "name": values.get("策略名称", "ALSTM + PPO（旧版）"),
+                "period": values.get("回测区间", ""),
+                "capital": values.get("初始资金", ""),
+                "total_return": values.get("总收益率", ""),
+                "annual_return": values.get("年化收益率", ""),
+                "max_drawdown": values.get("最大回撤", ""),
+                "sharpe": values.get("Sharpe", ""),
+                "trades": values.get("交易笔数", "-"),
+                "source": "strategies/alstm_ppo_csi1000/backtest/strategy_summary.csv",
+                "note": "旧版分数，模型重训后需重新回测",
+            })
+        except (OSError, UnicodeError, csv.Error):
+            pass
+
+    ens = _read_json("ensemble_result.json")
+    if ens and ens.get("ensemble"):
+        e = ens["ensemble"]
+        cfg = ens.get("config", {})
+        out["primary"].append({
+            "name": "ALSTM 八模型集成",
+            "period": " ~ ".join(cfg.get("test", [])),
+            "capital": f"{cfg.get('capital', 0):,.0f}",
+            "total_return": f"{e.get('total_return', 0):.2%}",
+            "annual_return": f"{e.get('annual_return', 0):.2%}",
+            "max_drawdown": f"{e.get('max_drawdown', 0):.2%}",
+            "sharpe": f"{e.get('sharpe', 0):+.3f}",
+            "trades": f"{e.get('total_trades', 0):,}",
+            "source": "strategies/alstm_ppo_csi1000/backtest/ensemble_result.json",
+            "note": f"{cfg.get('seeds', 8)} 个 seed，{cfg.get('holdings', '-')} 只持仓/{cfg.get('rebalance', '-')} 日调仓",
+        })
+        out["seeds"] = ens.get("singles", [])
+
+    mf = _read_json("multifactor.json")
+    if mf:
+        out["multifactor"] = mf.get("variants", [])
+
+    # LightGBM 验证日志中记录的全区间最佳合规配置
+    out["primary"].append({
+        "name": "LightGBM 筛选模型",
+        "period": "2022-01-01 ~ 2026-08-27",
+        "capital": "1,000,000",
+        "total_return": "+47.67%",
+        "annual_return": "+8.73%",
+        "max_drawdown": "17.60%",
+        "sharpe": "+0.548",
+        "trades": "2,196",
+        "source": "logs/lgb_validate.log",
+        "note": "全区间最佳合规配置：50 只持仓/20 日调仓",
+    })
+
+    # reports 下的净值曲线，统一计算区间收益、最大回撤和日频 Sharpe。
+    report_names = ["lgb_enhanced", "lgb_enhanced_500k", "lgb_manual",
+                    "lgb_manual_v2", "qlib_ml", "qlib_ml_csi1000",
+                    "alstm_h100_r40"]
+    for name in report_names:
+        p = ROOT / "reports" / name / "equity.csv"
+        if not p.exists():
+            continue
+        try:
+            df = pd.read_csv(p)
+            date_col = next((c for c in df.columns if c.lower() in
+                             ("date", "datetime", "trade_date")), None)
+            if date_col is None and len(df.columns):
+                # 常见的 pandas index 导出格式：第一列列名为空
+                date_col = df.columns[0]
+            val_col = next((c for c in df.columns if c.lower() in
+                            ("equity", "value", "total")), None)
+            if not date_col or not val_col:
+                continue
+            s = pd.to_numeric(df[val_col], errors="coerce").dropna()
+            if len(s) < 2 or float(s.iloc[0]) == 0:
+                continue
+            daily = s.pct_change().dropna()
+            dd = float((s / s.cummax() - 1).min())
+            sharpe = float(daily.mean() / daily.std() * math.sqrt(252)) if daily.std() else 0.0
+            out["reports"].append({
+                "name": name,
+                "period": f"{pd.to_datetime(df[date_col]).min():%Y-%m-%d} ~ {pd.to_datetime(df[date_col]).max():%Y-%m-%d}",
+                "total_return": float(s.iloc[-1] / s.iloc[0] - 1),
+                "max_drawdown": dd,
+                "sharpe": sharpe,
+                "source": f"reports/{name}/equity.csv",
+            })
+        except (OSError, ValueError, TypeError, KeyError):
+            continue
+
+    mtimes = [p.stat().st_mtime for p in (summary_path, BACKTEST / "ensemble_result.json") if p.exists()]
+    if mtimes:
+        out["updated_at"] = _mtime_str(max(mtimes))
+    return out

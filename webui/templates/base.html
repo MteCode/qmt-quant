@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}量化管理台{% endblock %}</title>
+<script src="/plotly.js"></script>
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#1c2333; --muted:#7b8494;
+  --line:#e5e8ee; --accent:#2c7be5; --up:#e04b4b; --down:#2e9e5b;
+  --warn:#d98324; --radius:10px;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#12151c; --card:#1a1f29; --ink:#e6e9ef; --muted:#8a94a6;
+         --line:#272d3a; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+header{background:var(--card);border-bottom:1px solid var(--line);
+  position:sticky;top:0;z-index:10}
+.nav{max-width:1180px;margin:0 auto;padding:0 20px;display:flex;
+  align-items:center;gap:4px;height:54px}
+.brand{font-weight:600;font-size:15px;margin-right:20px;white-space:nowrap}
+.nav a{padding:7px 13px;border-radius:7px;color:var(--muted);font-weight:500}
+.nav a:hover{background:var(--bg);text-decoration:none}
+.nav a.on{background:var(--accent);color:#fff}
+.nav .sp{margin-left:auto;color:var(--muted);font-size:12px}
+
+main{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
+h1{font-size:19px;margin:0 0 4px}
+h2{font-size:15px;margin:26px 0 12px;font-weight:600}
+.sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+
+.card{background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:16px;margin-bottom:14px}
+.grid{display:grid;gap:14px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr}}
+
+.kpi{background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:14px 16px}
+.kpi .l{color:var(--muted);font-size:12px}
+.kpi .v{font-size:23px;font-weight:600;margin:3px 0;
+  font-variant-numeric:tabular-nums}
+.kpi .s{color:var(--muted);font-size:11.5px}
+.kpi.bad .v{color:var(--up)}
+.kpi.good .v{color:var(--down)}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500;font-size:12px}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tbody tr:last-child td{border-bottom:none}
+
+.tag{display:inline-block;padding:2px 8px;border-radius:20px;
+  font-size:11.5px;font-weight:500}
+.t-run{background:rgba(44,123,229,.14);color:var(--accent)}
+.t-ok{background:rgba(46,158,91,.14);color:var(--down)}
+.t-err{background:rgba(224,75,75,.14);color:var(--up)}
+.t-mut{background:var(--bg);color:var(--muted)}
+.t-warn{background:rgba(217,131,36,.15);color:var(--warn)}
+
+button,.btn{font:inherit;padding:7px 15px;border-radius:7px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);
+  cursor:pointer;font-weight:500}
+button:hover{border-color:var(--accent);color:var(--accent)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.primary:hover{opacity:.9;color:#fff}
+button.danger{background:var(--up);border-color:var(--up);color:#fff}
+button.danger:hover{opacity:.9;color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+input,select{font:inherit;padding:6px 9px;border:1px solid var(--line);
+  border-radius:6px;background:var(--bg);color:var(--ink);width:100%}
+
+pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
+  overflow:auto;max-height:560px;font:12px/1.55 "Cascadia Mono",Consolas,monospace;
+  white-space:pre-wrap;word-break:break-all;margin:0}
+.empty{color:var(--muted);text-align:center;padding:34px 16px;font-size:13px}
+.note{border-left:3px solid var(--warn);padding:9px 13px;
+  background:rgba(217,131,36,.07);border-radius:0 7px 7px 0;
+  font-size:12.5px;color:var(--muted);margin-bottom:14px}
+.note b{color:var(--ink)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header><nav class="nav">
+  <span class="brand">量化管理台</span>
+  {% set p = request.path %}
+  <a href="/"            class="{{ 'on' if p=='/' }}">总览</a>
+  <a href="/selection"   class="{{ 'on' if p=='/selection' }}">实盘执行</a>
+  <a href="/data"        class="{{ 'on' if p=='/data' }}">数据核对</a>
+  <a href="/experiments" class="{{ 'on' if p=='/experiments' }}">实验结果</a>
+  <a href="/backtests" class="{{ 'on' if p=='/backtests' }}">回测成绩</a>
+  <a href="/intraday-t-920368" class="{{ 'on' if p.startswith('/intraday-t-920368') }}">920368做T</a>
+  <a href="/tasks"       class="{{ 'on' if p=='/tasks' }}">运行任务</a>
+  <a href="/schedule"    class="{{ 'on' if p=='/schedule' }}">定时任务</a>
+  <a href="/jobs"        class="{{ 'on' if p.startswith('/jobs') }}">运行记录</a>
+  <span class="sp" id="clock"></span>
+</nav></header>
+<main>{% block body %}{% endblock %}</main>
+<script>
+const el=document.getElementById('clock');
+setInterval(()=>{el.textContent=new Date().toLocaleTimeString('zh-CN')},1000);
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}运行记录 · 量化管理台{% endblock %}
+{% block body %}
+<h1>运行记录</h1>
+<div class="sub">日志留存在 webui/jobs/，关掉浏览器不影响任务运行</div>
+
+{% if error %}<div class="note"><b>{{ error }}</b></div>{% endif %}
+
+<div class="card">
+{% if rows %}
+<table>
+  <thead><tr>
+    <th>任务</th><th>启动时间</th><th class="num">耗时</th>
+    <th class="num">状态</th><th class="num"></th>
+  </tr></thead>
+  <tbody>
+  {% for j in rows %}
+  <tr>
+    <td><a href="/jobs/{{ j.id }}">{{ j.task_name }}</a></td>
+    <td style="color:var(--muted)">{{ j.started_at.replace('T',' ') }}</td>
+    <td class="num" style="color:var(--muted)">{{ j.duration_s|dur }}</td>
+    <td class="num">
+      {% if j.status=='running' %}<span class="tag t-run">运行中</span>
+      {% elif j.status=='success' %}<span class="tag t-ok">成功</span>
+      {% elif j.status=='failed' %}<span class="tag t-err">失败 ({{ j.returncode }})</span>
+      {% elif j.status=='killed' %}<span class="tag t-warn">已停止</span>
+      {% else %}<span class="tag t-mut">{{ j.status }}</span>{% endif %}
+    </td>
+    <td class="num"><a href="/jobs/{{ j.id }}">日志</a></td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">还没有运行记录。到<a href="/tasks">运行任务</a>页启动一个。</div>
+{% endif %}
+</div>
+{% endblock %}

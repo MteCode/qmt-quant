@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}运行任务 · 量化管理台{% endblock %}
+{% block body %}
+
+<h1>运行任务</h1>
+<div class="sub">同一任务不允许并发 —— 训练脚本会覆盖同一批产物</div>
+
+<div class="grid g2">
+{% for t in tasks %}
+<div class="card">
+  <div class="row" style="justify-content:space-between;margin-bottom:6px">
+    <b style="font-size:14.5px">{{ t.name }}</b>
+    <div class="row">
+      {% if t.dangerous %}<span class="tag t-err">会真实下单</span>{% endif %}
+      {% if t.eta %}<span class="tag t-mut">{{ t.eta }}</span>{% endif %}
+    </div>
+  </div>
+  <div style="color:var(--muted);font-size:12.5px;margin-bottom:12px">
+    {{ t.desc }}</div>
+
+  <form onsubmit="return runTask(event,'{{ t.id }}',{{ 'true' if t.dangerous else 'false' }})">
+    {% if t.params %}
+    <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:12px">
+      {% for p in t.params %}
+      <label style="font-size:12px;color:var(--muted)">
+        {{ p.label }}
+        {% if p.kind == 'bool' %}
+        <div style="margin-top:5px">
+          <input type="checkbox" name="{{ p.name }}" style="width:auto"
+                 {{ 'checked' if p.default }}>
+        </div>
+        {% elif p.kind == 'choice' %}
+        <select name="{{ p.name }}" style="margin-top:4px">
+          {% for c in p.choices %}
+          <option value="{{ c }}" {{ 'selected' if c == p.default }}>{{ c }}</option>
+          {% endfor %}
+        </select>
+        {% else %}
+        <input name="{{ p.name }}" value="{{ p.default if p.default is not none else '' }}"
+               style="margin-top:4px">
+        {% endif %}
+        {% if p.help %}<div style="font-size:11px;opacity:.75;margin-top:3px">
+          {{ p.help }}</div>{% endif %}
+      </label>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <button type="submit" class="{{ 'danger' if t.dangerous else 'primary' }}"
+            {{ 'disabled' if t.id in running }}>
+      {% if t.id in running %}运行中…{% else %}启动{% endif %}
+    </button>
+    {% if t.id in running %}
+    <span style="color:var(--muted);font-size:12px;margin-left:8px">
+      等当前任务结束后可再次启动</span>
+    {% endif %}
+  </form>
+</div>
+{% endfor %}
+</div>
+
+{% endblock %}
+{% block script %}
+<script>
+async function runTask(ev, taskId, dangerous){
+  ev.preventDefault();
+  const form = ev.target;
+  const data = {task_id: taskId};
+  for(const el of form.elements){
+    if(!el.name) continue;
+    data[el.name] = el.type==='checkbox' ? el.checked : el.value;
+  }
+
+  // 下单类任务：非预览时必须明确确认，避免误点造成真实委托
+  if(dangerous && !data.dry_run){
+    const ok = prompt(
+      '此操作会向账户提交真实委托。\n确认请输入 yes：');
+    if(ok !== 'yes'){ alert('已取消'); return false; }
+    data.confirm = 'yes';
+  }
+
+  const btn = form.querySelector('button[type=submit]');
+  btn.disabled = true; btn.textContent = '启动中…';
+
+  const res = await fetch('/api/run', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(data)
+  });
+  const out = await res.json();
+  if(out.ok){
+    location.href = '/jobs/' + out.job_id;
+  }else{
+    alert('启动失败：' + out.error);
+    btn.disabled = false; btn.textContent = '启动';
+  }
+  return false;
+}
+</script>
+{% endblock %}

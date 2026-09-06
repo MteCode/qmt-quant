@@ -53,6 +53,22 @@ class Task:
 
 TASKS = [
     Task(
+        id="download_full_market",
+        name="下载全市场行情",
+        script="scripts/download_full_market.py",
+        desc="从 miniQMT 下载当前沪深A股行情。支持日线及分钟线；分钟线受券商限制，通常只有最近约 1 年。",
+        eta="分钟线约数十分钟至数小时",
+        params=[
+            Param("intervals", "周期（逗号分隔）", "str", "5m",
+                  help="例如 5m，或 1d,5m"),
+            Param("start", "起始日期", "str", "2025-09-01"),
+            Param("end", "结束日期", "str", "2026-09-06"),
+            Param("include_st", "包含 ST/退市风险标的", "bool", False,
+                  help="默认排除当前名称含 ST 或退字样的标的"),
+            Param("rebuild", "重新下载已有文件", "bool", False),
+        ],
+    ),
+    Task(
         id="update_market_data",
         name="更新行情",
         script="scripts/update_market_data.py",
@@ -182,6 +198,18 @@ TASKS = [
         ],
     ),
 ]
+
+# 920368 1分钟日内做T：模型训练与样本外回测
+TASKS.extend([
+    Task(id="train_intraday_t_920368", name="训练920368做T模型",
+         script="strategies/intraday_t_920368/train_gbm.py",
+         desc="用920368.BSE清洗后的1分钟数据训练LightGBM短线方向模型。",
+         eta="约1分钟", outputs=["strategies/intraday_t_920368/models/gbm_metrics.json"]),
+    Task(id="backtest_intraday_t_920368", name="回测920368日内做T",
+         script="strategies/intraday_t_920368/run_backtest.py",
+         desc="底仓10万元、T仓10万元，每日调仓并执行15%最大回撤风控。",
+         eta="约1分钟", outputs=["strategies/intraday_t_920368/backtest/report.html", "strategies/intraday_t_920368/backtest/summary.json"]),
+])
 
 TASK_BY_ID = {t.id: t for t in TASKS}
 

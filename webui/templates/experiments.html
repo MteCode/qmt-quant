@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}实验结果 · 量化管理台{% endblock %}
+{% block body %}
+
+<h1>实验结果</h1>
+<div class="sub">判断策略有没有 alpha，看的是分布与稳定性，不是单次回测的数字</div>
+
+<h2>训练随机性</h2>
+{% if seed %}
+<div class="card">{{ seed|safe }}</div>
+<div class="note">
+  同代码、同数据、同超参，<b>仅随机初始化不同</b>。若柱子有正有负，
+  说明单次训练的成绩不能代表策略水平 —— 好数字可能只是抽到了右尾。
+</div>
+{% else %}
+<div class="card empty">尚未运行多种子实验。到<a href="/tasks">运行任务</a>页启动。</div>
+{% endif %}
+
+<h2>集成能否消除随机性</h2>
+{% if scaling %}
+<div class="card">{{ scaling|safe }}</div>
+<div class="note">
+  若各模型相互独立，箱体应随集成规模<b>明显收窄</b>。
+  收不窄说明模型间高度相关 —— 同架构同数据学到的本就是同一组模式，
+  平均消不掉共同的系统性偏差，此时增加种子数收效甚微。
+</div>
+{% else %}
+<div class="card empty">尚未运行集成规模分析</div>
+{% endif %}
+
+<h2>组合参数敏感性</h2>
+{% if sweep %}
+<div class="card">{{ sweep|safe }}</div>
+<div class="note">
+  真实的结构性优势会表现为<b>连片的暖色区域</b>；
+  若只有孤立一格亮、周围全是冷色，那是参数挖掘挑出来的运气，换个参数就崩。
+</div>
+{% else %}
+<div class="card empty">尚未运行参数扫描</div>
+{% endif %}
+
+{% if subperiod %}
+<h2>跨期稳定性</h2>
+<div class="card">
+  <table>
+    <thead><tr>
+      <th>参数组合</th>
+      <th class="num">前半<br><span style="font-weight:400">{{ subperiod.period1 }}</span></th>
+      <th class="num">后半<br><span style="font-weight:400">{{ subperiod.period2 }}</span></th>
+      <th class="num">一致性</th>
+    </tr></thead>
+    <tbody>
+    {% for r in subperiod.rows %}
+    <tr>
+      <td>{{ r.config }}</td>
+      <td class="num" style="color:{{ 'var(--up)' if r.h1>0 else 'var(--down)' }}">
+        {{ '%+.3f'|format(r.h1) }}</td>
+      <td class="num" style="color:{{ 'var(--up)' if r.h2>0 else 'var(--down)' }}">
+        {{ '%+.3f'|format(r.h2) }}</td>
+      <td class="num">
+        {% if r.flip %}<span class="tag t-err">符号翻转</span>
+        {% else %}<span class="tag t-mut">一致</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="note">
+  把回测段劈成两半，同一套参数各跑一遍。
+  <b>{{ subperiod.rows|length }} 组里有 {{ subperiod.flips }} 组符号翻转</b> ——
+  翻转意味着这组参数在一段赚钱、另一段亏钱，不具备跨期稳定性。
+  能上实盘的策略应当在两段都为正。
+</div>
+{% endif %}
+
+{% endblock %}

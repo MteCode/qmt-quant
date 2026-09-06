@@ -1,0 +1,332 @@
+{% extends "base.html" %}
+{% block title %}实盘执行 · 量化管理台{% endblock %}
+{% block body %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-start">
+  <div>
+    <h1>实盘执行</h1>
+    <div class="sub">策略实际下了什么单、买了哪些股、哪些被风控拦下</div>
+  </div>
+  {% if ex and ex.dates|length > 1 %}
+  <label style="font-size:12px;color:var(--muted)">
+    交易日
+    <select onchange="location.href='/selection?date='+this.value"
+            style="margin-top:4px;min-width:150px">
+      {% for d in ex.dates %}
+      <option value="{{ d }}" {{ 'selected' if d == ex.date }}>{{ d }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+</div>
+
+{% if not ex %}
+<div class="card empty" style="padding:44px 20px">
+  <div style="font-size:15px;margin-bottom:8px">还没有实盘执行记录</div>
+  <div>先到<a href="/tasks">运行任务</a>页「生成交易信号」，再执行下单。<br>
+  建议首次先勾选「仅预览」—— 预览同样跑完整风控校验并留下记录。</div>
+</div>
+{% else %}
+
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">委托笔数</div>
+    <div class="v">{{ ex.n_total }}</div>
+    <div class="s">买 {{ ex.n_buy }} · 卖 {{ ex.n_sell }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">买入金额</div>
+    <div class="v">{{ '{:,.0f}'.format(ex.buy_amount) }}</div>
+    <div class="s">卖出 {{ '{:,.0f}'.format(ex.sell_amount) }}</div>
+  </div>
+  <div class="kpi {{ 'bad' if ex.n_blocked }}">
+    <div class="l">风控拦截</div>
+    <div class="v">{{ ex.n_blocked }}</div>
+    <div class="s">
+      {% if ex.n_blocked %}未送出交易所{% else %}全部通过{% endif %}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">执行模式</div>
+    <div class="v" style="font-size:17px;padding:5px 0">
+      {% if ex.has_live %}实盘{% else %}仅预览{% endif %}</div>
+    <div class="s">
+      {% if ex.has_live %}{{ ex.n_live }} 笔真实委托{% else %}未产生真实委托{% endif %}</div>
+  </div>
+</div>
+
+{% if ex.reasons %}
+<div class="note">
+  <b>拦截原因：</b>
+  {% for r, n in ex.reasons %}{{ r }} × {{ n }}{% if not loop.last %} · {% endif %}{% endfor %}
+  <br>同一原因反复出现说明是系统性问题，而非偶发 ——
+  例如「可卖数量不足」多为 T+1 当日买入不可卖，
+  「单笔委托金额超限」需调整风控阈值或减少单只投入。
+</div>
+{% endif %}
+
+<h2>委托明细</h2>
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr>
+      <th style="width:74px">时间</th>
+      <th>标的</th>
+      <th>行业</th>
+      <th style="width:52px">方向</th>
+      <th class="num">数量</th>
+      <th class="num">价格</th>
+      <th class="num">金额</th>
+      <th style="width:92px">结果</th>
+      <th>说明</th>
+    </tr></thead>
+    <tbody>
+    {% for r in ex.rows %}
+    <tr {% if r.result == '风控拦截' %}style="opacity:.62"{% endif %}>
+      <td style="color:var(--muted);font-size:12px">{{ r.time }}</td>
+      <td>
+        <b>{{ r.name }}</b>
+        <span style="color:var(--muted);font-size:11.5px">{{ r.code }}</span>
+      </td>
+      <td style="color:var(--muted);font-size:12px">{{ r.industry or '—' }}</td>
+      <td>
+        <span class="tag {{ 't-err' if r.direction == '买' else 't-ok' }}">
+          {{ r.direction }}</span>
+      </td>
+      <td class="num">{{ r.volume }}</td>
+      <td class="num">{{ '%.2f'|format(r.price) if r.price else '市价' }}</td>
+      <td class="num">{{ '{:,.0f}'.format(r.amount) if r.amount else '—' }}</td>
+      <td>
+        {% if r.result == '风控拦截' %}<span class="tag t-err">拦截</span>
+        {% elif r.result == '已委托' %}<span class="tag t-ok">已委托</span>
+        {% else %}<span class="tag t-mut">{{ r.result }}</span>{% endif %}
+      </td>
+      <td style="color:var(--muted);font-size:12px">{{ r.reason or '—' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="note">
+  <b>「已委托」不等于「已成交」。</b>
+  这里记录的是下单动作，是否成交、成交价多少要看 miniQMT 客户端 ——
+  市价单在流动性不足或触及涨跌停时可能部分成交甚至废单。
+</div>
+
+{% endif %}
+
+<h2 class="row" style="justify-content:space-between">
+  <span>账户实际持仓</span>
+  <button onclick="refreshPos()" style="font-weight:400">刷新快照</button>
+</h2>
+
+{% if not pos %}
+<div class="card empty">
+  尚无持仓快照。点上方「刷新快照」从 miniQMT 拉取账户实际持仓（需已启动登录）。
+</div>
+{% else %}
+
+{% if pos.is_stale %}
+<div class="note">
+  <b>快照已过期</b>（{{ '%.0f'|format(pos.age_hours) }} 小时前）。
+  下方数字是当时的状态，不代表当前账户 —— 请点「刷新快照」重新拉取。
+</div>
+{% endif %}
+
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">总资产</div>
+    <div class="v">{{ '{:,.0f}'.format(pos.total_asset) }}</div>
+    <div class="s">可用 {{ '{:,.0f}'.format(pos.cash) }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">持仓市值</div>
+    <div class="v">{{ '{:,.0f}'.format(pos.market_value) }}</div>
+    <div class="s">仓位 {{ '%.1f%%'|format(pos.position_ratio * 100) }}</div>
+  </div>
+  <div class="kpi {{ 'good' if pos.total_pnl > 0 else ('bad' if pos.total_pnl < 0) }}">
+    <div class="l">浮动盈亏</div>
+    <div class="v">{{ '{:+,.0f}'.format(pos.total_pnl) }}</div>
+    <div class="s">{{ pos.n_holdings }} 只持仓</div>
+  </div>
+  <div class="kpi {{ 'bad' if pos.signal_changed }}">
+    <div class="l">与信号差异</div>
+    <div class="v" style="font-size:19px;padding:4px 0">
+      {% if pos.has_target %}
+        卖 {{ pos.to_sell|length }} · 买 {{ pos.to_buy|length }}
+      {% else %}—{% endif %}
+    </div>
+    <div class="s">
+      {% if not pos.has_target %}无信号可比
+      {% elif pos.signal_changed %}基准已过期
+      {% else %}基准 {{ pos.signal_label or '—' }}{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if pos.signal_changed and pos.has_target %}
+<div class="note">
+  <b>这份差异已失效。</b>
+  它是按快照当时的信号（{{ pos.signal_label or '未记录' }}）算的，
+  而信号在那之后已重新生成（现为 {{ pos.signal_date }}）。
+  上面的「卖 N · 买 N」对应的不是下方展示的信号 —— 请点「刷新快照」重新比对。
+</div>
+{% endif %}
+
+<div class="card" style="padding:0;overflow:hidden">
+  {% if pos.holdings %}
+  <table>
+    <thead><tr>
+      <th>标的</th><th>行业</th>
+      <th class="num">数量</th><th class="num">可卖</th>
+      <th class="num">成本</th><th class="num">市值</th>
+      <th class="num">浮动盈亏</th><th style="width:88px">信号</th>
+    </tr></thead>
+    <tbody>
+    {% for h in pos.holdings %}
+    <tr>
+      <td><b>{{ h.name }}</b>
+        <span style="color:var(--muted);font-size:11.5px">{{ h.code }}</span></td>
+      <td style="color:var(--muted);font-size:12px">{{ h.industry or '—' }}</td>
+      <td class="num">{{ h.volume }}</td>
+      <td class="num" style="color:{{ 'var(--muted)' if h.available == h.volume }}">
+        {{ h.available }}</td>
+      <td class="num">{{ '%.2f'|format(h.avg_price) }}</td>
+      <td class="num">{{ '{:,.0f}'.format(h.market_value) }}</td>
+      <td class="num" style="color:{{ 'var(--up)' if h.pnl > 0 else ('var(--down)' if h.pnl < 0 else 'var(--muted)') }}">
+        {{ '{:+,.0f}'.format(h.pnl) }}
+        <span style="font-size:11.5px">({{ '%+.2f%%'|format(h.pnl_pct * 100) }})</span>
+      </td>
+      <td>
+        {% if h.in_target %}<span class="tag t-ok">保留</span>
+        {% else %}<span class="tag t-err">应卖出</span>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty" style="padding:30px">账户当前空仓</div>
+  {% endif %}
+</div>
+
+<div class="row" style="gap:16px;font-size:12px;color:var(--muted);margin-bottom:14px">
+  <span>快照时间 {{ pos.updated_at.replace('T', ' ') }}</span>
+  <span>账号 {{ pos.account_id }}</span>
+</div>
+
+{% if pos.to_buy %}
+<h2>信号中尚未买入
+  <span style="font-weight:400;font-size:12.5px;color:var(--muted)">
+    （对照 {{ pos.signal_label or 'target_latest.csv' }} 那份信号）</span>
+</h2>
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr><th>标的</th><th>行业</th><th class="num">目标金额</th></tr></thead>
+    <tbody>
+    {% for b in pos.to_buy %}
+    <tr>
+      <td><b>{{ b.name }}</b>
+        <span style="color:var(--muted);font-size:11.5px">{{ b.code }}</span></td>
+      <td style="color:var(--muted);font-size:12px">{{ b.industry or '—' }}</td>
+      <td class="num">{{ '{:,.0f}'.format(b.target_value) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+<div class="note">
+  这些标的在信号中但账户尚未持有。可能是还没执行下单，
+  也可能是<b>执行时被跳过</b> —— 单只资金不足一手、涨停买不到、或被风控拦截。
+  对照上方委托明细可以确认是哪种。
+</div>
+{% endif %}
+
+{% endif %}
+
+<div class="grid g2">
+  {% if sel %}
+  <div>
+    <h2>当前信号（目标）</h2>
+    <div class="card">
+      <div class="row" style="margin-bottom:10px;font-size:12.5px;color:var(--muted)">
+        <span>{{ sel.date }}</span>
+        <span>{{ sel.count }} 只</span>
+        <span>仓位 {{ '%.1f%%'|format(sel.total_weight * 100) }}</span>
+        <span>{{ '{:,.0f}'.format(sel.total_value) }} 元</span>
+      </div>
+      <table>
+        <thead><tr><th>标的</th><th>行业</th>
+          <th class="num">打分</th><th class="num">金额</th></tr></thead>
+        <tbody>
+        {% for r in sel.rows %}
+        <tr>
+          <td><b>{{ r.name }}</b>
+            <span style="color:var(--muted);font-size:11.5px">{{ r.code }}</span></td>
+          <td style="color:var(--muted);font-size:12px">{{ r.industry or '—' }}</td>
+          <td class="num">{{ '%+.3f'|format(r.score) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(r.target_value) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="note">
+      这是<b>信号</b>（策略想持有什么），上方是<b>账户实际持有什么</b>。
+      两者不一致属正常 —— 整手约束、可用资金、风控都会造成偏离。
+    </div>
+  </div>
+  {% endif %}
+
+  <div>
+    {% if industry %}
+    <h2>目标持仓行业分布</h2>
+    <div class="card" style="padding:8px">{{ industry|safe }}</div>
+    {% endif %}
+
+    {% if picks %}
+    <h2>回测对照</h2>
+    <div class="card">
+      <table>
+        <tr><td>回测区间</td><td class="num">{{ picks.period }}</td></tr>
+        <tr><td>调仓次数</td><td class="num">{{ picks.n_sessions }}</td></tr>
+        <tr><td>成交笔数</td><td class="num">{{ picks.n_trades }}</td></tr>
+        <tr><td>累计手续费</td>
+            <td class="num">{{ '{:,.0f}'.format(picks.total_commission) }}</td></tr>
+      </table>
+      <div style="margin-top:10px;font-size:12.5px;color:var(--muted)">
+        回测按连续权重计算，<b style="color:var(--ink)">不模拟整手约束</b>；
+        实盘每只必须凑满 100 股整数倍，单只资金不足时会被跳过。
+        这是回测与实盘之间一处系统性差异。
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
+{% block script %}
+<script>
+async function refreshPos(){
+  const btn = event.target;
+  const r = await fetch('/api/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({task_id:'snapshot_positions'})});
+  const d = await r.json();
+  if(!d.ok){ alert('启动失败：'+d.error); return; }
+
+  // 快照只要十几秒，原地等比跳到日志页更顺手
+  btn.disabled = true; btn.textContent = '拉取中…';
+  for(let i=0; i<30; i++){
+    await new Promise(res => setTimeout(res, 1500));
+    const s = await (await fetch('/api/log/'+d.job_id)).json();
+    if(s.status === 'running') continue;
+    if(s.status === 'success'){ location.reload(); return; }
+    // 失败多半是 miniQMT 没启动，直接把日志摆出来
+    alert('快照失败：\n\n' + s.log.split('\n').slice(-8).join('\n'));
+    location.href = '/jobs/' + d.job_id;
+    return;
+  }
+  location.href = '/jobs/' + d.job_id;
+}
+</script>
+{% endblock %}

@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% block title %}总览 · 量化管理台{% endblock %}
+{% block body %}
+
+<h1>ALSTM + PPO · 中证 1000</h1>
+<div class="sub">样本外 2022-01 ~ 2026-08 · 数据截至 {{ now }}</div>
+
+{% if overview.metrics %}
+<div class="grid g4">
+  {% for m in overview.metrics %}
+  <div class="kpi {{ 'bad' if m.bad }}">
+    <div class="l">{{ m.label }}</div>
+    <div class="v">{{ m.value }}</div>
+    <div class="s">{{ m.sub }}</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if running %}
+<h2>正在运行</h2>
+{% for j in running %}
+<div class="card row" style="justify-content:space-between">
+  <div>
+    <span class="tag t-run">运行中</span>
+    <b style="margin-left:8px">{{ j.task_name }}</b>
+    <span style="color:var(--muted);margin-left:8px">
+      启动于 {{ j.started_at }}</span>
+  </div>
+  <div class="row">
+    <a class="btn" href="/jobs/{{ j.id }}">查看日志</a>
+    <button class="danger" onclick="stopJob('{{ j.id }}')">停止</button>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<h2>回测表现</h2>
+{% if equity or drawdown %}
+<div class="grid g2">
+  {% if equity %}<div class="card">{{ equity|safe }}</div>{% endif %}
+  {% if drawdown %}<div class="card">{{ drawdown|safe }}</div>{% endif %}
+</div>
+{% else %}
+<div class="card empty">尚无回测产物。到<a href="/tasks">运行任务</a>页跑一次训练。</div>
+{% endif %}
+
+<div class="grid g2">
+  <div>
+    <h2>模型产物</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>文件</th><th class="num">大小</th><th class="num">更新时间</th></tr></thead>
+        <tbody>
+        {% for m in overview.models %}
+        <tr>
+          <td>{{ m.label }}</td>
+          <td class="num">{% if m.size_kb %}{{ '%.0f'|format(m.size_kb) }} KB{% else %}-{% endif %}</td>
+          <td class="num">
+            {% if m.mtime == '缺失' %}<span class="tag t-err">缺失</span>
+            {% else %}{{ m.mtime }}{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <h2>风控状态</h2>
+    <div class="card">
+      {% if overview.risk %}
+      {% set r = overview.risk %}
+      <table>
+        <tr><td>当前档位</td><td class="num">
+          <span class="tag {{ 't-ok' if r.level=='正常' else 't-warn' }}">{{ r.level }}</span>
+        </td></tr>
+        <tr><td>当前回撤</td><td class="num">{{ '%.2f%%'|format(r.drawdown*100) }}</td></tr>
+        <tr><td>峰值净值</td><td class="num">{{ '{:,.0f}'.format(r.peak) }}</td></tr>
+        <tr><td>已观测</td><td class="num">{{ r.observations }} 天</td></tr>
+        <tr><td>峰值重置</td><td class="num">{{ r.peak_resets }} 次</td></tr>
+        <tr><td>更新于</td><td class="num">{{ r.updated_at or '-' }}</td></tr>
+      </table>
+      {% else %}
+      <div class="empty">风控状态未初始化 —— 尚未运行过盘中监控或下单</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div>
+    <h2 class="row" style="justify-content:space-between">
+      <span>最新信号</span>
+      <a href="/selection" style="font-size:12.5px;font-weight:400">查看全部选股 →</a>
+    </h2>
+    <div class="card">
+      {% if overview.signal %}
+      {% set s = overview.signal %}
+      <div class="row" style="margin-bottom:12px">
+        <span>{{ s.count }} 只</span>
+        {% if s.weight %}<span>仓位 {{ '%.1f%%'|format(s.weight*100) }}</span>{% endif %}
+        {% if s.value %}<span>{{ '{:,.0f}'.format(s.value) }} 元</span>{% endif %}
+        <span style="color:var(--muted)">{{ s.mtime }}</span>
+      </div>
+      <table>
+        <thead><tr><th>标的</th><th class="num">分数</th><th class="num">金额</th></tr></thead>
+        <tbody>
+        {% for row in s.rows %}
+        <tr>
+          <td>{{ row.vt_symbol }}</td>
+          <td class="num">{{ '%+.4f'|format(row.score) if row.score is defined else '-' }}</td>
+          <td class="num">{{ '{:,.0f}'.format(row.target_value) if row.target_value is defined else '-' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">尚无信号文件</div>
+      {% endif %}
+    </div>
+
+    <h2>最近任务</h2>
+    <div class="card">
+      {% if recent %}
+      <table>
+        <tbody>
+        {% for j in recent %}
+        <tr>
+          <td><a href="/jobs/{{ j.id }}">{{ j.task_name }}</a></td>
+          <td class="num" style="color:var(--muted)">{{ j.started_at[5:16] }}</td>
+          <td class="num">
+            {% if j.status=='running' %}<span class="tag t-run">运行中</span>
+            {% elif j.status=='success' %}<span class="tag t-ok">成功</span>
+            {% elif j.status=='failed' %}<span class="tag t-err">失败</span>
+            {% else %}<span class="tag t-mut">{{ j.status }}</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="empty">还没有运行记录</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+{% block script %}
+<script>
+async function stopJob(id){
+  if(!confirm('确定停止该任务？')) return;
+  await fetch('/api/stop/'+id,{method:'POST'});
+  location.reload();
+}
+{% if running %}setTimeout(()=>location.reload(), 15000);{% endif %}
+</script>
+{% endblock %}

@@ -12,7 +12,8 @@
 |---|---|---|---|
 | `data/1d/` | 日线 | **641 只**，2015-01 ~ 2026-08 | 77 MB |
 | `data/1w/` | 周线 | 300 只，2020-01 ~ 2026-08 | 7 MB |
-| `data/1m/` | 分钟线 | 300 只，**仅 2025-08 ~ 2026-08** | 582 MB |
+| `data/1m/` | 1 分钟线 | 300 只，**仅 2025-08 ~ 2026-08** | 582 MB |
+| `data/5m/` | 5 分钟线 | 运行 `download_full_market.py --intervals 5m` 后生成，通常仅最近约 1 年 | 约 0.37 MB/只/年 |
 | `data/index/` | 指数日线 | 5 个基准 | 1 MB |
 | `data/financial/` | 三大报表+每股指标 | 300 只 × 5 表 | 106 MB |
 | `data/factor/daily_basic/` | 逐日估值因子 | **全市场 5803 只**，1100 万行 | 685 MB |
@@ -47,6 +48,14 @@ cd /e/qmt && ./.venv/Scripts/python.exe scripts/download_data.py --sector 沪深
 | `check_data.py` | 数据质量体检 | — |
 
 常用参数：`--intervals 1m,5m,15m,30m,1h,1d,1w,1mon` / `--start` / `--end` / `--resume`（断点续传）/ `--summary`（只看库存）
+
+全市场（默认排除当前 ST/退市风险标的）下载：
+
+```powershell
+& .\.venv\Scripts\python.exe scripts\download_full_market.py --intervals 5m --start 2025-09-01 --end 2026-09-06
+```
+
+文件按 `data/{周期}/{交易所}/{代码}.parquet` 保存，例如 `data/5m/SSE/600000.parquet`。首次下载会自动创建 `data/5m/SSE` 和 `data/5m/SZSE` 目录；中断后重新运行同一命令即可跳过已存在文件续传，`--rebuild` 才会强制重下。
 
 ## 1.4 复权
 

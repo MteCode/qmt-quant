@@ -275,8 +275,12 @@ def normalize_bars(df: pd.DataFrame) -> pd.DataFrame:
     # 索引可能是 yyyymmdd 整数或字符串，统一成日期
     idx = out.index
     if not isinstance(idx, pd.DatetimeIndex):
-        out.index = pd.to_datetime(idx.astype(str), format="%Y%m%d",
-                                   errors="coerce")
+        # 日线索引是 YYYYMMDD，分钟线则通常是 YYYYMMDDHHMMSS。
+        # 按长度选择格式，避免清理分钟线时把所有时间解析成 NaT。
+        raw_idx = idx.astype(str)
+        sample = next((v for v in raw_idx if v and v != "nan"), "")
+        fmt = "%Y%m%d%H%M%S" if len(sample) >= 14 else "%Y%m%d"
+        out.index = pd.to_datetime(raw_idx, format=fmt, errors="coerce")
     out = out[out.index.notna()]
     out.index.name = "date"
 

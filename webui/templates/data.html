@@ -1,0 +1,249 @@
+{% extends "base.html" %}
+{% block title %}数据核对 · 量化管理台{% endblock %}
+{% block body %}
+
+<h1>数据核对</h1>
+<div class="sub">
+  按需读取原始文件，看到的永远是真实状态 —— 不转存副本，避免拿过期数据核对
+</div>
+
+<div class="card" style="padding:12px 16px">
+  <form method="get" class="row" style="gap:10px;align-items:flex-end">
+    <label style="font-size:12px;color:var(--muted);min-width:170px">
+      数据源
+      <select name="source" onchange="this.form.submit()" style="margin-top:4px">
+        {% for k, v in sources.items() %}
+        <option value="{{ k }}" {{ 'selected' if k == source }}>{{ v[0] }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label style="font-size:12px;color:var(--muted);min-width:150px">
+      筛选标的
+      <input name="q" value="{{ query }}" placeholder="输入代码片段"
+             style="margin-top:4px">
+    </label>
+    <label style="font-size:12px;color:var(--muted);min-width:190px">
+      标的（{{ symbols|length }} 个可选）
+      <select name="symbol" onchange="this.form.submit()" style="margin-top:4px">
+        <option value="">— 选择 —</option>
+        {% for s in symbols %}
+        <option value="{{ s }}" {{ 'selected' if s == symbol }}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">查询</button>
+    {% if symbol %}
+    <a class="btn" href="/api/data/export?source={{ source }}&symbol={{ symbol }}">
+      导出 CSV</a>
+    {% endif %}
+  </form>
+  <div style="font-size:12px;color:var(--muted);margin-top:9px">
+    {{ sources[source][2] }}
+  </div>
+</div>
+
+{% if not symbol %}
+
+{% if consistency and not consistency.error %}
+<h2>Qlib 特征库一致性</h2>
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">交易日历</div>
+    <div class="v" style="font-size:17px;padding:5px 0">{{ consistency.last_date }}</div>
+    <div class="s">共 {{ consistency.calendar_len }} 天</div>
+  </div>
+  <div class="kpi good">
+    <div class="l">已跟上日历</div>
+    <div class="v">{{ consistency.fresh }}</div>
+    <div class="s">共 {{ consistency.total }} 个标的</div>
+  </div>
+  <div class="kpi">
+    <div class="l">已退市</div>
+    <div class="v">{{ consistency.delisted }}</div>
+    <div class="s">本就无新数据，属正常</div>
+  </div>
+  <div class="kpi {{ 'bad' if consistency.stale }}">
+    <div class="l">真正落后</div>
+    <div class="v">{{ consistency.stale }}</div>
+    <div class="s">
+      {% if consistency.stale %}在市却未更新{% else %}全部一致{% endif %}</div>
+  </div>
+</div>
+
+{% if not consistency.has_delist_data %}
+<div class="note">
+  缺少 <code>data/universe/universe_full.parquet</code>，无法区分退市股与
+  未更新 —— 「真正落后」里会混入本就不该有新数据的退市标的。
+</div>
+{% endif %}
+
+{% if consistency.stale %}
+<div class="note">
+  <b>{{ consistency.stale }} 个在市标的落后于全局日历。</b>
+  成因通常是 <code>export_qlib --index</code> 只重写该指数的成分股，
+  日历却按本次导出的标的重建，未被重写的标的就对不上了。<br>
+  只用该指数成分训练不受影响；跨指数使用会读到过期数据。
+  执行「更新行情」时勾选<b>全量导出</b>可消除。<br>
+  <span style="opacity:.8">这正是此前训练报出
+  <code>KeyError: ('$high', 'sz003039', ...)</code> 的根源之一。</span>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr><th>标的</th><th>数据止于</th>
+      <th class="num">落后天数</th><th class="num">退市日</th></tr></thead>
+    <tbody>
+    {% for s in consistency.stale_sample %}
+    <tr>
+      <td><a href="/data?source=qlib&symbol={{ s.symbol }}">{{ s.symbol }}</a></td>
+      <td style="color:var(--muted)">{{ s.last_date }}</td>
+      <td class="num" style="color:var(--up)">{{ s.behind }}</td>
+      <td class="num" style="color:var(--muted)">{{ s.delist_date or '在市' }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if consistency.stale > consistency.stale_sample|length %}
+  <div style="padding:10px 16px;color:var(--muted);font-size:12px">
+    仅列出落后最多的 {{ consistency.stale_sample|length }} 个
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+{% endif %}
+
+<h2>各数据源概况</h2>
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr>
+      <th>数据源</th><th>说明</th>
+      <th class="num">标的数</th><th class="num">文件数</th>
+      <th class="num">占用</th><th class="num">最后更新</th>
+    </tr></thead>
+    <tbody>
+    {% for s in overview.sources %}
+    <tr>
+      <td><a href="/data?source={{ s.key }}"><b>{{ s.label }}</b></a></td>
+      <td style="color:var(--muted);font-size:12px">{{ s.desc }}</td>
+      {% if s.exists %}
+      <td class="num">{{ s.n_symbols }}</td>
+      <td class="num" style="color:var(--muted)">{{ s.n_files }}</td>
+      <td class="num">{{ '%.0f'|format(s.size_mb) }} MB</td>
+      <td class="num" style="color:var(--muted)">{{ s.mtime }}</td>
+      {% else %}
+      <td colspan="4" style="color:var(--muted)">目录不存在</td>
+      {% endif %}
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% else %}
+
+{# ---------------- 单个标的明细 ---------------- #}
+
+{% if result.error %}
+<div class="card empty">{{ result.error }}</div>
+
+{% else %}
+
+{% if issues %}
+<h2>数据检查</h2>
+{% for i in issues %}
+<div class="note" style="border-left-color:{{ 'var(--up)' if i.level == 'error' else 'var(--warn)' }}">
+  <b>{{ '错误' if i.level == 'error' else '注意' }}：</b>{{ i.msg }}
+</div>
+{% endfor %}
+{% elif result.df is defined %}
+<div class="note" style="border-left-color:var(--down)">
+  <b>未发现异常。</b>已检查：价格非正、最高低于最低、最高低于开收、
+  成交量为负、涨跌幅超板块涨跌停、重复日期、整列为空。
+</div>
+{% endif %}
+
+{% if source == 'qlib' %}
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">数据行数</div>
+    <div class="v">{{ result.n_rows }}</div>
+    <div class="s">起始索引 {{ result.start_index }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">全局日历</div>
+    <div class="v">{{ result.calendar_len }}</div>
+    <div class="s">个交易日</div>
+  </div>
+  <div class="kpi {{ 'good' if result.covers_last else 'bad' }}">
+    <div class="l">是否跟上日历</div>
+    <div class="v" style="font-size:17px;padding:5px 0">
+      {{ '是' if result.covers_last else '否' }}</div>
+    <div class="s">
+      {% if not result.covers_last %}数据落后，需重新导出{% else %}到最后一天{% endif %}</div>
+  </div>
+  <div class="kpi {{ 'bad' if result.inconsistent_fields }}">
+    <div class="l">字段一致性</div>
+    <div class="v" style="font-size:17px;padding:5px 0">
+      {{ '不一致' if result.inconsistent_fields else '一致' }}</div>
+    <div class="s">各字段起止范围</div>
+  </div>
+</div>
+
+{% if result.inconsistent_fields %}
+<div class="note">
+  <b>各字段的起止范围不一致</b>，说明 bin 文件写入过程中断或损坏。
+  各字段范围（起始索引 ~ 结束索引）：
+  {% for f, r in result.field_ranges.items() %}
+  <code>{{ f }} {{ r[0] }}~{{ r[1] }}</code>{% if not loop.last %} · {% endif %}
+  {% endfor %}
+</div>
+{% endif %}
+{% endif %}
+
+{% if result.groups %}
+{# financial 一个标的对应多张报表 #}
+{% for name, g in result.groups.items() %}
+<h2>{{ name }}</h2>
+{% if g.error %}
+<div class="card empty">{{ g.error }}</div>
+{% else %}
+<div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+  {{ g.n_rows }} 行 · {{ g.path }}</div>
+<div class="card" style="padding:0;overflow:auto;max-height:420px">
+  {{ g.df.to_html(classes='', border=0, float_format='%.4f',
+                  max_cols=18, na_rep='—')|safe }}
+</div>
+{% endif %}
+{% endfor %}
+
+{% elif result.df is defined %}
+<h2>数据明细
+  <span style="font-weight:400;font-size:12.5px;color:var(--muted)">
+    最近 {{ result.df|length }} 行{% if result.path %} · {{ result.path }}{% endif %}
+  </span>
+</h2>
+<div class="card" style="padding:0;overflow:auto;max-height:620px">
+  {{ result.df.to_html(classes='', border=0, float_format='%.4f',
+                       max_cols=24, na_rep='—')|safe }}
+</div>
+{% endif %}
+
+{% endif %}
+{% endif %}
+
+{% endblock %}
+{% block script %}
+<style>
+/* pandas to_html 生成的表格套用站内样式 */
+.card table{width:100%;border-collapse:collapse;font-size:12.5px}
+.card table th{position:sticky;top:0;background:var(--card);z-index:1;
+  padding:8px 10px;text-align:right;color:var(--muted);font-weight:500;
+  border-bottom:1px solid var(--line);white-space:nowrap}
+.card table td{padding:6px 10px;text-align:right;
+  border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.card table th:first-child,.card table td:first-child{
+  text-align:left;position:sticky;left:0;background:var(--card)}
+.card table tbody tr:hover td{background:var(--bg)}
+</style>
+{% endblock %}

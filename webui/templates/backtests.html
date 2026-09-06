@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}回测成绩 · 量化管理台{% endblock %}
+{% block body %}
+<h1>已保存模型回测成绩</h1>
+<div class="sub">从项目中的 JSON、CSV 和净值曲线动态读取；更新时间：{{ results.updated_at or '-' }} · <a href="/api/backtests">查看 JSON API</a></div>
+
+<div class="note"><b>使用说明：</b>成绩单反映历史产物，不代表当前模型实时表现。ALSTM + PPO 旧版分数已被重训覆盖，使用前请重新回测确认。</div>
+
+<h2>核心模型结果</h2>
+{% if results.primary %}
+<div class="card" style="overflow:auto">
+  <table>
+    <thead><tr><th>模型/策略</th><th>回测区间</th><th class="num">初始资金</th><th class="num">总收益</th><th class="num">年化</th><th class="num">最大回撤</th><th class="num">Sharpe</th><th class="num">成交</th><th>配置/备注</th></tr></thead>
+    <tbody>
+    {% for r in results.primary %}
+    <tr>
+      <td><b>{{ r.name }}</b></td><td>{{ r.period }}</td><td class="num">{{ r.capital }}</td>
+      <td class="num">{{ r.total_return }}</td><td class="num">{{ r.annual_return }}</td>
+      <td class="num">{{ r.max_drawdown }}</td><td class="num">{{ r.sharpe }}</td>
+      <td class="num">{{ r.trades }}</td><td style="color:var(--muted)">{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}<div class="card empty">尚未找到核心回测产物</div>{% endif %}
+
+{% if results.seeds %}
+<h2>ALSTM 各随机种子</h2>
+<div class="card" style="overflow:auto">
+  <table><thead><tr><th>Seed</th><th class="num">总收益</th><th class="num">年化</th><th class="num">最大回撤</th><th class="num">Sharpe</th><th class="num">胜率</th><th class="num">成交</th><th>回撤达标</th></tr></thead>
+  <tbody>{% for r in results.seeds %}<tr>
+    <td>{{ r.seed }}</td><td class="num">{{ '%.2f%%'|format(r.total_return*100) }}</td><td class="num">{{ '%.2f%%'|format(r.annual_return*100) }}</td>
+    <td class="num">{{ '%.2f%%'|format(r.max_drawdown*100) }}</td><td class="num">{{ '%+.3f'|format(r.sharpe) }}</td>
+    <td class="num">{{ '%.1f%%'|format(r.win_rate*100) }}</td><td class="num">{{ '{:,}'.format(r.total_trades) }}</td>
+    <td>{% if r.drawdown_ok %}<span class="tag t-ok">达标</span>{% else %}<span class="tag t-err">超限</span>{% endif %}</td>
+  </tr>{% endfor %}</tbody></table>
+</div>
+{% endif %}
+
+{% if results.multifactor %}
+<h2>ALSTM 多因子组合</h2>
+<div class="card" style="overflow:auto">
+  <table><thead><tr><th>组合</th><th class="num">总收益</th><th class="num">年化</th><th class="num">最大回撤</th><th class="num">Sharpe</th><th class="num">成交</th></tr></thead>
+  <tbody>{% for r in results.multifactor %}<tr>
+    <td>{{ r.label }}</td><td class="num">{{ '%.2f%%'|format(r.total_return*100) }}</td><td class="num">{{ '%.2f%%'|format(r.annual_return*100) }}</td>
+    <td class="num">{{ '%.2f%%'|format(r.max_drawdown*100) }}</td><td class="num">{{ '%+.3f'|format(r.sharpe) }}</td><td class="num">{{ '{:,}'.format(r.total_trades) }}</td>
+  </tr>{% endfor %}</tbody></table>
+</div>
+{% endif %}
+
+{% if results.reports %}
+<h2>reports 目录中的净值曲线</h2>
+<div class="card" style="overflow:auto">
+  <table><thead><tr><th>目录</th><th>区间</th><th class="num">总收益</th><th class="num">最大回撤</th><th class="num">Sharpe</th><th>源文件</th></tr></thead>
+  <tbody>{% for r in results.reports %}<tr>
+    <td>{{ r.name }}</td><td>{{ r.period }}</td><td class="num">{{ '%+.2f%%'|format(r.total_return*100) }}</td>
+    <td class="num">{{ '%.2f%%'|format(r.max_drawdown*100) }}</td><td class="num">{{ '%+.3f'|format(r.sharpe) }}</td><td style="color:var(--muted)">{{ r.source }}</td>
+  </tr>{% endfor %}</tbody></table>
+</div>
+{% endif %}
+{% endblock %}
