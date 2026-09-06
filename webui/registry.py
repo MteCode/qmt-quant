@@ -199,6 +199,59 @@ TASKS = [
     ),
 ]
 
+# 盘中行情增量更新
+TASKS.append(
+    Task(
+        id="update_intraday",
+        name="盘中行情增量更新",
+        script="scripts/update_intraday.py",
+        desc="增量追加全市场 1m/5m K 线，供日内策略实时计算特征。"
+             "需 miniQMT 已启动。单次运行约 1-3 分钟。",
+        eta="约 1-3 分钟",
+        params=[
+            Param("intervals", "周期（逗号分隔）", "str", "1m",
+                  help="例如 1m，或 1m,5m"),
+            Param("clean", "更新后自动清洗", "bool", True),
+            Param("loop", "持续运行间隔（秒，0=单次）", "int", 0,
+                  help="盘中每 N 秒自动刷新，非交易时段自动休眠"),
+        ],
+    ),
+)
+
+# 全市场日内 GBM
+TASKS.extend([
+    Task(
+        id="train_intraday_gbm",
+        name="训练全市场日内GBM",
+        script="scripts/train_intraday_gbm.py",
+        desc="读取全市场 1m 清洗数据，计算 24 维日内特征，训练 LightGBM 选股模型。"
+             "输出模型文件、指标和特征重要性。",
+        eta="视标的数量，500 只约 5-10 分钟，全市场约 30-60 分钟",
+        params=[
+            Param("horizon", "预测窗口（bar 数）", "int", 10),
+            Param("threshold", "正类阈值", "float", 0.0005),
+            Param("max_symbols", "最多使用标的数（0=全部）", "int", 0,
+                  help="快速实验时限制标的数量"),
+            Param("min_bars", "最少 bar 数", "int", 1000),
+        ],
+        outputs=["models/intraday_gbm/metrics.json",
+                 "models/intraday_gbm/feature_importance.csv"],
+    ),
+    Task(
+        id="predict_intraday",
+        name="盘中全市场预测",
+        script="scripts/predict_intraday.py",
+        desc="用训练好的全市场日内 GBM 模型对所有标的实时打分，"
+             "输出每只股票的上涨概率，供日内策略筛选标的。",
+        eta="约 1-2 分钟",
+        params=[
+            Param("top", "只输出 top N（0=全部）", "int", 50),
+            Param("loop", "持续运行间隔（秒，0=单次）", "int", 0),
+        ],
+        outputs=["predictions/"],
+    ),
+])
+
 # 920368 1分钟日内做T：模型训练与样本外回测
 TASKS.extend([
     Task(id="train_intraday_t_920368", name="训练920368做T模型",

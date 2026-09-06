@@ -86,5 +86,12 @@ strategies/**/state/live_equity.csv
 data/announcement/
 data/universe/st_history.parquet
 
+# 盘中预测结果（每分钟产出，大量 CSV，不入库）
+predictions/
+
+# 全市场日内模型（训练产物，本机重训即可，体积较大）
+models/intraday_gbm/*.joblib
+models/intraday_gbm/predictions_sample.csv
+
 # 搬家对账清单：本机某一时刻的快照，随目录一起拷走即可，不入库
 migration_manifest.json

@@ -311,6 +311,85 @@ class XtDataFeed(BaseDataFeed):
         dates = xtdata.get_trading_dates("SH", start.replace("-", ""), end.replace("-", ""))
         return [pd.Timestamp(d, unit="ms").to_pydatetime() for d in dates]
 
+    # ------------------------------------------------------------ 增量更新
+
+    def update_bars(self, vt_symbols: list[str],
+                    interval: Interval = Interval.MINUTE,
+                    progress: Callable[[int, int, str], None] | None = None,
+                    ) -> dict:
+        """增量追加最新 K 线到本地 parquet。
+
+        与 download_history 的区别：不覆盖全量，只读本地最后一根 bar 的
+        时间戳，从该时间点往后拉增量，然后 concat + 去重 + 排序后写回。
+
+        用于盘中定时刷新 1m/5m 行情：每分钟跑一次，把当天新产生的 bar
+        追加到已有文件，下游（特征计算、模型预测）直接读即可。
+        """
+        try:
+            from xtquant import xtdata
+        except ImportError:
+            logger.error("未安装 xtquant，无法更新")
+            return {"ok": [], "failed": list(vt_symbols), "skipped": []}
+
+        period = PERIOD_MAP[interval]
+        result = {"ok": [], "failed": [], "skipped": []}
+        total = len(vt_symbols)
+
+        for i, raw in enumerate(vt_symbols, 1):
+            vt_symbol = normalize(raw)
+            if progress:
+                progress(i, total, vt_symbol)
+
+            path = self._path(vt_symbol, interval)
+
+            # 读本地已有数据，确定增量起点
+            start_time = "20150101"
+            old_df = None
+            if path.exists():
+                try:
+                    old_df = self._normalize_df(pd.read_parquet(path))
+                    if not old_df.empty:
+                        last = old_df.index[-1]
+                        start_time = last.strftime("%Y%m%d")
+                except (OSError, ValueError):
+                    old_df = None
+
+            xt_symbol = to_xt_symbol(vt_symbol)
+            try:
+                xtdata.download_history_data(xt_symbol, period=period,
+                                             start_time=start_time,
+                                             end_time="20301231")
+                new_df = self._read_market_data(xtdata, xt_symbol, period,
+                                                start_time, "20301231")
+                if new_df is None or new_df.empty:
+                    result["skipped"].append(vt_symbol)
+                    continue
+
+                new_df = self._normalize_df(new_df)
+
+                if old_df is not None and not old_df.empty:
+                    combined = pd.concat([old_df, new_df])
+                    combined = combined[~combined.index.duplicated(keep="last")]
+                    combined = combined.sort_index()
+                else:
+                    combined = new_df.sort_index()
+
+                combined.to_parquet(path)
+                n_new = len(combined) - (len(old_df) if old_df is not None else 0)
+                if n_new > 0:
+                    result["ok"].append(vt_symbol)
+                    logger.debug("更新 %s %s，新增 %d 条", vt_symbol, period, n_new)
+                else:
+                    result["skipped"].append(vt_symbol)
+            except Exception:
+                logger.exception("更新失败: %s %s", vt_symbol, period)
+                result["failed"].append(vt_symbol)
+
+        logger.info("增量更新 %s：成功 %d，跳过 %d，失败 %d", period,
+                    len(result["ok"]), len(result["skipped"]),
+                    len(result["failed"]))
+        return result
+
     # ------------------------------------------------------------ 本地库存
 
     def summary(self) -> pd.DataFrame:
