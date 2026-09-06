@@ -21,6 +21,7 @@ reports/**/*.html
 *.parquet
 *.html
 !docs/*.html
+!webui/templates/*.html
 !reports/**/*.csv
 
 # 策略目录的模型产物必须入库（走 LFS，见 .gitattributes）。

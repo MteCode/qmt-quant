@@ -175,6 +175,18 @@ def check_state() -> int:
     这些文件**没有任何办法重建**：回撤峰值是跨重启累积的实盘记录，
     净值曲线更是漏一天补不回来 —— 券商查不到历史序列。
     删掉等于抹掉实盘记忆，风控会从零重新记峰值。
+
+    ## 为什么按策略逐个报，而不是"找到一个就算有"
+
+    风控状态是**每个策略一份**的，路径由各自的 ``paths.py`` 定死::
+
+        strategies/alstm_ppo_csi1000/paths.py:62   RISK_STATE = STATE_DIR / "risk_state.json"
+        strategies/lgb_agents_ppo/paths.py:28      RISK_STATE = STATE_DIR / "risk_state.json"
+
+    早先的写法先查 ``data/risk_state.json``，查到就置 found 并打一条带峰值的绿灯，
+    而 ``strategies/*/state/`` 为空时**一个字都不打**。于是"跑过实盘但 state/ 漏拷了"
+    和"从没跑过实盘"输出完全一样 —— 恰恰是这个脚本最该拦住的那种丢失。
+    ``data/risk_state.json`` 现已无任何代码读写（grep 全仓只剩本脚本自己），只作历史遗留提示。
     """
     import json
 
@@ -184,36 +196,47 @@ def check_state() -> int:
     print("实盘状态（不入库，漏拷补不回来）")
     print("-" * 62)
 
-    d = Path(get_config().data.store_dir)
-    found = False
+    missing = 0
 
-    rs = d / "risk_state.json"
-    if rs.exists():
-        found = True
-        try:
-            s = json.loads(rs.read_text(encoding="utf-8"))
-            print(f"{OK} data/risk_state.json  峰值 {s.get('peak', 0):,.0f}"
-                  f"  回撤 {s.get('drawdown', 0):.2%}"
-                  f"  末次观测 {s.get('last_obs_date', '?')}")
-        except (OSError, ValueError):
-            print(f"{OK} data/risk_state.json（解析失败，但文件在）")
-
-    sdb = d / "state.db"
-    if sdb.exists():
-        found = True
-        print(f"{OK} data/state.db  {sdb.stat().st_size / 1024:.0f} KB")
-
-    for p in sorted(ROOT.glob("strategies/*/state")):
-        items = [x.name for x in p.iterdir()] if p.is_dir() else []
+    # 逐个策略报告，空目录也必须出现在输出里
+    strategy_dirs = sorted(p for p in (ROOT / "strategies").glob("*")
+                           if (p / "paths.py").exists())
+    for sd in strategy_dirs:
+        state = sd / "state"
+        items = sorted(x.name for x in state.iterdir()) if state.is_dir() else []
+        label = f"strategies/{sd.name}/state"
         if items:
-            found = True
-            print(f"{OK} {p.relative_to(ROOT)}  {', '.join(items[:5])}")
+            print(f"{OK} {label}  {', '.join(items[:5])}")
+            rs = state / "risk_state.json"
+            if rs.exists():
+                try:
+                    s = json.loads(rs.read_text(encoding="utf-8"))
+                    print(f"       峰值 {s.get('peak', 0):,.0f}"
+                          f"  回撤 {s.get('drawdown', 0):.2%}"
+                          f"  末次观测 {s.get('last_obs_date', '?')}")
+                except (OSError, ValueError):
+                    print("       risk_state.json 解析失败，但文件在")
+            else:
+                print(f"{WARN} 该策略没有 risk_state.json —— 跑过实盘就是漏拷了，")
+                print("       风控会从零重新记峰值（见 qmtquant/risk/drawdown.py）")
+                missing += 1
+        else:
+            print(f"{WARN} {label} 为空")
+            print("       没跑过这个策略就正常；跑过就必须从旧机器拷回整个 state/，")
+            print("       净值曲线漏一天补不回来 —— 券商查不到历史序列")
 
-    if not found:
-        print(f"{WARN} 没找到任何运行时状态")
-        print("       没跑过实盘就正常；跑过就必须从旧机器拷 data/risk_state.json、")
-        print("       data/state.db 和 strategies/*/state/")
-    return 0
+    sdb = Path(get_config().data.store_dir) / "state.db"
+    if sdb.exists():
+        print(f"{OK} data/state.db  {sdb.stat().st_size / 1024:.0f} KB")
+    else:
+        print(f"{WARN} data/state.db 不存在（运行时状态，跑过就该有）")
+
+    legacy = Path(get_config().data.store_dir) / "risk_state.json"
+    if legacy.exists():
+        print(f"{WARN} data/risk_state.json 存在但已无代码读写 —— 历史遗留，"
+              "别把它当成风控状态还在")
+
+    return missing
 
 
 def main() -> int:
