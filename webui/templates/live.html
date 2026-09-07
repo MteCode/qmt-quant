@@ -67,7 +67,8 @@
           {{ sig.dates | length }} 期</td>
         <td class="num">
           {% if x.positions %}
-            {{ (x.positions.positions or []) | length }} 只
+            {{ x.positions.n_holdings
+               or (x.positions.holdings or []) | length }} 只
           {% else %}<span style="color:var(--muted)">-</span>{% endif %}
         </td>
         <td>
@@ -144,53 +145,127 @@
       距上次更新 {{ '%.1f'|format(positions.age_hours) }} 小时。
       拿隔夜持仓当实时数据看会误判，建议重新快照。</div>
   {% endif %}
+
   <div class="grid g4">
     <div class="kpi">
-      <div class="l">总市值</div>
-      <div class="v">{{ '{:,.0f}'.format(positions.total_value or 0) }}</div>
-      <div class="s">元</div>
+      <div class="l">总资产</div>
+      <div class="v">{{ '{:,.0f}'.format(positions.total_asset or 0) }}</div>
+      <div class="s">账户 {{ positions.account_id or '-' }}</div>
     </div>
     <div class="kpi">
       <div class="l">可用资金</div>
       <div class="v">{{ '{:,.0f}'.format(positions.cash or 0) }}</div>
+      <div class="s">持仓市值
+        {{ '{:,.0f}'.format(positions.market_value or 0) }}
+        （{{ '%.1f'|format((positions.position_ratio or 0) * 100) }}%）</div>
+    </div>
+    <div class="kpi {{ 'good' if (positions.total_pnl or 0) > 0 else 'bad' }}">
+      <div class="l">浮动盈亏</div>
+      <div class="v">{{ '{:+,.0f}'.format(positions.total_pnl or 0) }}</div>
       <div class="s">元</div>
     </div>
     <div class="kpi">
       <div class="l">持仓数</div>
-      <div class="v">{{ (positions.positions or []) | length }}</div>
-      <div class="s">只</div>
-    </div>
-    <div class="kpi">
-      <div class="l">更新时间</div>
-      <div class="v" style="font-size:15px">
-        {{ positions.updated_at or '-' }}</div>
+      <div class="v">{{ positions.n_holdings
+        or (positions.holdings or []) | length }}</div>
       <div class="s">
-        {% if positions.age_hours %}
-          {{ '%.1f'|format(positions.age_hours) }} 小时前{% endif %}</div>
+        {% if positions.updated_at %}{{ positions.updated_at[:16]
+          | replace('T', ' ') }}{% endif %}</div>
     </div>
   </div>
+
   <div class="card">
     <table>
-      <thead><tr><th>代码</th><th>名称</th><th class="num">数量</th>
-        <th class="num">成本</th><th class="num">现价</th>
-        <th class="num">市值</th><th class="num">盈亏</th></tr></thead>
+      <thead><tr><th>代码</th><th>名称</th><th>行业</th>
+        <th class="num">数量</th><th class="num">可用</th>
+        <th class="num">成本价</th><th class="num">市值</th>
+        <th class="num">盈亏</th><th class="num">收益率</th>
+        <th>信号</th></tr></thead>
       <tbody>
-      {% for p in positions.positions or [] %}
+      {% for p in positions.holdings or [] %}
         <tr>
-          <td><code>{{ p.symbol or p.code }}</code></td>
+          <td><code>{{ p.code }}</code></td>
           <td>{{ p.name or '-' }}</td>
-          <td class="num">{{ p.volume or p.qty or 0 }}</td>
-          <td class="num">{{ '%.3f'|format(p.cost or p.avg_price or 0) }}</td>
-          <td class="num">{{ '%.3f'|format(p.price or p.last or 0) }}</td>
-          <td class="num">
-            {{ '{:,.0f}'.format(p.value or p.market_value or 0) }}</td>
+          <td style="color:var(--muted);font-size:12px">
+            {{ p.industry or '-' }}</td>
+          <td class="num">{{ p.volume }}</td>
+          <td class="num">{{ p.available }}</td>
+          <td class="num">{{ '%.3f'|format(p.avg_price or 0) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(p.market_value or 0) }}</td>
           <td class="num" style="color:{{ 'var(--up)' if (p.pnl or 0) > 0
-              else 'var(--down)' }}">{{ '%+,.0f'|format(p.pnl or 0) }}</td>
+              else 'var(--down)' }}">{{ '{:+,.0f}'.format(p.pnl or 0) }}</td>
+          <td class="num" style="color:{{ 'var(--up)' if (p.pnl_pct or 0) > 0
+              else 'var(--down)' }}">
+            {{ '%+.2f'|format((p.pnl_pct or 0) * 100) }}%</td>
+          <td>
+            {% if p.in_target %}<span class="tag t-ok">在目标</span>
+            {% else %}<span class="tag t-warn">不在目标</span>{% endif %}
+          </td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
+
+  <!-- 目标 vs 实际的差异 -->
+  {% if positions.has_target %}
+  <h2>与策略目标的差异</h2>
+  <div class="note">
+    对照信号 <code>{{ positions.signal.file }}</code>
+    （{{ positions.signal.count }} 只，目标市值
+    {{ '{:,.0f}'.format(positions.signal.total_value or 0) }} 元，
+    生成于 {{ positions.signal.mtime[:16] | replace('T', ' ') }}）。
+    这是「策略想持有什么」与「账户实际持有什么」的差集 ——
+    下单执行要做的就是把它抹平。
+  </div>
+  <div class="grid g2">
+    <div class="card">
+      <div class="lbl" style="margin-top:0">
+        应买入 <span class="tag t-ok">{{ (positions.to_buy or []) | length }} 只</span>
+      </div>
+      <table>
+        <thead><tr><th>代码</th><th>名称</th><th>行业</th>
+          <th class="num">目标金额</th></tr></thead>
+        <tbody>
+        {% for b in positions.to_buy or [] %}
+          <tr>
+            <td><code>{{ b.code }}</code></td>
+            <td>{{ b.name or '-' }}</td>
+            <td style="color:var(--muted);font-size:12px">
+              {{ b.industry or '-' }}</td>
+            <td class="num">{{ '{:,.0f}'.format(b.target_value or 0) }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if not positions.to_buy %}
+        <div class="empty" style="padding:18px">无需买入</div>{% endif %}
+    </div>
+    <div class="card">
+      <div class="lbl" style="margin-top:0">
+        应卖出 <span class="tag t-err">{{ (positions.to_sell or []) | length }} 只</span>
+      </div>
+      <table>
+        <thead><tr><th>代码</th><th>名称</th>
+          <th class="num">市值</th><th class="num">收益率</th></tr></thead>
+        <tbody>
+        {% for x in positions.to_sell or [] %}
+          <tr>
+            <td><code>{{ x.code }}</code></td>
+            <td>{{ x.name or '-' }}</td>
+            <td class="num">{{ '{:,.0f}'.format(x.market_value or 0) }}</td>
+            <td class="num" style="color:{{ 'var(--up)' if (x.pnl_pct or 0) > 0
+                else 'var(--down)' }}">
+              {{ '%+.2f'|format((x.pnl_pct or 0) * 100) }}%</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if not positions.to_sell %}
+        <div class="empty" style="padding:18px">无需卖出</div>{% endif %}
+    </div>
+  </div>
+  {% endif %}
 {% endif %}
 
 <!-- ---------------- 下单执行 ---------------- -->
