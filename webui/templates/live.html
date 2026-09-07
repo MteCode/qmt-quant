@@ -3,72 +3,139 @@
 
 {% block body %}
 <h1>实盘监控</h1>
-<p class="sub">在跑的策略、持仓、收益与信号。数据来自快照文件，不直连
-  miniQMT —— 连接会阻塞请求，失败时整个页面打不开。</p>
+<p class="sub">实盘链路分三段：<b>生成信号 → 快照持仓 → 下单执行</b>。
+  分段汇报，看得出卡在哪一步。数据来自产物文件，不直连 miniQMT ——
+  连接会阻塞请求，失败时整个页面打不开。</p>
 
-{% if not live.has_any %}
-<div class="card" style="border-left:4px solid var(--warn)">
-  <div style="font-weight:600;margin-bottom:6px">尚未运行过实盘</div>
-  <div style="font-size:13px;line-height:1.75;color:var(--muted)">
-    没有找到任何策略的 <code>state/</code> 快照目录，说明实盘链路从未启动。
-    要开始，需要依次跑通：<b>生成信号 → 快照持仓 → 模拟下单</b>。
-    下方按钮可逐个触发；下单类任务默认预览（dry-run），
-    真实委托需要二次确认。
+<!-- ---------------- 链路进度 ---------------- -->
+<div class="grid g3" style="margin-bottom:16px">
+  <div class="kpi {{ 'good' if live.has_signal }}">
+    <div class="l">① 生成信号</div>
+    <div class="v" style="font-size:17px">
+      {% if live.has_signal %}已跑通{% else %}未运行{% endif %}</div>
+    <div class="s">
+      {% set n = live.strategies | selectattr('signal.has') | list | length %}
+      {{ n }} 个策略有信号产出</div>
   </div>
+  <div class="kpi {{ 'good' if live.has_position }}">
+    <div class="l">② 快照持仓</div>
+    <div class="v" style="font-size:17px">
+      {% if live.has_position %}已跑通{% else %}未运行{% endif %}</div>
+    <div class="s">
+      {% if not live.has_position %}需连接 QMT 拉取账户{% endif %}</div>
+  </div>
+  <div class="kpi {{ 'good' if live.has_execution }}">
+    <div class="l">③ 下单执行</div>
+    <div class="v" style="font-size:17px">
+      {% if live.has_execution %}已跑通{% else %}未运行{% endif %}</div>
+    <div class="s">
+      {% if not live.has_execution %}默认预览，真实委托需二次确认{% endif %}</div>
+  </div>
+</div>
+
+{% if live.has_signal and not live.has_position %}
+<div class="note">
+  <b>信号已跑通，但还没有持仓快照</b> ——
+  下一步运行 <b>快照持仓</b>（需要 QMT 在线），
+  之后才能对比「策略想持有什么」与「账户实际持有什么」。
 </div>
 {% endif %}
 
-<!-- ---------------- 策略运行状态 ---------------- -->
+<!-- ---------------- 各策略状态 ---------------- -->
 <h2>策略状态</h2>
 <div class="card">
   <table>
-    <thead><tr><th>策略</th><th>分类</th><th>状态</th>
-      <th>信号任务</th><th class="num">持仓</th><th></th></tr></thead>
+    <thead><tr><th>策略</th><th>分类</th>
+      <th>最新信号</th><th class="num">标的数</th><th>信号历史</th>
+      <th class="num">持仓</th><th>操作</th><th></th></tr></thead>
     <tbody>
-    {% for s in capable %}
-      {% set run = (live.running | selectattr('id','equalto',s.id)
-                    | list | first) %}
+    {% for x in live.strategies %}
+      {% set sig = x.signal %}
       <tr>
-        <td><a href="/strategies/{{ s.id }}"><b>{{ s.name }}</b></a></td>
-        <td><span class="tag t-mut">{{ s.category }}</span></td>
+        <td><a href="/strategies/{{ x.id }}"><b>{{ x.name }}</b></a></td>
+        <td><span class="tag t-mut">{{ x.category }}</span></td>
         <td>
-          {% if run %}<span class="tag t-ok">有快照</span>
-          {% else %}<span class="tag t-mut">未运行</span>{% endif %}
+          {% if sig.has %}
+            <span class="tag t-ok">{{ sig.latest or '有' }}</span>
+            {% if sig.updated_at %}
+              <div style="color:var(--muted);font-size:11px;margin-top:2px">
+                {{ sig.updated_at }}</div>{% endif %}
+          {% else %}<span class="tag t-mut">无</span>{% endif %}
+        </td>
+        <td class="num">{{ sig.n if sig.has else '-' }}</td>
+        <td style="color:var(--muted);font-size:12px">
+          {{ sig.dates | length }} 期</td>
+        <td class="num">
+          {% if x.positions %}
+            {{ (x.positions.positions or []) | length }} 只
+          {% else %}<span style="color:var(--muted)">-</span>{% endif %}
         </td>
         <td>
-          {% if s.live_task in running %}
+          {% if x.live_task in running %}
             <span class="tag t-run">运行中</span>
           {% else %}
-            <button onclick="runTask('{{ s.live_task }}','{{ s.name }} 生成信号')"
-                    style="padding:4px 10px;font-size:12px">生成信号</button>
+            <button onclick="runTask('{{ x.live_task }}','{{ x.name }} 生成信号')"
+                    style="padding:4px 10px;font-size:12px">重新生成</button>
           {% endif %}
         </td>
-        <td class="num">
-          {% if run and run.positions %}
-            {{ (run.positions.positions or []) | length }} 只
-          {% else %}-{% endif %}
-        </td>
-        <td><a href="/strategies/{{ s.id }}"
-               style="font-size:12px">回测数据 →</a></td>
+        <td><a href="/strategies/{{ x.id }}"
+               style="font-size:12px">回测 →</a></td>
       </tr>
     {% endfor %}
     </tbody>
   </table>
-  {% if not capable %}
+  {% if not live.strategies %}
     <div class="empty">没有登记了实盘信号任务的策略</div>
   {% endif %}
 </div>
 
-<!-- ---------------- 持仓 ---------------- -->
+<!-- ---------------- 信号明细 ---------------- -->
+<h2>信号明细</h2>
+{% for x in live.strategies %}
+  {% if x.signal.has and x.signal.rows %}
+  <div class="card">
+    <div class="row" style="margin-bottom:10px;justify-content:space-between">
+      <div>
+        <b>{{ x.name }}</b>
+        <span style="color:var(--muted);font-size:12px;margin-left:8px">
+          {{ x.signal.latest }} · {{ x.signal.n }} 只 ·
+          <code>{{ x.signal.dir }}</code></span>
+      </div>
+    </div>
+    <table>
+      <thead><tr><th style="width:44px">#</th><th>代码</th>
+        <th class="num">打分</th><th class="num">权重</th>
+        <th class="num">目标金额</th></tr></thead>
+      <tbody>
+      {% for row in x.signal.rows %}
+        <tr>
+          <td style="color:var(--muted)">{{ loop.index }}</td>
+          <td><code>{{ row.vt_symbol }}</code></td>
+          <td class="num">{{ '%.4f'|format(row.score|float) }}</td>
+          <td class="num">
+            {{ '%.2f'|format(row.weight|float * 100) }}%</td>
+          <td class="num">
+            {{ '{:,.0f}'.format(row.target_value|float) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endfor %}
+
+<!-- ---------------- 账户持仓 ---------------- -->
 <h2>账户持仓</h2>
 {% if not positions %}
   <div class="card"><div class="empty">
-    无持仓快照。先运行 <b>snapshot_positions</b> 生成。
+    还没有持仓快照 —— 这是实盘链路的第二段。
     <div style="margin-top:12px">
       <button onclick="runTask('snapshot_positions','快照持仓')"
               {{ 'disabled' if 'snapshot_positions' in running }}>
         {{ '运行中…' if 'snapshot_positions' in running else '快照持仓' }}
       </button>
+      <span style="color:var(--muted);font-size:12px;margin-left:8px">
+        需要 QMT 客户端在线</span>
     </div>
   </div></div>
 {% else %}
@@ -115,46 +182,10 @@
           <td class="num">{{ p.volume or p.qty or 0 }}</td>
           <td class="num">{{ '%.3f'|format(p.cost or p.avg_price or 0) }}</td>
           <td class="num">{{ '%.3f'|format(p.price or p.last or 0) }}</td>
-          <td class="num">{{ '{:,.0f}'.format(p.value or p.market_value or 0) }}</td>
-          <td class="num" style="color:{{ 'var(--up)' if (p.pnl or 0) > 0
-              else 'var(--down)' }}">
-            {{ '%+,.0f'|format(p.pnl or 0) }}</td>
-        </tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-{% endif %}
-
-<!-- ---------------- 今日信号 ---------------- -->
-<h2>策略信号</h2>
-{% if not signal %}
-  <div class="card"><div class="empty">
-    无信号数据。运行策略的「生成信号」任务后在此显示。
-  </div></div>
-{% else %}
-  <div class="card">
-    <div class="row" style="margin-bottom:10px">
-      <span style="color:var(--muted);font-size:12px">
-        信号日期 {{ signal.date or '-' }} ·
-        共 {{ (signal.rows or signal.picks or []) | length }} 只</span>
-    </div>
-    <table>
-      <thead><tr><th style="width:44px">#</th><th>代码</th><th>名称</th>
-        <th class="num">打分</th><th>行业</th><th class="num">建议权重</th>
-      </tr></thead>
-      <tbody>
-      {% for x in (signal.rows or signal.picks or [])[:30] %}
-        <tr>
-          <td style="color:var(--muted)">{{ loop.index }}</td>
-          <td><code>{{ x.symbol or x.code }}</code></td>
-          <td>{{ x.name or '-' }}</td>
-          <td class="num">{{ '%.4f'|format(x.score or x.pred or 0) }}</td>
-          <td style="color:var(--muted);font-size:12px">
-            {{ x.industry or '-' }}</td>
           <td class="num">
-            {% if x.weight %}{{ '%.2f'|format(x.weight * 100) }}%
-            {% else %}-{% endif %}</td>
+            {{ '{:,.0f}'.format(p.value or p.market_value or 0) }}</td>
+          <td class="num" style="color:{{ 'var(--up)' if (p.pnl or 0) > 0
+              else 'var(--down)' }}">{{ '%+,.0f'|format(p.pnl or 0) }}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -162,11 +193,11 @@
   </div>
 {% endif %}
 
-<!-- ---------------- 执行记录 ---------------- -->
+<!-- ---------------- 下单执行 ---------------- -->
 <h2>下单执行</h2>
 {% if not ex %}
   <div class="card"><div class="empty">
-    无执行记录。
+    还没有执行记录 —— 这是实盘链路的第三段。
     <div style="margin-top:12px">
       <button onclick="runPaper()"
               {{ 'disabled' if 'paper_trade' in running }}>

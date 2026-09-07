@@ -119,6 +119,10 @@ class Strategy:
     inputs: list[str] = field(default_factory=list)  # 依赖的数据
     risk: list[str] = field(default_factory=list)    # 风控约束
     code: str = ""                # 主要代码位置
+    #: strategies/ 下的目录名。多数与 id 相同，但 alstm_ensemble 的目录叫
+    #: alstm_ppo_csi1000 —— 直接拿 id 拼路径会找不到信号文件，
+    #: 表现为「明明跑通了却显示未运行」。
+    dir: str = ""
     backtest_task: str = ""       # registry.py 中的 task_id
     live_task: str = ""           # 实盘/信号生成的 task_id
     status: str = "research"      # research / backtest_only / live_ready
@@ -287,6 +291,41 @@ def _load_alstm_ensemble() -> dict:
     }
 
 
+def _load_lgb_agents() -> dict:
+    d = ROOT / "strategies" / "lgb_agents_ppo" / "backtest"
+    rob = _read_json(d / "robustness.json")
+    siz = _read_json(d / "sizing.json")
+    if not rob and not siz:
+        return {"has_result": False}
+    out = {"has_result": True,
+           "source": str(d.relative_to(ROOT)),
+           "robustness_raw": rob, "sizing_raw": siz}
+    # robustness.json 的结构随实验而变，尽量抽取通用指标
+    src = None
+    for cand in (rob, siz):
+        if isinstance(cand, dict):
+            if any(k in cand for k in
+                   ("annual_return", "total_return", "sharpe")):
+                src = cand
+                break
+            for v in cand.values():
+                if isinstance(v, dict) and "annual_return" in v:
+                    src = v
+                    break
+            if src:
+                break
+    if src:
+        out["metrics"] = {
+            "total_return": src.get("total_return"),
+            "annual_return": src.get("annual_return"),
+            "max_drawdown": _norm_dd(src.get("max_drawdown")),
+            "sharpe": src.get("sharpe"),
+        }
+        out["period"] = src.get("period", "")
+        out["n_trades"] = src.get("total_trades") or src.get("n_trades")
+    return out
+
+
 def _load_report(name: str, capital: float = 1_000_000):
     """从 reports/<name>/equity.csv 读净值并算指标。"""
     def _fn():
@@ -450,10 +489,34 @@ STRATEGIES: list[Strategy] = [
         inputs=["日线行情", "因子数据"],
         risk=["回撤控制", "单票权重上限"],
         code="strategies/alstm_ppo_csi1000/",
+        dir="alstm_ppo_csi1000",
         backtest_task="train_ensemble",
         live_task="generate_signal",
         status="live_ready",
         loader=_load_alstm_ensemble,
+    ),
+    Strategy(
+        id="lgb_agents_ppo",
+        name="四层选股系统",
+        category="日频",
+        summary="LightGBM 初筛 → TradingAgents 精研 → PPO 仓位 → 风控，"
+                "中证 1000 池。已产出实盘信号。",
+        how=[
+            "初筛层：LightGBM + Qlib 全量因子打分，取 Top-N 候选池（约 100 只）",
+            "精研层：TradingAgents 用研报/新闻逻辑验真，排除风险标的"
+            "（此层无法历史回测，存在前视问题，见 DESIGN.md）",
+            "执行层：PPO 输出动态仓位水平 [0,1]",
+            "风控层：低过拟合设计贯穿 1、3 层，叠加回撤三档与下单前置检查",
+        ],
+        inputs=["data/clean/ 日线行情", "因子数据", "研报/新闻（精研层）"],
+        risk=["回撤三档控制", "下单前置检查", "单票权重上限"],
+        code="strategies/lgb_agents_ppo/",
+        backtest_task="",
+        live_task="generate_signal",
+        status="live_ready",
+        caveat="精研层依赖研报/新闻，无法历史回测 —— 该层的贡献无法用回测衡量，"
+               "整体回测数据仅覆盖初筛+执行层。",
+        loader=_load_lgb_agents,
     ),
     Strategy(
         id="lgb_enhanced",
@@ -504,38 +567,75 @@ def list_strategies(category: str = "") -> list[dict]:
 
 # --------------------------------------------------------------- 实盘
 
-def live_status() -> dict:
-    """实盘运行状态。只读快照，不连 miniQMT。
+def _signal_status(dirname: str) -> dict:
+    """某策略的信号产出情况。
 
-    从未运行过实盘时如实返回 running=[]，页面显示「未运行」，
-    不编造持仓或收益。
+    实盘链路是三段：**生成信号 → 快照持仓 → 下单执行**。
+    早先只看 state/positions.json，把「信号已跑通、只是还没下单」误判成
+    「实盘从未运行」—— 这三段要分开报，才能看出卡在哪一步。
     """
-    out = {"running": [], "positions": None, "equity": None,
-           "signals": [], "has_any": False, "state_dir": None}
+    d = ROOT / "strategies" / dirname / "signals"
+    if not d.exists():
+        return {"has": False, "dates": [], "latest": None, "n": 0}
+    dates = sorted(
+        (p.stem.replace("target_", "") for p in d.glob("target_*.csv")
+         if p.stem != "target_latest"), reverse=True)
+    latest_p = d / "target_latest.csv"
+    rows, mtime = [], None
+    if latest_p.exists():
+        try:
+            with latest_p.open(encoding="utf-8-sig") as f:
+                rows = list(csv.DictReader(f))
+        except (OSError, csv.Error):
+            rows = []
+        try:
+            import datetime
+            mtime = datetime.datetime.fromtimestamp(
+                latest_p.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
+        except OSError:
+            mtime = None
+    return {"has": bool(dates or rows), "dates": dates,
+            "latest": dates[0] if dates else None,
+            "n": len(rows), "rows": rows[:30], "updated_at": mtime,
+            "dir": str(d.relative_to(ROOT))}
 
-    # 只认策略**自己**目录下的快照。曾经写过「找不到就退回 alstm 的目录」，
-    # 结果是每个策略都显示「有快照」，实际读的是别人的数据 —— 实盘页面上
-    # 这种张冠李戴比空白危险得多。
-    #
-    # 同样，目录存在 ≠ 跑过实盘：这些 state/ 目录是建仓库时就有的空壳。
-    # 必须真的读到 positions.json 或 equity.csv 才算。
+
+def live_status() -> dict:
+    """实盘运行状态。只读产物文件，不连 miniQMT。
+
+    按三段链路分别汇报，缺哪段说哪段，不把「信号跑通」说成「实盘在跑」，
+    也不把「还没下单」说成「什么都没跑」。
+    """
+    out = {"strategies": [], "has_signal": False, "has_position": False,
+           "has_execution": False}
+
     for s in STRATEGIES:
         if not s.live_task:
             continue
-        sd = ROOT / "strategies" / s.id / "state"
-        if not sd.exists():
-            continue
-        pos = _read_json(sd / "positions.json")
-        eq = _read_csv(sd / "equity.csv")
-        if pos is None and not eq:
-            continue
-        out["running"].append({
-            "id": s.id, "name": s.name,
-            "positions": pos, "equity_rows": len(eq),
-            "state_dir": str(sd.relative_to(ROOT)),
+        sdir = s.dir or s.id
+        sig = _signal_status(sdir)
+
+        # 只认策略自己目录下的快照。曾写过「找不到就退回 alstm 的目录」，
+        # 结果每个策略都显示有快照，实际读的是别人的数据 —— 实盘页上
+        # 这种张冠李戴比空白危险得多。
+        sd = ROOT / "strategies" / sdir / "state"
+        pos = _read_json(sd / "positions.json") if sd.exists() else None
+        eq = _read_csv(sd / "equity.csv") if sd.exists() else []
+
+        ed = ROOT / "strategies" / sdir / "executions"
+        ex_files = sorted(ed.glob("*.csv"), reverse=True) if ed.exists() else []
+
+        out["strategies"].append({
+            "id": s.id, "name": s.name, "category": s.category,
+            "live_task": s.live_task,
+            "signal": sig,
+            "positions": pos,
+            "equity_rows": len(eq),
+            "n_executions": len(ex_files),
         })
-        out["has_any"] = True
-        out["state_dir"] = str(sd.relative_to(ROOT))
+        out["has_signal"] |= sig["has"]
+        out["has_position"] |= pos is not None
+        out["has_execution"] |= bool(ex_files)
 
     return out
 
