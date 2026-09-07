@@ -164,14 +164,14 @@ def compute_features_for_symbol(path: str | pd.DataFrame,
     :return: 包含 INTRADAY_FEATURES 列 + close/volume/amount 列的 DataFrame，
              或 None（数据不足时）
     """
-    if isinstance(path, (str, type(None))):
-        import pathlib
-        p = pathlib.Path(path)
+    if isinstance(path, pd.DataFrame):
+        df = path
+    else:
+        from pathlib import Path as _Path
+        p = _Path(path)
         if not p.exists():
             return None
         df = pd.read_parquet(p)
-    else:
-        df = path
 
     if len(df) < 60:
         return None
