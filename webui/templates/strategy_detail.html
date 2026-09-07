@@ -129,6 +129,29 @@
 </div>
 {% endif %}
 
+<!-- 收益目标差距 -->
+{% if r.target %}
+{% set tg = r.target %}
+<h2>距收益目标的差距</h2>
+<div class="card">
+  <table>
+    <tbody>
+      <tr><th style="width:250px">目标要求的毛 edge / 笔</th>
+        <td class="num"><b>{{ '%.2f'|format((tg.need_gross_edge or 0) * 100) }}%</b></td>
+        <td style="color:var(--muted);font-size:12px">
+          净 {{ '%.2f'|format((tg.need_net_edge or 0) * 100) }}% + 往返成本 0.25%</td></tr>
+      <tr><th>实际达到的毛 edge</th>
+        <td class="num">{{ '%.3f'|format((tg.actual_gross_edge or 0) * 100) }}%</td>
+        <td style="color:var(--muted);font-size:12px">最优组合的平均买卖价差</td></tr>
+      <tr><th>差距</th>
+        <td class="num" style="color:var(--up)"><b>{{ tg.shortfall_multiple }} 倍</b></td>
+        <td style="color:var(--muted);font-size:12px">
+          信号强度需提升到当前的 {{ tg.shortfall_multiple }} 倍才能达标</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <!-- alpha / beta 拆解 -->
 {% if r.alpha_beta %}
 {% set ab = r.alpha_beta %}

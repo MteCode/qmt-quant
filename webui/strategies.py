@@ -413,6 +413,11 @@ STRATEGIES: list[Strategy] = [
         code="scripts/optimize_t0_divergence.py",
         backtest_task="",
         status="research",
+        caveat="7776 组参数中仅 1 组做T为正（0.01%），三类信号全部为负均值。"
+               "样本内前 10 组样本外 0/10 存活。毛 edge 0.266% 对成本 0.25%，"
+               "距年化 100% 所需的 1.07% 差 4.0 倍。"
+               "交易越频繁亏得越多 —— 覆盖率 >50% 的组合做T年化均值 -26.2%。"
+               "不建议实盘。",
         loader=_load_t0_divergence,
     ),
     Strategy(
