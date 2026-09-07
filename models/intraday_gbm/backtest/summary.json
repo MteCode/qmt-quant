@@ -1,0 +1,60 @@
+{
+  "generated_at": "2026-09-07 10:38:39",
+  "config": {
+    "capital": 50000.0,
+    "max_positions": 5,
+    "prob_buy": 0.6,
+    "prob_sell": 0.4,
+    "max_intraday_loss": 0.02,
+    "max_drawdown_stop": 0.1,
+    "entry_time": "09:35",
+    "exit_time": "14:50",
+    "max_symbols": 30,
+    "commission": 0.00025,
+    "stamp_tax": 0.001,
+    "slippage": 0.0005
+  },
+  "model": {
+    "horizon": 10,
+    "threshold": 0.0005
+  },
+  "results": {
+    "momentum": {
+      "mode": "momentum",
+      "initial_capital": 50000.0,
+      "final_equity": 49798.91,
+      "total_return": -0.004,
+      "annual_return": -0.0141,
+      "monthly_return": -0.0012,
+      "max_drawdown": -0.0041,
+      "sharpe": -3.499,
+      "volatility": 0.004,
+      "trading_days": 69,
+      "n_trades": 5,
+      "win_rate": 0.2,
+      "avg_win": 2.88,
+      "avg_loss": -50.99,
+      "date_range": [
+        "2026-06-01",
+        "2026-09-04"
+      ],
+      "targets": {
+        "monthly_return_30pct": {
+          "target": ">= 30%",
+          "actual": "-0.12%",
+          "pass": false
+        },
+        "max_drawdown_10pct": {
+          "target": "<= 10%",
+          "actual": "0.41%",
+          "pass": true
+        },
+        "sharpe_above_1": {
+          "target": "> 1.0",
+          "actual": "-3.499",
+          "pass": false
+        }
+      }
+    }
+  }
+}

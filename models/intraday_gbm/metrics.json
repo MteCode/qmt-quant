@@ -1,0 +1,63 @@
+{
+  "model": "LightGBMClassifier",
+  "horizon_bars": 10,
+  "threshold": 0.0005,
+  "n_features": 23,
+  "features": [
+    "ret1",
+    "ret3",
+    "ret5",
+    "ret10",
+    "ret20",
+    "ma_gap_5",
+    "ma_gap_10",
+    "ma_gap_20",
+    "ma_gap_60",
+    "vol_z_10",
+    "vol_z_30",
+    "atr_10",
+    "atr_20",
+    "rsi_14",
+    "vwap_gap",
+    "spread",
+    "order_imbalance",
+    "amihud",
+    "day_ret",
+    "day_high_pct",
+    "day_low_pct",
+    "tod",
+    "session"
+  ],
+  "train_samples": 20000000,
+  "test_samples": 5000000,
+  "train_accuracy": 0.621935,
+  "train_auc": 0.5962094594717832,
+  "test_accuracy": 0.6079442,
+  "test_auc": 0.5715252646120785,
+  "train_date_range": [
+    "2025-08-25 13:25:00",
+    "2026-05-20 14:48:00"
+  ],
+  "test_date_range": [
+    "2026-05-21 09:41:00",
+    "2026-08-26 15:00:00"
+  ],
+  "train_positive_rate": 0.38024435,
+  "test_positive_rate": 0.3911354,
+  "train_time_seconds": 86.8,
+  "params": {
+    "n_estimators": 400,
+    "learning_rate": 0.03,
+    "num_leaves": 31,
+    "max_depth": 6,
+    "min_child_samples": 100,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_alpha": 0.5,
+    "reg_lambda": 2.0,
+    "objective": "binary",
+    "random_state": 42,
+    "verbosity": -1,
+    "n_jobs": -1
+  }
+}
