@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-07 10:38:39",
+  "generated_at": "2026-09-07 16:10:42",
   "config": {
     "capital": 50000.0,
     "max_positions": 5,
@@ -9,7 +9,7 @@
     "max_drawdown_stop": 0.1,
     "entry_time": "09:35",
     "exit_time": "14:50",
-    "max_symbols": 30,
+    "max_symbols": 15,
     "commission": 0.00025,
     "stamp_tax": 0.001,
     "slippage": 0.0005
@@ -22,36 +22,36 @@
     "momentum": {
       "mode": "momentum",
       "initial_capital": 50000.0,
-      "final_equity": 49798.91,
-      "total_return": -0.004,
-      "annual_return": -0.0141,
-      "monthly_return": -0.0012,
-      "max_drawdown": -0.0041,
-      "sharpe": -3.499,
-      "volatility": 0.004,
-      "trading_days": 69,
-      "n_trades": 5,
-      "win_rate": 0.2,
-      "avg_win": 2.88,
-      "avg_loss": -50.99,
+      "final_equity": 50000.0,
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "monthly_return": 0.0,
+      "max_drawdown": 0.0,
+      "sharpe": 0,
+      "volatility": 0.0,
+      "trading_days": 25,
+      "n_trades": 0,
+      "win_rate": 0,
+      "avg_win": 0,
+      "avg_loss": 0,
       "date_range": [
-        "2026-06-01",
+        "2026-08-03",
         "2026-09-04"
       ],
       "targets": {
         "monthly_return_30pct": {
           "target": ">= 30%",
-          "actual": "-0.12%",
+          "actual": "0.00%",
           "pass": false
         },
         "max_drawdown_10pct": {
           "target": "<= 10%",
-          "actual": "0.41%",
+          "actual": "0.00%",
           "pass": true
         },
         "sharpe_above_1": {
           "target": "> 1.0",
-          "actual": "-3.499",
+          "actual": "0.000",
           "pass": false
         }
       }

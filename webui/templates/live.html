@@ -1,0 +1,250 @@
+{% extends "base.html" %}
+{% block title %}实盘监控{% endblock %}
+
+{% block body %}
+<h1>实盘监控</h1>
+<p class="sub">在跑的策略、持仓、收益与信号。数据来自快照文件，不直连
+  miniQMT —— 连接会阻塞请求，失败时整个页面打不开。</p>
+
+{% if not live.has_any %}
+<div class="card" style="border-left:4px solid var(--warn)">
+  <div style="font-weight:600;margin-bottom:6px">尚未运行过实盘</div>
+  <div style="font-size:13px;line-height:1.75;color:var(--muted)">
+    没有找到任何策略的 <code>state/</code> 快照目录，说明实盘链路从未启动。
+    要开始，需要依次跑通：<b>生成信号 → 快照持仓 → 模拟下单</b>。
+    下方按钮可逐个触发；下单类任务默认预览（dry-run），
+    真实委托需要二次确认。
+  </div>
+</div>
+{% endif %}
+
+<!-- ---------------- 策略运行状态 ---------------- -->
+<h2>策略状态</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>策略</th><th>分类</th><th>状态</th>
+      <th>信号任务</th><th class="num">持仓</th><th></th></tr></thead>
+    <tbody>
+    {% for s in capable %}
+      {% set run = (live.running | selectattr('id','equalto',s.id)
+                    | list | first) %}
+      <tr>
+        <td><a href="/strategies/{{ s.id }}"><b>{{ s.name }}</b></a></td>
+        <td><span class="tag t-mut">{{ s.category }}</span></td>
+        <td>
+          {% if run %}<span class="tag t-ok">有快照</span>
+          {% else %}<span class="tag t-mut">未运行</span>{% endif %}
+        </td>
+        <td>
+          {% if s.live_task in running %}
+            <span class="tag t-run">运行中</span>
+          {% else %}
+            <button onclick="runTask('{{ s.live_task }}','{{ s.name }} 生成信号')"
+                    style="padding:4px 10px;font-size:12px">生成信号</button>
+          {% endif %}
+        </td>
+        <td class="num">
+          {% if run and run.positions %}
+            {{ (run.positions.positions or []) | length }} 只
+          {% else %}-{% endif %}
+        </td>
+        <td><a href="/strategies/{{ s.id }}"
+               style="font-size:12px">回测数据 →</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if not capable %}
+    <div class="empty">没有登记了实盘信号任务的策略</div>
+  {% endif %}
+</div>
+
+<!-- ---------------- 持仓 ---------------- -->
+<h2>账户持仓</h2>
+{% if not positions %}
+  <div class="card"><div class="empty">
+    无持仓快照。先运行 <b>snapshot_positions</b> 生成。
+    <div style="margin-top:12px">
+      <button onclick="runTask('snapshot_positions','快照持仓')"
+              {{ 'disabled' if 'snapshot_positions' in running }}>
+        {{ '运行中…' if 'snapshot_positions' in running else '快照持仓' }}
+      </button>
+    </div>
+  </div></div>
+{% else %}
+  {% if positions.is_stale %}
+    <div class="note"><b>快照已过期</b> ——
+      距上次更新 {{ '%.1f'|format(positions.age_hours) }} 小时。
+      拿隔夜持仓当实时数据看会误判，建议重新快照。</div>
+  {% endif %}
+  <div class="grid g4">
+    <div class="kpi">
+      <div class="l">总市值</div>
+      <div class="v">{{ '{:,.0f}'.format(positions.total_value or 0) }}</div>
+      <div class="s">元</div>
+    </div>
+    <div class="kpi">
+      <div class="l">可用资金</div>
+      <div class="v">{{ '{:,.0f}'.format(positions.cash or 0) }}</div>
+      <div class="s">元</div>
+    </div>
+    <div class="kpi">
+      <div class="l">持仓数</div>
+      <div class="v">{{ (positions.positions or []) | length }}</div>
+      <div class="s">只</div>
+    </div>
+    <div class="kpi">
+      <div class="l">更新时间</div>
+      <div class="v" style="font-size:15px">
+        {{ positions.updated_at or '-' }}</div>
+      <div class="s">
+        {% if positions.age_hours %}
+          {{ '%.1f'|format(positions.age_hours) }} 小时前{% endif %}</div>
+    </div>
+  </div>
+  <div class="card">
+    <table>
+      <thead><tr><th>代码</th><th>名称</th><th class="num">数量</th>
+        <th class="num">成本</th><th class="num">现价</th>
+        <th class="num">市值</th><th class="num">盈亏</th></tr></thead>
+      <tbody>
+      {% for p in positions.positions or [] %}
+        <tr>
+          <td><code>{{ p.symbol or p.code }}</code></td>
+          <td>{{ p.name or '-' }}</td>
+          <td class="num">{{ p.volume or p.qty or 0 }}</td>
+          <td class="num">{{ '%.3f'|format(p.cost or p.avg_price or 0) }}</td>
+          <td class="num">{{ '%.3f'|format(p.price or p.last or 0) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(p.value or p.market_value or 0) }}</td>
+          <td class="num" style="color:{{ 'var(--up)' if (p.pnl or 0) > 0
+              else 'var(--down)' }}">
+            {{ '%+,.0f'|format(p.pnl or 0) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<!-- ---------------- 今日信号 ---------------- -->
+<h2>策略信号</h2>
+{% if not signal %}
+  <div class="card"><div class="empty">
+    无信号数据。运行策略的「生成信号」任务后在此显示。
+  </div></div>
+{% else %}
+  <div class="card">
+    <div class="row" style="margin-bottom:10px">
+      <span style="color:var(--muted);font-size:12px">
+        信号日期 {{ signal.date or '-' }} ·
+        共 {{ (signal.rows or signal.picks or []) | length }} 只</span>
+    </div>
+    <table>
+      <thead><tr><th style="width:44px">#</th><th>代码</th><th>名称</th>
+        <th class="num">打分</th><th>行业</th><th class="num">建议权重</th>
+      </tr></thead>
+      <tbody>
+      {% for x in (signal.rows or signal.picks or [])[:30] %}
+        <tr>
+          <td style="color:var(--muted)">{{ loop.index }}</td>
+          <td><code>{{ x.symbol or x.code }}</code></td>
+          <td>{{ x.name or '-' }}</td>
+          <td class="num">{{ '%.4f'|format(x.score or x.pred or 0) }}</td>
+          <td style="color:var(--muted);font-size:12px">
+            {{ x.industry or '-' }}</td>
+          <td class="num">
+            {% if x.weight %}{{ '%.2f'|format(x.weight * 100) }}%
+            {% else %}-{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<!-- ---------------- 执行记录 ---------------- -->
+<h2>下单执行</h2>
+{% if not ex %}
+  <div class="card"><div class="empty">
+    无执行记录。
+    <div style="margin-top:12px">
+      <button onclick="runPaper()"
+              {{ 'disabled' if 'paper_trade' in running }}>
+        {{ '运行中…' if 'paper_trade' in running else '模拟下单（预览）' }}
+      </button>
+      <span style="color:var(--muted);font-size:12px;margin-left:8px">
+        默认 dry-run，只打印计划不真实委托</span>
+    </div>
+  </div></div>
+{% else %}
+  <div class="card">
+    <table>
+      <thead><tr><th>时间</th><th>代码</th><th>方向</th>
+        <th class="num">数量</th><th class="num">价格</th>
+        <th>状态</th></tr></thead>
+      <tbody>
+      {% for o in (ex.orders or ex.rows or [])[:40] %}
+        <tr>
+          <td style="color:var(--muted);font-size:12px">
+            {{ o.time or o.datetime or '-' }}</td>
+          <td><code>{{ o.symbol or o.code }}</code></td>
+          <td><span class="tag {{ 't-err' if (o.direction or '') in ('sell','卖出')
+                else 't-ok' }}">{{ o.direction or o.side or '-' }}</span></td>
+          <td class="num">{{ o.volume or o.qty or 0 }}</td>
+          <td class="num">{{ '%.3f'|format(o.price or 0) }}</td>
+          <td style="font-size:12px">{{ o.status or '-' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endif %}
+
+<!-- ---------------- 最近任务 ---------------- -->
+<h2>最近运行</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>任务</th><th>状态</th><th>开始</th>
+      <th class="num">耗时</th><th></th></tr></thead>
+    <tbody>
+    {% for j in recent %}
+      <tr>
+        <td>{{ j.task_name or j.task_id }}</td>
+        <td><span class="tag {{ 't-run' if j.status == 'running'
+              else ('t-ok' if j.status == 'success' else 't-err') }}">
+          {{ j.status }}</span></td>
+        <td style="color:var(--muted);font-size:12px">{{ j.started_at }}</td>
+        <td class="num" style="color:var(--muted);font-size:12px">
+          {{ j.duration_s | dur }}</td>
+        <td><a href="/jobs/{{ j.id }}" style="font-size:12px">日志 →</a></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if not recent %}<div class="empty">还没有运行记录</div>{% endif %}
+</div>
+{% endblock %}
+
+{% block script %}
+<script>
+async function runTask(taskId, label){
+  if(!confirm('运行「' + label + '」？')) return;
+  const r = await fetch('/api/run', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({task_id: taskId})});
+  const d = await r.json();
+  if(d.ok) location.href = '/jobs/' + d.job_id;
+  else alert('启动失败：' + (d.error || '未知错误'));
+}
+async function runPaper(){
+  if(!confirm('运行模拟下单？\n\n默认为预览模式（dry-run），只打印计划，' +
+              '不会产生真实委托。')) return;
+  const r = await fetch('/api/run', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({task_id:'paper_trade', dry_run:'true'})});
+  const d = await r.json();
+  if(d.ok) location.href = '/jobs/' + d.job_id;
+  else alert('启动失败：' + (d.error || '未知错误'));
+}
+</script>
+{% endblock %}

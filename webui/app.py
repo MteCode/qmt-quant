@@ -26,9 +26,13 @@ from pathlib import Path
 from plotly.offline import get_plotlyjs
 
 from . import data_browser, jobs, loaders, scheduler
+from . import strategies as strat
 from .registry import TASKS, TASK_BY_ID
 
 app = Flask(__name__)
+# 模板改动即时生效。默认只在 debug 下重载，而 debug 会起两个调度线程
+# 造成定时任务重复触发（见 main()），所以单独把模板重载打开。
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 ROOT = Path(__file__).resolve().parents[1]
 INTRADAY_DIR = ROOT / "strategies" / "intraday_t_920368" / "backtest"
 INTRADAY_MODEL_DIR = ROOT / "strategies" / "intraday_t_920368" / "models"
@@ -173,6 +177,64 @@ def intraday_gbm_page():
                            importance=importance, grid=grid,
                            backtest=backtest,
                            has_model=(GBM_MODEL_DIR / "model.joblib").exists())
+
+
+@app.route("/strategies")
+def strategies_page():
+    """策略中心 —— 所有策略的统一入口：说明、回测、结果。"""
+    cat = request.args.get("category", "")
+    rows = strat.list_strategies(cat)
+    return render_template(
+        "strategies.html", rows=rows, category=cat,
+        categories=sorted({s.category for s in strat.STRATEGIES}),
+        running={r["task_id"] for r in jobs.running_jobs()},
+        task_by_id=TASK_BY_ID)
+
+
+@app.route("/strategies/<sid>")
+def strategy_detail(sid):
+    s = strat.BY_ID.get(sid)
+    if s is None:
+        return render_template("strategies.html",
+                               rows=strat.list_strategies(), category="",
+                               categories=sorted({x.category for x in
+                                                  strat.STRATEGIES}),
+                               running=set(), task_by_id=TASK_BY_ID,
+                               error=f"策略不存在: {sid}"), 404
+    return render_template(
+        "strategy_detail.html", s=s, r=s.result(),
+        task=TASK_BY_ID.get(s.backtest_task),
+        live_task=TASK_BY_ID.get(s.live_task),
+        running={r["task_id"] for r in jobs.running_jobs()},
+        recent=[j for j in jobs.list_jobs(limit=30)
+                if j.get("task_id") in (s.backtest_task, s.live_task)][:8])
+
+
+@app.get("/api/strategy/<sid>/equity")
+def api_strategy_equity(sid):
+    s = strat.BY_ID.get(sid)
+    if s is None:
+        return jsonify(ok=False, error="策略不存在"), 404
+    r = s.result()
+    eq = r.get("equity")
+    if not eq:
+        return jsonify(ok=False, error="无净值数据"), 404
+    return jsonify(eq)
+
+
+@app.route("/live")
+def live_page():
+    """实盘监控 —— 在跑的策略、持仓、收益、信号。"""
+    return render_template(
+        "live.html",
+        live=strat.live_status(),
+        capable=strat.live_capable(),
+        positions=loaders.positions(),
+        signal=loaders.selection(request.args.get("signal") or None),
+        ex=loaders.executions(request.args.get("date") or None),
+        running={r["task_id"] for r in jobs.running_jobs()},
+        task_by_id=TASK_BY_ID,
+        recent=jobs.list_jobs(limit=10))
 
 
 @app.route("/t0-single")

@@ -30,6 +30,12 @@ header{background:var(--card);border-bottom:1px solid var(--line);
 .nav a:hover{background:var(--bg);text-decoration:none}
 .nav a.on{background:var(--accent);color:#fff}
 .nav .sp{margin-left:auto;color:var(--muted);font-size:12px}
+.more{position:relative}
+.more-m{display:none;position:absolute;top:calc(100% + 6px);left:0;
+  background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:5px;min-width:158px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:20}
+.more:hover .more-m{display:block}
+.more-m a{display:block;padding:6px 11px;border-radius:5px;font-size:13px}
 
 main{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
 h1{font-size:19px;margin:0 0 4px}
@@ -94,17 +100,24 @@ pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
 <header><nav class="nav">
   <span class="brand">量化管理台</span>
   {% set p = request.path %}
-  <a href="/"            class="{{ 'on' if p=='/' }}">总览</a>
-  <a href="/selection"   class="{{ 'on' if p=='/selection' }}">实盘执行</a>
-  <a href="/data"        class="{{ 'on' if p=='/data' }}">数据核对</a>
-  <a href="/experiments" class="{{ 'on' if p=='/experiments' }}">实验结果</a>
-  <a href="/backtests" class="{{ 'on' if p=='/backtests' }}">回测成绩</a>
-  <a href="/intraday-gbm" class="{{ 'on' if p.startswith('/intraday-gbm') }}">日内选股</a>
-  <a href="/t0-single" class="{{ 'on' if p.startswith('/t0-single') }}">单票做T</a>
-  <a href="/intraday-t-920368" class="{{ 'on' if p.startswith('/intraday-t-920368') }}">920368做T</a>
-  <a href="/tasks"       class="{{ 'on' if p=='/tasks' }}">运行任务</a>
-  <a href="/schedule"    class="{{ 'on' if p=='/schedule' }}">定时任务</a>
-  <a href="/jobs"        class="{{ 'on' if p.startswith('/jobs') }}">运行记录</a>
+  <a href="/"           class="{{ 'on' if p=='/' }}">总览</a>
+  <a href="/strategies" class="{{ 'on' if p.startswith('/strategies') }}">策略中心</a>
+  <a href="/live"       class="{{ 'on' if p=='/live' }}">实盘监控</a>
+  <a href="/data"       class="{{ 'on' if p=='/data' }}">数据核对</a>
+  <a href="/tasks"      class="{{ 'on' if p=='/tasks' }}">运行任务</a>
+  <a href="/schedule"   class="{{ 'on' if p=='/schedule' }}">定时任务</a>
+  <a href="/jobs"       class="{{ 'on' if p.startswith('/jobs') }}">运行记录</a>
+  <span class="more">
+    <a href="#" onclick="return false" class="more-t">更多 ▾</a>
+    <span class="more-m">
+      <a href="/backtests">历史成绩单</a>
+      <a href="/experiments">实验结果</a>
+      <a href="/selection">信号明细</a>
+      <a href="/intraday-gbm">日内选股（旧）</a>
+      <a href="/t0-single">单票做T（旧）</a>
+      <a href="/intraday-t-920368">920368做T</a>
+    </span>
+  </span>
   <span class="sp" id="clock"></span>
 </nav></header>
 <main>{% block body %}{% endblock %}</main>

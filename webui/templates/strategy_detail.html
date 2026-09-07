@@ -1,0 +1,327 @@
+{% extends "base.html" %}
+{% block title %}{{ s.name }}{% endblock %}
+
+{% block body %}
+{% set m = r.metrics or {} %}
+<div class="row" style="margin-bottom:2px">
+  <a href="/strategies" style="font-size:12.5px">← 策略中心</a>
+</div>
+<h1>{{ s.name }}
+  <span class="tag t-mut" style="vertical-align:middle">{{ s.category }}</span>
+  {% if s.status == 'live_ready' %}<span class="tag t-ok"
+    style="vertical-align:middle">可实盘</span>
+  {% elif s.status == 'backtest_only' %}<span class="tag t-run"
+    style="vertical-align:middle">仅回测</span>
+  {% else %}<span class="tag t-mut" style="vertical-align:middle">研究中</span>
+  {% endif %}
+</h1>
+<p class="sub">{{ s.summary }}</p>
+
+{% if s.caveat %}
+<div class="card" style="border-left:4px solid var(--up)">
+  <div style="font-weight:600;color:var(--up);margin-bottom:5px">结论</div>
+  <div style="font-size:13px;line-height:1.7">{{ s.caveat }}</div>
+</div>
+{% endif %}
+
+<!-- ---------------- 操作区 ---------------- -->
+<div class="card">
+  <div class="lbl">运行</div>
+  {% if task %}
+    <form id="btform" onsubmit="return submitBT(event)">
+      <div class="grid g3" style="margin:10px 0">
+        {% for p in task.params %}
+          <div>
+            <label style="font-size:12px;color:var(--muted);display:block;
+                   margin-bottom:3px">{{ p.label }}</label>
+            {% if p.kind == 'bool' %}
+              <select name="{{ p.name }}">
+                <option value="true" {{ 'selected' if p.default }}>是</option>
+                <option value="false" {{ 'selected' if not p.default }}>否</option>
+              </select>
+            {% else %}
+              <input name="{{ p.name }}" value="{{ p.default if p.default is not none else '' }}"
+                     placeholder="{{ p.help or '' }}">
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      <div class="row">
+        <button type="submit" class="primary"
+                {{ 'disabled' if s.backtest_task in running }}>
+          {{ '回测运行中…' if s.backtest_task in running else '开始回测' }}
+        </button>
+        <span style="color:var(--muted);font-size:12px">
+          预计 {{ task.eta }} · 后台运行，可离开页面</span>
+      </div>
+    </form>
+  {% else %}
+    <p style="color:var(--muted);font-size:12.5px;margin:8px 0 0">
+      该策略暂无一键回测入口。命令行运行：
+      <code>python {{ s.code }}</code>
+    </p>
+  {% endif %}
+
+  {% if recent %}
+    <div class="lbl" style="margin-top:14px">最近运行</div>
+    <table>
+      <tbody>
+      {% for j in recent %}
+        <tr>
+          <td><a href="/jobs/{{ j.id }}">{{ j.id[:12] }}</a></td>
+          <td><span class="tag {{ 't-run' if j.status == 'running'
+                else ('t-ok' if j.status == 'success' else 't-err') }}">
+            {{ j.status }}</span></td>
+          <td style="color:var(--muted);font-size:12px">{{ j.started_at }}</td>
+          <td class="num" style="color:var(--muted);font-size:12px">
+            {{ j.duration_s | dur }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</div>
+
+<!-- ---------------- 回测结果 ---------------- -->
+<h2>回测结果</h2>
+{% if not r.has_result %}
+  <div class="card"><div class="empty">
+    尚无回测结果{% if r.error %}（读取出错：{{ r.error }}）{% endif %}。
+    {% if task %}点上方「开始回测」生成。{% endif %}
+  </div></div>
+{% else %}
+
+{% if m %}
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">总收益</div>
+    <div class="v" style="color:{{ 'var(--up)' if (m.total_return or 0) > 0
+        else 'var(--down)' }}">
+      {{ '%+.2f'|format((m.total_return or 0) * 100) }}%</div>
+    <div class="s">{{ r.period or '-' }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">年化收益</div>
+    <div class="v" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0
+        else 'var(--down)' }}">
+      {{ '%+.2f'|format((m.annual_return or 0) * 100) }}%</div>
+    <div class="s">{{ m.n_periods or r.n_trades or '' }}
+      {{ '个交易日' if m.n_periods else ('笔交易' if r.n_trades else '') }}</div>
+  </div>
+  <div class="kpi bad">
+    <div class="l">最大回撤</div>
+    <div class="v">{{ '%.2f'|format((m.max_drawdown or 0) * 100) }}%</div>
+    <div class="s">峰值到谷底</div>
+  </div>
+  <div class="kpi">
+    <div class="l">夏普比率</div>
+    <div class="v">{{ '%.2f'|format(m.sharpe or 0) }}</div>
+    <div class="s">
+      {% if m.volatility %}年化波动 {{ '%.1f'|format(m.volatility * 100) }}%
+      {% endif %}</div>
+  </div>
+</div>
+{% endif %}
+
+{% if r.equity %}
+<div class="card">
+  <div id="eq" style="height:330px"></div>
+</div>
+{% endif %}
+
+<!-- alpha / beta 拆解 -->
+{% if r.alpha_beta %}
+{% set ab = r.alpha_beta %}
+<div class="note">
+  <b>收益拆解</b>：做 T 操作贡献
+  <b>{{ '%+.2f'|format((ab.t_annual or 0) * 100) }}%</b>（alpha），
+  纯持有底仓年化 {{ '%.2f'|format((ab.buyhold_annual or 0) * 100) }}%（beta）。
+  两者要分开看 —— 把底仓涨跌算进策略业绩是自欺欺人。
+</div>
+{% endif %}
+
+<!-- 多模式对比（日内 GBM） -->
+{% if r.modes %}
+<h2>各模式对比</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>模式</th><th class="num">总收益</th>
+      <th class="num">月化</th><th class="num">回撤</th><th class="num">夏普</th>
+      <th class="num">交易</th><th class="num">胜率</th><th>达标</th></tr></thead>
+    <tbody>
+    {% for x in r.modes %}
+      <tr>
+        <td><b>{{ x.mode }}</b></td>
+        <td class="num" style="color:{{ 'var(--up)' if (x.total_return or 0) > 0
+            else 'var(--down)' }}">{{ '%+.2f'|format((x.total_return or 0) * 100) }}%</td>
+        <td class="num">{{ '%+.2f'|format((x.monthly_return or 0) * 100) }}%</td>
+        <td class="num">{{ '%.2f'|format((x.max_drawdown or 0) * 100) }}%</td>
+        <td class="num">{{ '%.2f'|format(x.sharpe or 0) }}</td>
+        <td class="num">{{ x.n_trades }}</td>
+        <td class="num">{{ '%.1f'|format((x.win_rate or 0) * 100) }}%</td>
+        <td><span class="tag {{ 't-ok' if x.targets_passed == x.targets_total
+              else ('t-warn' if x.targets_passed else 't-err') }}">
+          {{ x.targets_passed }}/{{ x.targets_total }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<!-- 模型指标 -->
+{% if r.model %}
+<h2>模型</h2>
+<div class="grid g2">
+  <div class="card">
+    <table><tbody>
+      <tr><th>验证集 AUC</th><td class="num">
+        {{ '%.4f'|format(r.model.test_auc or 0) }}</td></tr>
+      <tr><th>验证集准确率</th><td class="num">
+        {{ '%.2f'|format((r.model.test_accuracy or 0) * 100) }}%</td></tr>
+      <tr><th>训练集 AUC</th><td class="num">
+        {{ '%.4f'|format(r.model.train_auc or 0) }}</td></tr>
+      <tr><th>特征维度</th><td class="num">{{ r.model.n_features }}</td></tr>
+      <tr><th>训练样本</th><td class="num">
+        {{ '{:,}'.format(r.model.train_samples or 0) }}</td></tr>
+      <tr><th>预测窗口</th><td class="num">{{ r.model.horizon }} bar</td></tr>
+    </tbody></table>
+  </div>
+  {% if r.importance %}
+  <div class="card">
+    <div class="lbl">特征重要性 Top 10</div>
+    {% set top = r.importance[0].importance|int %}
+    <table><tbody>
+    {% for f in r.importance %}
+      <tr>
+        <td style="width:34%"><code style="font-size:12px">{{ f.feature }}</code></td>
+        <td class="num" style="width:60px">{{ f.importance }}</td>
+        <td><div style="background:var(--bg);border-radius:3px;height:12px">
+          <div style="background:var(--accent);height:100%;border-radius:3px;
+            width:{{ (f.importance|int / top * 100)|round(1) }}%"></div></div></td>
+      </tr>
+    {% endfor %}
+    </tbody></table>
+  </div>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- 样本外验证 -->
+{% if r.walkforward %}
+<h2>样本外验证</h2>
+<div class="card">
+  <p class="sub" style="margin-top:0">
+    前半段选参数、后半段检验。在 N 组参数里挑最优等于做了 N 次检验，
+    不做样本外验证就报告「最优」是在误导自己。
+  </p>
+  {% set rb = r.robustness or {} %}
+  {% if rb %}
+  <div class="row" style="margin-bottom:12px;gap:22px">
+    <div><span class="lbl" style="margin:0">参数组数</span>
+      <b>{{ rb.n_configs }}</b></div>
+    <div><span class="lbl" style="margin:0">做T为正</span>
+      <b style="color:var(--warn)">{{ rb.n_positive_t }}
+      （{{ '%.1f'|format((rb.pct_positive_t or 0) * 100) }}%）</b></div>
+    <div><span class="lbl" style="margin:0">全体均值</span>
+      <b style="color:var(--down)">
+      {{ '%.2f'|format((rb.t_annual_mean or 0) * 100) }}%</b></div>
+    <div><span class="lbl" style="margin:0">样本外存活</span>
+      <b style="color:{{ 'var(--up)' if (rb.walkforward_survivors
+         or rb.walkforward_top10_survivors or 0) > 0 else 'var(--down)' }}">
+      {{ rb.walkforward_survivors if rb.walkforward_survivors is not none
+         else rb.walkforward_top10_survivors }}/10</b></div>
+  </div>
+  {% endif %}
+  <table>
+    <thead><tr><th style="width:50px">排名</th>
+      <th class="num">样本内</th><th class="num">样本外</th>
+      <th>结果</th></tr></thead>
+    <tbody>
+    {% for w in r.walkforward %}
+      <tr>
+        <td style="color:var(--muted)">{{ w.rank }}</td>
+        <td class="num" style="color:var(--up)">
+          {{ '%+.2f'|format(w.in_sample_t_annual * 100) }}%</td>
+        <td class="num" style="color:{{ 'var(--up)' if w.out_sample_t_annual > 0
+            else 'var(--down)' }}">
+          {{ '%+.2f'|format(w.out_sample_t_annual * 100) }}%</td>
+        <td><span class="tag {{ 't-ok' if w.out_sample_t_annual > 0
+              else 't-err' }}">
+          {{ '存活' if w.out_sample_t_annual > 0 else '失效' }}</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<p class="sub">
+  数据源 <code>{{ r.source }}</code>
+  {% if r.generated_at %} · 生成于 {{ r.generated_at }}{% endif %}
+</p>
+{% endif %}
+
+<!-- ---------------- 工作原理 ---------------- -->
+<h2>工作原理</h2>
+<div class="grid g2">
+  <div class="card">
+    <div class="lbl" style="margin-top:0">执行流程</div>
+    <ol class="steps">{% for h in s.how %}<li>{{ h }}</li>{% endfor %}</ol>
+  </div>
+  <div class="card">
+    <div class="lbl" style="margin-top:0">依赖数据</div>
+    <ul class="steps">{% for i in s.inputs %}<li>{{ i }}</li>{% endfor %}</ul>
+    <div class="lbl">风控约束</div>
+    <ul class="steps">{% for x in s.risk %}<li>{{ x }}</li>{% endfor %}</ul>
+    <div class="lbl">代码位置</div>
+    <code style="font-size:12px">{{ s.code }}</code>
+  </div>
+</div>
+
+<style>
+.lbl{color:var(--muted);font-size:11.5px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.4px;margin:12px 0 6px}
+.steps{margin:0;padding-left:18px;font-size:12.5px;line-height:1.85}
+</style>
+{% endblock %}
+
+{% block script %}
+<script>
+function submitBT(e){
+  e.preventDefault();
+  const fd = new FormData(document.getElementById('btform'));
+  const body = {task_id: '{{ s.backtest_task }}'};
+  fd.forEach((v,k)=>{ if(v !== '') body[k] = v; });
+  fetch('/api/run', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{
+      if(d.ok) location.href = '/jobs/' + d.job_id;
+      else alert('启动失败：' + (d.error || '未知错误'));
+    });
+  return false;
+}
+{% if r.equity %}
+const dark = matchMedia('(prefers-color-scheme:dark)').matches;
+fetch('/api/strategy/{{ s.id }}/equity').then(r=>r.ok?r.json():null).then(d=>{
+  if(!d) return;
+  const tr = [{x:d.dates, y:d.values, name:'净值', type:'scatter',
+    mode:'lines', line:{color:'#2c7be5',width:2},
+    fill:'tozeroy', fillcolor:'rgba(44,123,229,.07)'}];
+  const layout = {
+    margin:{l:64,r:d.close?56:16,t:10,b:36},
+    paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+    font:{color:dark?'#e6e9ef':'#1c2333',size:11},
+    xaxis:{gridcolor:dark?'#272d3a':'#e5e8ee'},
+    yaxis:{gridcolor:dark?'#272d3a':'#e5e8ee',title:'净值(元)'},
+    legend:{orientation:'h',y:1.12,x:0}, showlegend:!!d.close};
+  if(d.close){
+    tr.push({x:d.dates,y:d.close,name:'标的价格',type:'scatter',mode:'lines',
+      yaxis:'y2',line:{color:dark?'#6b7488':'#aab2c0',width:1.4,dash:'dot'}});
+    layout.yaxis2={overlaying:'y',side:'right',title:'股价(元)',showgrid:false};
+  }
+  Plotly.newPlot('eq', tr, layout, {displayModeBar:false,responsive:true});
+});
+{% endif %}
+</script>
+{% endblock %}

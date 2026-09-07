@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}策略中心{% endblock %}
+
+{% block body %}
+<h1>策略中心</h1>
+<p class="sub">每个策略的说明、回测入口与结果都在这里。点标题展开工作原理。</p>
+
+{% if error %}<div class="note"><b>{{ error }}</b></div>{% endif %}
+
+<div class="row" style="margin-bottom:16px">
+  <a href="/strategies" class="btn {{ 'primary' if not category }}"
+     style="text-decoration:none">全部</a>
+  {% for c in categories %}
+    <a href="/strategies?category={{ c }}"
+       class="btn {{ 'primary' if category == c }}"
+       style="text-decoration:none">{{ c }}</a>
+  {% endfor %}
+</div>
+
+{% for row in rows %}
+  {% set s = row.s %}{% set r = row.r %}
+  {% set m = r.metrics or {} %}
+  <div class="card strat" data-id="{{ s.id }}">
+    <div class="strat-head" onclick="toggle('{{ s.id }}')">
+      <div style="flex:1;min-width:0">
+        <div class="row" style="gap:8px;margin-bottom:3px">
+          <span style="font-weight:600;font-size:15px">{{ s.name }}</span>
+          <span class="tag t-mut">{{ s.category }}</span>
+          {% if s.status == 'live_ready' %}
+            <span class="tag t-ok">可实盘</span>
+          {% elif s.status == 'backtest_only' %}
+            <span class="tag t-run">仅回测</span>
+          {% else %}
+            <span class="tag t-mut">研究中</span>
+          {% endif %}
+          {% if s.caveat %}<span class="tag t-err">有结论</span>{% endif %}
+        </div>
+        <div style="color:var(--muted);font-size:12.5px">{{ s.summary }}</div>
+      </div>
+
+      {% if r.has_result and m %}
+      <div class="mini">
+        <div><span class="ml">年化</span>
+          <span class="mv" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0 else 'var(--down)' }}">
+            {{ '%+.1f'|format((m.annual_return or 0) * 100) }}%</span></div>
+        <div><span class="ml">回撤</span>
+          <span class="mv">{{ '%.1f'|format((m.max_drawdown or 0) * 100) }}%</span></div>
+        <div><span class="ml">夏普</span>
+          <span class="mv">{{ '%.2f'|format(m.sharpe or 0) }}</span></div>
+      </div>
+      {% else %}
+      <div class="mini"><span class="tag t-mut">未回测</span></div>
+      {% endif %}
+
+      <span class="chev" id="chev-{{ s.id }}">▸</span>
+    </div>
+
+    <div class="strat-body" id="body-{{ s.id }}" hidden>
+      {% if s.caveat %}
+        <div class="note" style="border-left-color:var(--up);
+             background:rgba(224,75,75,.06)">
+          <b>结论</b>：{{ s.caveat }}
+        </div>
+      {% endif %}
+
+      <div class="grid g2" style="margin-bottom:12px">
+        <div>
+          <div class="lbl">工作原理</div>
+          <ol class="steps">
+            {% for h in s.how %}<li>{{ h }}</li>{% endfor %}
+          </ol>
+        </div>
+        <div>
+          <div class="lbl">依赖数据</div>
+          <ul class="steps">
+            {% for i in s.inputs %}<li>{{ i }}</li>{% endfor %}
+          </ul>
+          <div class="lbl" style="margin-top:10px">风控约束</div>
+          <ul class="steps">
+            {% for x in s.risk %}<li>{{ x }}</li>{% endfor %}
+          </ul>
+          <div class="lbl" style="margin-top:10px">代码</div>
+          <code style="font-size:12px">{{ s.code }}</code>
+        </div>
+      </div>
+
+      <div class="row" style="border-top:1px solid var(--line);padding-top:12px">
+        <a href="/strategies/{{ s.id }}" class="btn primary"
+           style="text-decoration:none">查看详情与图表</a>
+        {% if s.backtest_task %}
+          {% set t = task_by_id.get(s.backtest_task) %}
+          <button onclick="event.stopPropagation();runBacktest('{{ s.backtest_task }}','{{ s.name }}')"
+                  {{ 'disabled' if s.backtest_task in running }}>
+            {{ '回测运行中…' if s.backtest_task in running else '跑回测' }}
+          </button>
+          {% if t %}<span style="color:var(--muted);font-size:12px">
+            预计 {{ t.eta }}</span>{% endif %}
+        {% else %}
+          <span style="color:var(--muted);font-size:12px">
+            该策略暂无一键回测入口，需命令行运行
+            <code>{{ s.code }}</code></span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+{% endfor %}
+
+{% if not rows %}
+  <div class="empty">该分类下暂无策略</div>
+{% endif %}
+
+<style>
+.strat{padding:0;overflow:hidden}
+.strat-head{display:flex;align-items:center;gap:14px;padding:14px 16px;
+  cursor:pointer;user-select:none}
+.strat-head:hover{background:var(--bg)}
+.strat-body{padding:0 16px 16px;border-top:1px solid var(--line)}
+.mini{display:flex;gap:16px;white-space:nowrap}
+.mini .ml{color:var(--muted);font-size:11px;display:block}
+.mini .mv{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.chev{color:var(--muted);transition:transform .15s;font-size:13px}
+.chev.open{transform:rotate(90deg)}
+.lbl{color:var(--muted);font-size:11.5px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.4px;margin:12px 0 6px}
+.steps{margin:0;padding-left:18px;font-size:12.5px;line-height:1.85}
+.steps li{margin-bottom:2px}
+@media(max-width:760px){
+  .strat-head{flex-wrap:wrap}
+  .mini{width:100%;order:3}
+}
+</style>
+{% endblock %}
+
+{% block script %}
+<script>
+function toggle(id){
+  const b = document.getElementById('body-'+id);
+  const c = document.getElementById('chev-'+id);
+  b.hidden = !b.hidden;
+  c.classList.toggle('open', !b.hidden);
+}
+async function runBacktest(taskId, name){
+  if(!confirm('开始回测「'+name+'」？\n任务将在后台运行，可在运行记录中查看进度。'))
+    return;
+  const r = await fetch('/api/run', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({task_id: taskId})
+  });
+  const d = await r.json();
+  if(d.ok){ location.href = '/jobs/' + d.job_id; }
+  else { alert('启动失败：' + (d.error || '未知错误')); }
+}
+</script>
+{% endblock %}
