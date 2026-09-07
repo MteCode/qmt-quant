@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}单标的做T优化{% endblock %}
+
+{% block body %}
+<h1>单标的日内做 T ——
+  {{ summary.symbol if summary else '600711.SSE' }}</h1>
+<p class="sub">底仓 + 现金做 T+0 回转，参数网格搜索 + 样本外验证。</p>
+
+{% if not has_result %}
+  <div class="empty">
+    尚无结果。执行
+    <code>python scripts/optimize_t0_600711.py</code>
+  </div>
+{% else %}
+{% set rb = summary.robustness or {} %}
+{% set pf = summary.performance or {} %}
+{% set bp = summary.best_params or {} %}
+{% set cc = summary.conclusion or {} %}
+
+{% if rb.walkforward_top10_survivors == 0 %}
+<div class="card" style="border-left:4px solid var(--up)">
+  <div style="font-weight:600;font-size:15px;margin-bottom:6px;
+              color:var(--up)">结论：策略不成立，不建议实盘</div>
+  <div style="font-size:13px;line-height:1.75">
+    {{ rb.n_configs }} 组参数中仅 <b>{{ rb.n_positive_t }} 组</b>做 T 收益为正
+    （{{ '%.1f'|format((rb.pct_positive_t or 0) * 100) }}%），全体均值
+    <b>{{ '%.2f'|format((rb.t_annual_mean or 0) * 100) }}%</b>。
+    样本内最优的前 10 组参数，
+    <b>样本外无一存活</b>（全部转为亏损）。
+    样本内的正收益是在 {{ rb.n_configs }} 次检验中挑出的噪声极值，
+    不具备样本外预测能力。
+  </div>
+</div>
+{% endif %}
+
+<h2>收益对比</h2>
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">纯持有底仓（不做T）</div>
+    <div class="v" style="color:var(--up)">
+      {{ '%.2f'|format((pf.buyhold_annual or 0) * 100) }}%</div>
+    <div class="s">年化 · 基准</div>
+  </div>
+  <div class="kpi">
+    <div class="l">最优做T方案（样本内）</div>
+    <div class="v">{{ '%.2f'|format((pf.annual_return or 0) * 100) }}%</div>
+    <div class="s">年化 · 含底仓涨跌</div>
+  </div>
+  <div class="kpi">
+    <div class="l">做 T 部分贡献</div>
+    <div class="v" style="color:{{ 'var(--up)' if (pf.t_annual or 0) > 0
+        else 'var(--down)' }}">
+      {{ '%+.2f'|format((pf.t_annual or 0) * 100) }}%</div>
+    <div class="s">样本内 · 样本外为负</div>
+  </div>
+  <div class="kpi bad">
+    <div class="l">最大回撤</div>
+    <div class="v">{{ '%.2f'|format((pf.max_drawdown or 0) * 100) }}%</div>
+    <div class="s">夏普 {{ '%.2f'|format(pf.sharpe or 0) }}</div>
+  </div>
+</div>
+
+<div class="note">
+  <b>收益拆解</b>：总收益 {{ '%.2f'|format((pf.total_return or 0) * 100) }}%
+  中，底仓自身涨跌贡献
+  <b>{{ '%.2f'|format((pf.base_return or 0) * 100) }}%</b>（beta），
+  做 T 操作贡献 {{ '%+.2f'|format((pf.t_return or 0) * 100) }}%（alpha）。
+  把 beta 计入策略业绩是自欺欺人 —— 不做任何操作、纯持有底仓，
+  年化就有 {{ '%.2f'|format((pf.buyhold_annual or 0) * 100) }}%。
+</div>
+
+<h2>成本门槛 —— 做 T 亏损的根本原因</h2>
+<div class="card">
+  <table>
+    <tbody>
+      <tr><th style="width:230px">单次往返成本</th>
+          <td class="num"><b>{{ '%.3f'|format(
+            (summary.cost_model.round_trip or 0) * 100) }}%</b></td>
+          <td style="color:var(--muted);font-size:12px">
+            佣金双边 0.05% + 印花税 0.10% + 滑点双边 0.10%</td></tr>
+      <tr><th>实际毛价差（均值）</th>
+          <td class="num">{{ '%.4f'|format(
+            (cc.gross_edge_per_trade or 0) * 100) }}%</td>
+          <td style="color:var(--muted);font-size:12px">
+            最优组合 {{ pf.n_trades }} 笔交易的平均买卖价差</td></tr>
+      <tr><th>扣成本后净 edge</th>
+          <td class="num" style="color:var(--warn)"><b>{{ '%+.4f'|format(
+            (cc.net_edge or 0) * 100) }}%</b></td>
+          <td style="color:var(--muted);font-size:12px">
+            信号捕获的价差有
+            {{ '%.0f'|format((cc.cost_per_trade or 0)
+               / (cc.gross_edge_per_trade or 1) * 100) }}% 被成本吃掉</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>样本外验证</h2>
+<div class="card">
+  <p class="sub" style="margin-top:0">
+    前半段（{{ summary.trading_days // 2 }} 天）选参数，
+    后半段（{{ summary.trading_days - summary.trading_days // 2 }} 天）检验。
+    这是判断「策略有效」还是「拟合噪声」的唯一可靠方法。
+  </p>
+  <table>
+    <thead>
+      <tr><th style="width:50px">排名</th>
+          <th class="num">样本内做T年化</th>
+          <th class="num">样本外做T年化</th>
+          <th>是否存活</th></tr>
+    </thead>
+    <tbody>
+    {% for r in wf %}
+      <tr>
+        <td style="color:var(--muted)">{{ r.rank }}</td>
+        <td class="num" style="color:var(--up)">
+          {{ '%+.2f'|format(r.in_sample_t_annual * 100) }}%</td>
+        <td class="num" style="color:var(--down)">
+          {{ '%+.2f'|format(r.out_sample_t_annual * 100) }}%</td>
+        <td>
+          <span class="tag {{ 't-ok' if r.out_sample_t_annual > 0
+                else 't-err' }}">
+            {{ '存活' if r.out_sample_t_annual > 0 else '失效' }}</span>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<h2>净值曲线（样本内最优参数）</h2>
+<div class="card">
+  <div id="eq-chart" style="height:340px"></div>
+  <p class="sub" style="margin:10px 0 0">
+    蓝线为账户总资产，灰线为标的收盘价（右轴）。
+    资产曲线的形态几乎完全由底仓价格驱动 —— 做 T 操作的影响微乎其微。
+  </p>
+</div>
+
+<h2>样本内前 20 组参数</h2>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th style="width:44px">#</th><th>方向</th>
+          <th class="num">买阈</th><th class="num">卖阈</th>
+          <th class="num">止盈</th><th class="num">止损</th>
+          <th class="num">次数</th>
+          <th class="num">年化</th><th class="num">做T年化</th>
+          <th class="num">交易</th><th class="num">胜率</th></tr>
+    </thead>
+    <tbody>
+    {% for r in grid %}
+      <tr>
+        <td style="color:var(--muted)">{{ loop.index }}</td>
+        <td>{{ '动量' if r.momentum == 'True' else '回归' }}</td>
+        <td class="num">{{ '%.1f'|format(r.buy_gap|float * 100) }}%</td>
+        <td class="num">{{ '%.1f'|format(r.sell_gap|float * 100) }}%</td>
+        <td class="num">{{ '%.1f'|format(r.take_profit|float * 100) }}%</td>
+        <td class="num">{{ '%.1f'|format(r.stop_loss|float * 100) }}%</td>
+        <td class="num">{{ r.max_trades }}</td>
+        <td class="num">{{ '%.2f'|format(r.annual_return|float * 100) }}%</td>
+        <td class="num" style="color:{{ 'var(--up)' if r.t_annual|float > 0
+            else 'var(--down)' }}">
+          {{ '%+.2f'|format(r.t_annual|float * 100) }}%</td>
+        <td class="num">{{ r.n_trades }}</td>
+        <td class="num">{{ '%.1f'|format(r.win_rate|float * 100) }}%</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="sub">
+  数据区间 {{ summary.date_range[0] }} ~ {{ summary.date_range[1] }}
+  （{{ summary.trading_days }} 个交易日），
+  日均振幅 {{ '%.2f'|format((summary.daily_amplitude or 0) * 100) }}%。
+  生成于 {{ summary.generated_at }}
+</p>
+{% endif %}
+{% endblock %}
+
+{% block script %}
+{% if has_result %}
+<script>
+const dark = matchMedia('(prefers-color-scheme:dark)').matches;
+fetch('/api/t0-single/equity').then(r => r.ok ? r.json() : null).then(d => {
+  if (!d) return;
+  Plotly.newPlot('eq-chart', [
+    {x: d.dates, y: d.equity, name: '账户总资产', type: 'scatter',
+     mode: 'lines', line: {color: '#2c7be5', width: 2}},
+    {x: d.dates, y: d.close, name: '标的收盘价', type: 'scatter',
+     mode: 'lines', yaxis: 'y2',
+     line: {color: dark ? '#6b7488' : '#aab2c0', width: 1.5, dash: 'dot'}},
+  ], {
+    margin: {l: 62, r: 56, t: 10, b: 36},
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+    font: {color: dark ? '#e6e9ef' : '#1c2333', size: 11},
+    xaxis: {gridcolor: dark ? '#272d3a' : '#e5e8ee'},
+    yaxis: {gridcolor: dark ? '#272d3a' : '#e5e8ee', title: '总资产(元)'},
+    yaxis2: {overlaying: 'y', side: 'right', title: '股价(元)',
+             showgrid: false},
+    legend: {orientation: 'h', y: 1.12, x: 0},
+  }, {displayModeBar: false, responsive: true});
+});
+</script>
+{% endif %}
+{% endblock %}

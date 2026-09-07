@@ -1,0 +1,280 @@
+{% extends "base.html" %}
+{% block title %}全市场日内选股模型{% endblock %}
+
+{% block body %}
+<h1>全市场日内 GBM 选股模型</h1>
+<p class="sub">从 1 分钟 K 线学习「哪些票在当前时刻适合日内操作」的横截面模型，
+供做 T、打板、均值回归等策略筛选标的。</p>
+
+{% if not has_model %}
+  <div class="empty">
+    模型尚未训练。到「运行任务」页触发 <b>train_intraday_gbm</b>，
+    或执行 <code>python scripts/train_intraday_gbm.py</code>
+  </div>
+{% else %}
+
+<div class="note">
+  <b>选股过滤规则</b>：已排除北交所（BSE）、科创板（688xxx）、
+  高股价标的（1 手买入 &gt; 5 万，即股价 &gt; 500 元）。
+</div>
+
+<h2>模型表现</h2>
+<div class="grid g4">
+  <div class="kpi">
+    <div class="l">验证集 AUC</div>
+    <div class="v">{{ '%.4f'|format(metrics.test_auc or 0) }}</div>
+    <div class="s">训练集 {{ '%.4f'|format(metrics.train_auc or 0) }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">验证集准确率</div>
+    <div class="v">{{ '%.2f'|format((metrics.test_accuracy or 0) * 100) }}%</div>
+    <div class="s">训练集 {{ '%.2f'|format((metrics.train_accuracy or 0) * 100) }}%</div>
+  </div>
+  <div class="kpi">
+    <div class="l">预测窗口</div>
+    <div class="v">{{ metrics.horizon_bars or '-' }}<span style="font-size:14px"> bar</span></div>
+    <div class="s">正类阈值 {{ '%.2f'|format((metrics.threshold or 0) * 10000) }} bp</div>
+  </div>
+  <div class="kpi">
+    <div class="l">特征维度</div>
+    <div class="v">{{ metrics.n_features or 0 }}</div>
+    <div class="s">训练耗时 {{ metrics.train_time_seconds or '-' }}s</div>
+  </div>
+</div>
+
+<h2>样本构成</h2>
+<div class="card">
+  <table>
+    <tbody>
+      <tr>
+        <th>训练集</th>
+        <td class="num">{{ '{:,}'.format(metrics.train_samples or 0) }} 条</td>
+        <td>正类 {{ '%.1f'|format((metrics.train_positive_rate or 0) * 100) }}%</td>
+        <td class="num" style="color:var(--muted)">
+          {{ (metrics.train_date_range or ['-','-'])[0] }}
+          &nbsp;→&nbsp;
+          {{ (metrics.train_date_range or ['-','-'])[1] }}
+        </td>
+      </tr>
+      <tr>
+        <th>验证集</th>
+        <td class="num">{{ '{:,}'.format(metrics.test_samples or 0) }} 条</td>
+        <td>正类 {{ '%.1f'|format((metrics.test_positive_rate or 0) * 100) }}%</td>
+        <td class="num" style="color:var(--muted)">
+          {{ (metrics.test_date_range or ['-','-'])[0] }}
+          &nbsp;→&nbsp;
+          {{ (metrics.test_date_range or ['-','-'])[1] }}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<h2>特征重要性</h2>
+<div class="card">
+  {% if importance %}
+    {% set top = importance[0].importance %}
+    <table>
+      <thead>
+        <tr><th style="width:34px">#</th><th>特征</th>
+            <th class="num" style="width:80px">重要性</th>
+            <th style="width:44%">占比</th></tr>
+      </thead>
+      <tbody>
+      {% for r in importance %}
+        <tr>
+          <td style="color:var(--muted)">{{ loop.index }}</td>
+          <td><code>{{ r.feature }}</code></td>
+          <td class="num">{{ r.importance }}</td>
+          <td>
+            <div style="background:var(--bg);border-radius:4px;height:16px;
+                        overflow:hidden">
+              <div style="background:var(--accent);height:100%;
+                          width:{{ (r.importance / top * 100)|round(1) }}%"></div>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <div class="empty">暂无特征重要性数据</div>
+  {% endif %}
+</div>
+
+<h2>策略回测</h2>
+{% if not backtest or not backtest.results %}
+  <div class="card">
+    <div class="empty">
+      尚未回测。执行
+      <code>python scripts/backtest_intraday_gbm.py</code>
+    </div>
+  </div>
+{% else %}
+  {% set cfg = backtest.config or {} %}
+  <div class="note">
+    <b>硬性指标</b>：月收益 ≥ 30%、最大回撤 ≤ 10%、夏普 &gt; 1。
+    初始资金 {{ '{:,.0f}'.format(cfg.capital or 0) }} 元，
+    最多持仓 {{ cfg.max_positions }} 只，
+    单票止损 {{ '%.1f'|format((cfg.max_intraday_loss or 0) * 100) }}%，
+    组合回撤 {{ '%.0f'|format((cfg.max_drawdown_stop or 0) * 100) }}% 停止开仓。
+    成本：佣金 {{ '%.2f'|format((cfg.commission or 0) * 10000) }}‱ +
+    印花税 {{ '%.1f'|format((cfg.stamp_tax or 0) * 1000) }}‰ +
+    滑点 {{ '%.1f'|format((cfg.slippage or 0) * 10000) }}‱。
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr><th>模式</th><th class="num">总收益</th><th class="num">月化</th>
+            <th class="num">年化</th><th class="num">最大回撤</th>
+            <th class="num">夏普</th><th class="num">交易数</th>
+            <th class="num">胜率</th><th>达标</th></tr>
+      </thead>
+      <tbody>
+      {% for mode, r in backtest.results.items() %}
+        {% set t = r.targets or {} %}
+        {% set npass = (t.values()|selectattr('pass')|list)|length %}
+        <tr>
+          <td><b>{{ mode }}</b></td>
+          <td class="num" style="color:{{ 'var(--up)' if r.total_return > 0
+              else 'var(--down)' }}">{{ '%.2f'|format(r.total_return * 100) }}%</td>
+          <td class="num">{{ '%.2f'|format(r.monthly_return * 100) }}%</td>
+          <td class="num">{{ '%.2f'|format(r.annual_return * 100) }}%</td>
+          <td class="num">{{ '%.2f'|format(r.max_drawdown * 100) }}%</td>
+          <td class="num">{{ '%.3f'|format(r.sharpe) }}</td>
+          <td class="num">{{ r.n_trades }}</td>
+          <td class="num">{{ '%.1f'|format(r.win_rate * 100) }}%</td>
+          <td>
+            <span class="tag {{ 't-ok' if npass == 3 else
+                  ('t-warn' if npass > 0 else 't-err') }}">{{ npass }}/3</span>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>硬性指标达标情况</h2>
+  <div class="grid g3">
+  {% for mode, r in backtest.results.items() %}
+    <div class="card">
+      <div style="font-weight:600;margin-bottom:10px">{{ mode }}</div>
+      <table>
+        <tbody>
+        {% for k, v in (r.targets or {}).items() %}
+          <tr>
+            <td>
+              <span class="tag {{ 't-ok' if v['pass'] else 't-err' }}">
+                {{ '达标' if v['pass'] else '未达标' }}</span>
+            </td>
+            <td class="num">{{ v.actual }}</td>
+            <td style="color:var(--muted);font-size:12px">{{ v.target }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endfor %}
+  </div>
+
+  <h2>净值曲线</h2>
+  <div class="card">
+    <div class="row" style="margin-bottom:10px">
+      {% for mode in backtest.results.keys() %}
+        <button onclick="loadEquity('{{ mode }}')"
+                id="btn-{{ mode }}">{{ mode }}</button>
+      {% endfor %}
+    </div>
+    <div id="equity-chart" style="height:340px"></div>
+  </div>
+
+  <p class="sub">
+    回测生成于 {{ backtest.generated_at }}
+  </p>
+{% endif %}
+
+{% if grid %}
+<h2>参数搜索结果</h2>
+<div class="card">
+  <table>
+    <thead>
+      <tr><th style="width:44px">排名</th><th class="num">Horizon</th>
+          <th class="num">阈值</th><th>配置</th>
+          <th class="num">验证 AUC</th><th class="num">验证准确率</th>
+          <th class="num">训练 AUC</th></tr>
+    </thead>
+    <tbody>
+    {% for r in grid[:20] %}
+      <tr>
+        <td style="color:var(--muted)">
+          {{ loop.index }}{% if loop.index == 1 %}
+            <span class="tag t-ok" style="margin-left:4px">最优</span>
+          {% endif %}
+        </td>
+        <td class="num">{{ r.horizon }}</td>
+        <td class="num">{{ '%.1f'|format(r.threshold|float * 10000) }} bp</td>
+        <td>{{ r.config }}</td>
+        <td class="num">{{ '%.4f'|format(r.test_auc|float) }}</td>
+        <td class="num">{{ '%.4f'|format(r.test_acc|float) }}</td>
+        <td class="num" style="color:var(--muted)">
+          {{ '%.4f'|format(r.train_auc|float) }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% if grid|length > 20 %}
+    <p class="sub" style="margin:12px 0 0">
+      共 {{ grid|length }} 组，显示前 20 组。完整结果见
+      <code>models/intraday_gbm/grid_search_results.csv</code>
+    </p>
+  {% endif %}
+</div>
+{% endif %}
+
+<h2>模型超参</h2>
+<div class="card">
+  <table>
+    <tbody>
+    {% for k, v in (metrics.params or {}).items() %}
+      <tr><th style="width:200px"><code>{{ k }}</code></th>
+          <td class="num">{{ v }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block script %}
+{% if backtest and backtest.results %}
+<script>
+const MODES = {{ backtest.results.keys()|list|tojson }};
+const dark = matchMedia('(prefers-color-scheme:dark)').matches;
+
+async function loadEquity(mode){
+  MODES.forEach(m=>{
+    const b=document.getElementById('btn-'+m);
+    if(b) b.classList.toggle('primary', m===mode);
+  });
+  const r = await fetch('/api/intraday-gbm/equity?mode='+mode);
+  if(!r.ok) return;
+  const d = await r.json();
+  Plotly.newPlot('equity-chart', [{
+    x: d.dates, y: d.equity, type:'scatter', mode:'lines',
+    line:{color:'#2c7be5', width:2}, name:mode,
+    fill:'tozeroy', fillcolor:'rgba(44,123,229,.08)',
+  }], {
+    margin:{l:56,r:16,t:10,b:36},
+    paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+    font:{color:dark?'#e6e9ef':'#1c2333', size:11},
+    xaxis:{gridcolor:dark?'#272d3a':'#e5e8ee'},
+    yaxis:{gridcolor:dark?'#272d3a':'#e5e8ee', title:'净值(元)'},
+    showlegend:false,
+  }, {displayModeBar:false, responsive:true});
+}
+if(MODES.length) loadEquity(MODES[0]);
+</script>
+{% endif %}
+{% endblock %}

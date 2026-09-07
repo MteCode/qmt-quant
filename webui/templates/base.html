@@ -99,6 +99,8 @@ pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
   <a href="/data"        class="{{ 'on' if p=='/data' }}">数据核对</a>
   <a href="/experiments" class="{{ 'on' if p=='/experiments' }}">实验结果</a>
   <a href="/backtests" class="{{ 'on' if p=='/backtests' }}">回测成绩</a>
+  <a href="/intraday-gbm" class="{{ 'on' if p.startswith('/intraday-gbm') }}">日内选股</a>
+  <a href="/t0-single" class="{{ 'on' if p.startswith('/t0-single') }}">单票做T</a>
   <a href="/intraday-t-920368" class="{{ 'on' if p.startswith('/intraday-t-920368') }}">920368做T</a>
   <a href="/tasks"       class="{{ 'on' if p=='/tasks' }}">运行任务</a>
   <a href="/schedule"    class="{{ 'on' if p=='/schedule' }}">定时任务</a>

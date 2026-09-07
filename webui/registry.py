@@ -238,6 +238,29 @@ TASKS.extend([
                  "models/intraday_gbm/feature_importance.csv"],
     ),
     Task(
+        id="backtest_intraday_gbm",
+        name="日内GBM策略回测",
+        script="scripts/backtest_intraday_gbm.py",
+        desc="用训练好的模型回测三种日内模式（做T/均值回归/打板），"
+             "计算收益、回撤、夏普，并对照硬性指标（月收益≥30%、"
+             "回撤≤10%、夏普>1）。含单票止损与组合回撤控制。",
+        eta="800 只标的约 10-20 分钟",
+        params=[
+            Param("mode", "交易模式", "str", "all",
+                  help="t_plus_0 / mean_reversion / momentum / all"),
+            Param("capital", "初始资金", "float", 50000.0),
+            Param("max_positions", "同时持仓标的数", "int", 5),
+            Param("prob_buy", "买入概率阈值", "float", 0.60),
+            Param("prob_sell", "卖出概率阈值", "float", 0.40),
+            Param("max_intraday_loss", "单票日内止损线", "float", 0.02),
+            Param("max_drawdown_stop", "组合回撤停止开仓线", "float", 0.10),
+            Param("max_symbols", "回测标的数", "int", 800),
+            Param("start", "起始日期", "str", "",
+                  help="留空则用全部历史"),
+        ],
+        outputs=["models/intraday_gbm/backtest/summary.json"],
+    ),
+    Task(
         id="predict_intraday",
         name="盘中全市场预测",
         script="scripts/predict_intraday.py",

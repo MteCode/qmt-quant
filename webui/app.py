@@ -29,8 +29,10 @@ from . import data_browser, jobs, loaders, scheduler
 from .registry import TASKS, TASK_BY_ID
 
 app = Flask(__name__)
-INTRADAY_DIR = Path(__file__).resolve().parents[1] / "strategies" / "intraday_t_920368" / "backtest"
-INTRADAY_MODEL_DIR = Path(__file__).resolve().parents[1] / "strategies" / "intraday_t_920368" / "models"
+ROOT = Path(__file__).resolve().parents[1]
+INTRADAY_DIR = ROOT / "strategies" / "intraday_t_920368" / "backtest"
+INTRADAY_MODEL_DIR = ROOT / "strategies" / "intraday_t_920368" / "models"
+GBM_MODEL_DIR = ROOT / "models" / "intraday_gbm"
 
 
 @app.template_filter("dur")
@@ -124,6 +126,134 @@ def api_intraday_t():
             try: out[name] = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError): out[name] = {}
     return jsonify(out)
+
+
+@app.route("/intraday-gbm")
+def intraday_gbm_page():
+    """全市场日内 GBM 选股模型 —— 训练指标与特征重要性。"""
+    import csv
+    import json
+
+    metrics, importance, grid = {}, [], []
+    mp = GBM_MODEL_DIR / "metrics.json"
+    if mp.exists():
+        try:
+            metrics = json.loads(mp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    fp = GBM_MODEL_DIR / "feature_importance.csv"
+    if fp.exists():
+        try:
+            with fp.open(encoding="utf-8") as f:
+                importance = [
+                    {"feature": r["feature"], "importance": int(r["importance"])}
+                    for r in csv.DictReader(f)
+                ]
+        except (OSError, ValueError, KeyError):
+            pass
+
+    gp = GBM_MODEL_DIR / "grid_search_results.csv"
+    if gp.exists():
+        try:
+            with gp.open(encoding="utf-8") as f:
+                grid = list(csv.DictReader(f))
+        except OSError:
+            pass
+
+    backtest = {}
+    bp = GBM_MODEL_DIR / "backtest" / "summary.json"
+    if bp.exists():
+        try:
+            backtest = json.loads(bp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    return render_template("intraday_gbm.html", metrics=metrics,
+                           importance=importance, grid=grid,
+                           backtest=backtest,
+                           has_model=(GBM_MODEL_DIR / "model.joblib").exists())
+
+
+@app.route("/t0-single")
+def t0_single_page():
+    """单标的日内做 T 参数优化与样本外验证。"""
+    import csv
+    import json
+
+    d = ROOT / "models" / "t0_single"
+    summary, grid, wf, daily = {}, [], [], []
+
+    sp = d / "600711_summary.json"
+    if sp.exists():
+        try:
+            summary = json.loads(sp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+
+    for name, target in (("600711_grid.csv", grid),
+                         ("600711_best_daily.csv", daily)):
+        p = d / name
+        if p.exists():
+            try:
+                with p.open(encoding="utf-8") as f:
+                    target.extend(list(csv.DictReader(f)))
+            except OSError:
+                pass
+
+    wf = summary.get("walkforward", [])
+    return render_template("t0_single.html", summary=summary,
+                           grid=grid[:20], wf=wf, daily=daily,
+                           has_result=bool(summary))
+
+
+@app.get("/api/t0-single/equity")
+def api_t0_single_equity():
+    import csv
+    p = ROOT / "models" / "t0_single" / "600711_best_daily.csv"
+    if not p.exists():
+        return jsonify(ok=False, error="回测结果不存在"), 404
+    try:
+        with p.open(encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    except OSError as e:
+        return jsonify(ok=False, error=str(e)), 500
+    return jsonify(dates=[r["date"] for r in rows],
+                   equity=[float(r["equity"]) for r in rows],
+                   close=[float(r["close"]) for r in rows])
+
+
+@app.get("/api/intraday-gbm/equity")
+def api_intraday_gbm_equity():
+    """净值曲线，供前端画图。"""
+    import csv
+    mode = request.args.get("mode", "momentum")
+    if mode not in {"t_plus_0", "mean_reversion", "momentum"}:
+        return jsonify(ok=False, error="未知模式"), 400
+    p = GBM_MODEL_DIR / "backtest" / f"{mode}_daily.csv"
+    if not p.exists():
+        return jsonify(ok=False, error="回测结果不存在"), 404
+    try:
+        with p.open(encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    except OSError as e:
+        return jsonify(ok=False, error=str(e)), 500
+    return jsonify(
+        dates=[r["date"] for r in rows],
+        equity=[float(r["equity"]) for r in rows],
+    )
+
+
+@app.get("/api/intraday-gbm")
+def api_intraday_gbm():
+    import json
+    mp = GBM_MODEL_DIR / "metrics.json"
+    if not mp.exists():
+        return jsonify(ok=False, error="模型尚未训练"), 404
+    try:
+        return jsonify(json.loads(mp.read_text(encoding="utf-8")))
+    except (OSError, ValueError) as e:
+        return jsonify(ok=False, error=str(e)), 500
 
 
 @app.route("/tasks")
