@@ -22,7 +22,9 @@ class CostConfig:
     # 注意：单笔 commission_min / commission_rate = 58,548 元以下时最低佣金
     # 生效，实际费率高于名义。做 T 类策略把资金拆成多笔小单，几乎全部
     # 落在这一区间，回测必须用 max(amount * rate, min) 而非固定费率。
-    stamp_tax_rate: float = 0.001       # 印花税千 1，仅卖出
+    # 印花税万 5，仅卖出。2023-08-28 起由千 1 减半为万 5，法定不可协商。
+    # 此前系统里写死的 0.001 是减半之前的值，使所有回测高估卖出成本一倍。
+    stamp_tax_rate: float = 0.0005
     transfer_fee_rate: float = 0.00001  # 过户费万 0.1，双向
     slippage_tick: int = 1              # 滑点，单位为最小变动价位
 

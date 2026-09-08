@@ -46,6 +46,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+
 # 控制台是 GBK 时，数学减号、警告符号这类字符会直接抛
 # UnicodeEncodeError 让脚本崩在 print 上 —— 算了半小时的结果全丢。
 # 降级为替换字符，宁可显示成 ? 也不能因为一个字符丢掉整轮结果。
@@ -58,43 +60,44 @@ except (AttributeError, ValueError):
 
 OUT_DIR = ROOT / "models" / "t0_divergence"
 
-COMMISSION = 0.0000854      # 万 0.854
-STAMP_TAX = 0.001           # 千 1，仅卖出，法定不可谈
-SLIPPAGE = 0.0005           # 万 5，单边
-MIN_COMMISSION = 5.0        # 券商最低佣金（元/笔）
+#: 成本一律走 qmtquant.core.costs，不在这里另立常数。
+#: 此前本文件自己定义 COMMISSION/STAMP_TAX/SLIPPAGE，与另外 7 个文件
+#: 各写各的，出现过佣金三个版本、印花税全部用 2023-08-28 减半前的旧值、
+#: 过户费全体漏算。唯一事实源在 costs.py，改一处全系统生效。
+COST = DEFAULT_COST
+
+COMMISSION = COST.commission_rate
+STAMP_TAX = COST.stamp_tax_rate
+SLIPPAGE = COST.slippage_rate
+MIN_COMMISSION = COST.commission_min
 LOT = 100
 
 
 def _fee(amount: float, is_sell: bool) -> float:
-    """单笔交易费用。
+    """单笔交易的费用 + 滑点。
 
     ## 最低佣金是做 T 的隐藏杀手
 
-    券商按费率收佣金，但通常有「每笔最低 5 元」。万 0.854 的费率下，
+    券商按费率收佣金，但有「每笔最低 5 元」。万 0.854 的费率下，
     单笔低于 58,548 元就会触发下限 —— 而做 T 天然要把资金拆成多笔小额，
     笔数越多单笔越小，实际佣金率越高：
 
-        单笔 25,000 元 -> 实收 5 元 -> 等效万 2.00（是名义费率的 2.3 倍）
+        单笔 25,000 元 -> 实收 5 元 -> 等效万 2.00（名义费率的 2.3 倍）
         单笔 10,000 元 -> 实收 5 元 -> 等效万 5.00（5.9 倍）
 
     用固定费率回测会系统性低估小额交易的成本，把不赚钱的策略
     算成接近盈亏平衡。
     """
-    comm = max(amount * COMMISSION, MIN_COMMISSION)
-    tax = amount * STAMP_TAX if is_sell else 0.0
-    slip = amount * SLIPPAGE
-    return comm + tax + slip
+    return COST.cost(amount, is_sell)
 
 
 def round_trip_rate(amount: float) -> float:
     """给定单笔金额的往返成本率。金额越小越高（最低佣金所致）。"""
-    if amount <= 0:
-        return 0.0
-    return (_fee(amount, False) + _fee(amount, True)) / amount
+    return COST.round_trip_rate(amount)
 
 
 #: 名义往返成本率（不含最低佣金影响），仅用于对照
-ROUND_TRIP = 2 * COMMISSION + STAMP_TAX + 2 * SLIPPAGE
+ROUND_TRIP = COST.round_trip_rate_nominal()
 
 
 def load_bars(symbol: str, exchange: str, start=None, end=None) -> pd.DataFrame:
@@ -240,6 +243,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     t_shares = max(LOT, min(by_cash, base_shares))
 
     t_pnl = 0.0
+    #: 尾盘没能平掉的腿数。不为零说明底仓或现金不足以支撑设定的
+    #: 单笔股数，回测结果的持仓路径与设想不符，必须暴露出来。
+    n_unclosed = 0
     trades, daily = [], []
 
     n = len(px_a)
@@ -266,9 +272,19 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
             t = ts_a[k]
 
             # ---------- 尾盘强平 ----------
+            #
+            # 这里原先无论平没平掉都执行 `leg = None`，两条路径都会静默
+            # 丢状态，且方向相反：
+            #   正T 买进的股票只活在 leg 里，从未计入 base_shares 或
+            #        locked。丢弃 = 整笔市值凭空消失，**低估**权益。
+            #   反T 卖出的底仓已经出账，买不回来就是永久减仓。丢弃 =
+            #        持仓在 241 天里一点点漂没，且不记为亏损。
+            # 而 base_shares 在一天内会被反T 开腿压低，所以
+            # max_trades > 1 时这两条路径真的会触发。
             if tm >= exit_min:
                 if leg is not None:
                     sh = leg["shares"]
+                    closed = False
                     if leg["side"] == "buy" and base_shares >= sh:
                         pro = px * sh - _fee(px * sh, True)
                         cst = leg["price"] * sh + _fee(leg["price"] * sh, False)
@@ -283,6 +299,7 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                             "pnl_pct": round(px / leg["price"] - 1, 5),
                             "reason": "尾盘"})
                         dtr += 1
+                        closed = True
                     elif leg["side"] == "sell":
                         cst = px * sh + _fee(px * sh, False)
                         if cash >= cst:
@@ -299,6 +316,14 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                                 "pnl_pct": round(leg["price"] / px - 1, 5),
                                 "reason": "尾盘"})
                             dtr += 1
+                            closed = True
+
+                    if not closed:
+                        if leg["side"] == "buy":
+                            # 买进的股票是真实存在的，只是当天卖不掉。
+                            # 归入 locked，隔夜并入底仓，不记 T 盈亏。
+                            locked += sh
+                        n_unclosed += 1
                     leg = None
                 continue
 
@@ -426,6 +451,12 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     gross = ((tdf["sell_px"] - tdf["buy_px"]) / tdf["buy_px"]).mean() \
         if not tdf.empty else 0.0
 
+    # 实际往返费率要按真实单笔金额算 —— 最低佣金让小单的费率显著更高，
+    # 用名义费率会高估净 edge。
+    avg_amt = float((tdf["buy_px"] * tdf["shares"]).mean()) \
+        if not tdf.empty else 0.0
+    eff_rt = round_trip_rate(avg_amt) if avg_amt > 0 else ROUND_TRIP
+
     return {
         "total_return": round(total, 4),
         "annual_return": round(float(ann), 4),
@@ -443,7 +474,13 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
         "t_annual": round(float((1 + t_ret) ** af - 1)
                           if t_ret > -1 else -1, 4),
         "gross_edge": round(float(gross), 6),
-        "net_edge": round(float(gross - ROUND_TRIP), 6),
+        # net_edge 此前减的是名义往返费率，等于假装每笔都大到不触发
+        # 最低佣金。实际单笔多在 1~3 万，实际费率高 10%~40%。
+        # 按真实平均单笔金额算，否则净 edge 被系统性高估。
+        "net_edge": round(float(gross - eff_rt), 6),
+        "avg_trade_amount": round(float(avg_amt), 2),
+        "effective_round_trip": round(float(eff_rt), 6),
+        "n_unclosed": n_unclosed,
         "buyhold_annual": round(float(bh_ann), 4),
         "date_range": [dl["date"].iloc[0], dl["date"].iloc[-1]],
         "_daily": dl, "_trades": tdf,

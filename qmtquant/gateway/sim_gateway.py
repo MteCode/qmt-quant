@@ -134,8 +134,15 @@ class SimGateway(BaseGateway):
         if order.direction == Direction.SHORT and order.price > market_price:
             return
 
-        # 成交价取更有利的一方，模拟真实撮合
-        traded_price = market_price
+        # 滑点：买入吃高、卖出吃低，方向永远对自己不利。
+        # 此前这里直接 traded_price = market_price，即零滑点成交 ——
+        # 模拟盘因此优于任何真实执行，而 cost.slippage_tick 在本文件中
+        # 从未被引用过。限价单的成交价不会差于委托价，所以要夹在限价上。
+        slip = self.cost.slippage_tick * 0.01
+        if order.direction == Direction.LONG:
+            traded_price = min(market_price + slip, order.price)
+        else:
+            traded_price = max(market_price - slip, order.price)
         volume = order.volume
         fee = calc_cost(traded_price, volume, order.direction, self.cost)
 
