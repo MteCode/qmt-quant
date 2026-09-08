@@ -17,8 +17,11 @@ LOG_DIR = ROOT_DIR / "logs"
 @dataclass
 class CostConfig:
     """交易成本模型（A 股）"""
-    commission_rate: float = 0.00025    # 佣金万 2.5
+    commission_rate: float = 0.0000854  # 佣金万 0.854
     commission_min: float = 5.0         # 单笔最低 5 元
+    # 注意：单笔 commission_min / commission_rate = 58,548 元以下时最低佣金
+    # 生效，实际费率高于名义。做 T 类策略把资金拆成多笔小单，几乎全部
+    # 落在这一区间，回测必须用 max(amount * rate, min) 而非固定费率。
     stamp_tax_rate: float = 0.001       # 印花税千 1，仅卖出
     transfer_fee_rate: float = 0.00001  # 过户费万 0.1，双向
     slippage_tick: int = 1              # 滑点，单位为最小变动价位

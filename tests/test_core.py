@@ -29,23 +29,57 @@ class TestSymbol:
 
 
 class TestCost:
+    """费率写死在断言里会让「改费率」变成「改一堆测试」，
+    所以这里一律从 CostConfig 推导期望值，只钉住结构与分段行为。"""
+
     def test_buy_no_stamp_tax(self):
         """买入不收印花税"""
         cost = CostConfig()
+        amount = 100000.0
         fee = calc_cost(10.0, 10000, Direction.LONG, cost)
-        assert fee == pytest.approx(100000 * 0.00025 + 100000 * 0.00001)
+        expected = (max(amount * cost.commission_rate, cost.commission_min)
+                    + amount * cost.transfer_fee_rate)
+        assert fee == pytest.approx(expected)
 
     def test_sell_has_stamp_tax(self):
         cost = CostConfig()
-        fee = calc_cost(10.0, 10000, Direction.SHORT, cost)
-        expected = 100000 * (0.00025 + 0.001 + 0.00001)
-        assert fee == pytest.approx(expected)
+        amount = 100000.0
+        buy = calc_cost(10.0, 10000, Direction.LONG, cost)
+        sell = calc_cost(10.0, 10000, Direction.SHORT, cost)
+        assert sell - buy == pytest.approx(amount * cost.stamp_tax_rate)
 
     def test_minimum_commission(self):
-        """小额成交按 5 元最低佣金收取"""
+        """小额成交按最低佣金收取"""
         cost = CostConfig()
         fee = calc_cost(1.0, 100, Direction.LONG, cost)
         assert fee >= cost.commission_min
+
+    def test_min_commission_threshold(self):
+        """最低佣金的临界金额：其下按 5 元收，其上按费率收。
+        做 T 策略把资金拆成小单，几乎全落在临界值以下——
+        这条分段是回测与实盘成本一致性的关键。"""
+        cost = CostConfig()
+        thr = cost.commission_min / cost.commission_rate
+
+        below = thr * 0.5
+        fee_below = calc_cost(below / 100, 100, Direction.LONG, cost)
+        assert fee_below == pytest.approx(
+            cost.commission_min + below * cost.transfer_fee_rate)
+
+        above = thr * 2
+        fee_above = calc_cost(above / 100, 100, Direction.LONG, cost)
+        assert fee_above == pytest.approx(
+            above * (cost.commission_rate + cost.transfer_fee_rate))
+
+    def test_effective_rate_rises_as_order_shrinks(self):
+        """单笔越小，实际费率越高——固定费率回测会低估小单成本。"""
+        cost = CostConfig()
+        rates = []
+        for amount in (200000.0, 50000.0, 10000.0, 5000.0):
+            fee = calc_cost(amount / 100, 100, Direction.LONG, cost)
+            rates.append(fee / amount)
+        assert rates == sorted(rates), "费率应随单笔金额减小而单调上升"
+        assert rates[-1] > rates[0] * 2
 
 
 class TestOrderData:
