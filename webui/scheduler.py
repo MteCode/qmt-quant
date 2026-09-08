@@ -59,7 +59,20 @@ class Schedule:
     enabled: bool = True
     #: 补跑有效期（小时）。超过这个时长仍未执行就放弃，等下一个交易日
     catchup_hours: float = 4.0
+    #: 每隔多少分钟重复一次。0（默认）表示每日只跑一次。
+    #:
+    #: 用于盘中需要反复执行的事，比如刷新持仓快照 —— 只在收盘后快照，
+    #: 盘中看到的永远是昨天的持仓，而人会拿它当实时数据看。
+    interval_minutes: int = 0
+    #: 重复的结束时间 HH:MM。仅 interval_minutes > 0 时有效
+    end_time: str = ""
+    #: 重复时是否跳过午休（11:30-13:00）。A 股午休持仓不变，
+    #: 照常轮询只是白白打扰 QMT
+    skip_lunch: bool = True
     last_run_date: str = ""
+    #: 上次执行的完整时间戳。每日一次的计划用不到，
+    #: 但间隔重复必须精确到分钟，只有日期判不出「这一轮该不该跑」
+    last_run_at: str = ""
     last_job_id: str = ""
 
 
@@ -83,6 +96,14 @@ PRESETS = [
              catchup_hours=1.0),
     Schedule(id="pre_snapshot", name="盘前快照持仓", task_id="snapshot_positions",
              time="09:15", catchup_hours=1.0),
+
+    # ---- 盘中持续刷新 ----
+    # 只在收盘后快照的话，盘中页面上看到的永远是昨天的持仓，
+    # 而人会拿它当实时数据看 —— 这比没有数据更危险。
+    Schedule(id="intraday_snapshot", name="盘中刷新持仓",
+             task_id="snapshot_positions",
+             time="09:30", end_time="15:00", interval_minutes=5,
+             catchup_hours=0.2),
 
     # ---- 开盘后下单 ----
     # 09:30 集合竞价刚结束，价格波动最剧烈；等 5 分钟让盘口稳一稳。
@@ -165,12 +186,85 @@ def _overdue_minutes(row: dict, now: datetime) -> float | None:
     return delta if delta >= 0 else None
 
 
+def _hhmm(s: str) -> int | None:
+    """"HH:MM" -> 当日第几分钟。解析不了返回 None。"""
+    try:
+        hh, mm = (int(x) for x in s.split(":"))
+        return hh * 60 + mm
+    except (ValueError, AttributeError):
+        return None
+
+
+def _in_lunch(minute_of_day: int) -> bool:
+    """是否在午休（11:30-13:00）。A 股午休持仓不变。"""
+    return 11 * 60 + 30 <= minute_of_day < 13 * 60
+
+
+def _interval_due(row: dict, now: datetime) -> bool:
+    """间隔重复型计划本轮是否该跑。
+
+    与「每日一次」的判断完全不同：后者按日期判重，前者必须按时间戳 ——
+    只有日期的话，当天第一次跑完就再也不会触发了。
+    """
+    iv = int(row.get("interval_minutes", 0) or 0)
+    if iv <= 0:
+        return False
+    if now.weekday() not in row.get("weekdays", []):
+        return False
+
+    start = _hhmm(row.get("time", ""))
+    end = _hhmm(row.get("end_time", ""))
+    if start is None or end is None:
+        return False
+
+    cur = now.hour * 60 + now.minute
+    if not (start <= cur <= end):
+        return False
+    if row.get("skip_lunch", True) and _in_lunch(cur):
+        return False
+
+    last = row.get("last_run_at")
+    if not last:
+        return True
+    try:
+        gap = (now - datetime.fromisoformat(last)).total_seconds() / 60
+    except ValueError:
+        return True
+    return gap >= iv
+
+
 def _next_hint(row: dict) -> str:
     """下次触发的说明文字。"""
     if not row.get("enabled"):
         return "已停用"
     now = datetime.now()
     wd = now.weekday()
+
+    iv = int(row.get("interval_minutes", 0) or 0)
+    if iv > 0:
+        window = f"{row.get('time','')}~{row.get('end_time','')}"
+        if wd not in row.get("weekdays", []):
+            return f"非交易日 · 每 {iv} 分钟（{window}）"
+        cur = now.hour * 60 + now.minute
+        start, end = _hhmm(row.get("time", "")), _hhmm(row.get("end_time", ""))
+        if start is None or end is None:
+            return f"每 {iv} 分钟（时间窗配置有误）"
+        if cur < start:
+            return f"今日 {row['time']} 起，每 {iv} 分钟"
+        if cur > end:
+            return f"今日已结束 · 每 {iv} 分钟（{window}）"
+        if row.get("skip_lunch", True) and _in_lunch(cur):
+            return f"午休暂停 · 13:00 恢复（每 {iv} 分钟）"
+        last = row.get("last_run_at")
+        if last:
+            try:
+                gap = (now - datetime.fromisoformat(last)).total_seconds() / 60
+                left = max(0, iv - gap)
+                return f"运行中 · 约 {left:.0f} 分钟后下一轮"
+            except ValueError:
+                pass
+        return f"运行中 · 每 {iv} 分钟"
+
     hh, mm = (int(x) for x in row["time"].split(":"))
 
     overdue = _overdue_minutes(row, now)
@@ -248,6 +342,9 @@ def _mark_ran(sched_id: str, job_id: str) -> None:
         for r in rows:
             if r["id"] == sched_id:
                 r["last_run_date"] = date.today().isoformat()
+                # 间隔重复型靠这个判重，精度必须到分钟
+                r["last_run_at"] = datetime.now().isoformat(
+                    timespec="seconds")
                 r["last_job_id"] = job_id
                 break
         _save(rows)
@@ -265,15 +362,20 @@ def _tick() -> None:
             continue
         if now.weekday() not in r.get("weekdays", []):
             continue
-        if r.get("last_run_date") == today:
-            continue
 
-        overdue = _overdue_minutes(r, now)
-        if overdue is None:
-            continue
-        # 迟到太久的补跑没意义 —— 晚上 9 点跑「盘前补齐」纯属浪费
-        if overdue > float(r.get("catchup_hours", 4.0)) * 60:
-            continue
+        if int(r.get("interval_minutes", 0) or 0) > 0:
+            # 间隔重复型：按时间戳判重，不看 last_run_date
+            if not _interval_due(r, now):
+                continue
+        else:
+            if r.get("last_run_date") == today:
+                continue
+            overdue = _overdue_minutes(r, now)
+            if overdue is None:
+                continue
+            # 迟到太久的补跑没意义 —— 晚上 9 点跑「盘前补齐」纯属浪费
+            if overdue > float(r.get("catchup_hours", 4.0)) * 60:
+                continue
 
         # 同任务已在运行时跳过本次，等下一个交易日 —— 强行并发会破坏产物
         if jobs.is_task_running(r["task_id"]):
