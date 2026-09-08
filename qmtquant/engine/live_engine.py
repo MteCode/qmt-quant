@@ -30,6 +30,7 @@ from ..event.engine import (
     EVENT_GATEWAY_STATUS,
     EVENT_ORDER,
     EVENT_POSITION,
+    EVENT_BAR,
     EVENT_TICK,
     EVENT_TIMER,
     EVENT_TRADE,
@@ -37,6 +38,7 @@ from ..event.engine import (
     EventEngine,
 )
 from ..gateway.base import BaseGateway
+from .bar_dispatch import BarAggregator, SectionDispatcher
 from ..risk.risk_manager import RiskManager
 from ..strategy.base import StrategyBase
 from ..utils.logger import get_trade_logger
@@ -108,6 +110,10 @@ class LiveEngine:
         #: 已因超时发过撤单指令的委托，避免反复发撤单
         self._timeout_cancelled: set[str] = set()
 
+        # tick → 分钟 bar → 横截面 → strategy.on_bars
+        self._bar_agg = BarAggregator()
+        self._dispatcher = SectionDispatcher(self._dispatch_section)
+
         self._register_handlers()
 
     def _register_handlers(self) -> None:
@@ -118,6 +124,7 @@ class LiveEngine:
         ee.register(EVENT_ACCOUNT, self._on_account)
         ee.register(EVENT_POSITION, self._on_position)
         ee.register(EVENT_GATEWAY_STATUS, self._on_gateway_status)
+        ee.register(EVENT_BAR, self._on_bar)
         ee.register(EVENT_TIMER, self._on_timer)
 
     # ------------------------------------------------------------ 策略管理
@@ -341,6 +348,44 @@ class LiveEngine:
             except Exception:
                 logger.exception("策略处理 tick 异常: %s", strategy.strategy_name)
 
+        # tick 聚合成分钟 bar。实盘只有 tick 流，bar 得自己攒 ——
+        # 不攒的话所有 bar 驱动的策略（选股类、日内 GBM）的 on_bars
+        # 在实盘永远不会被调用，表现为「一切正常但一笔单都没有」。
+        finished = self._bar_agg.update(tick)
+        if finished is not None:
+            self._dispatcher.add(finished)
+
+    def _on_bar(self, event: Event) -> None:
+        """外部直接推送的 bar（行情回放、分钟线订阅）。"""
+        bar: BarData = event.data
+        self._dispatcher.add(bar)
+
+    def _dispatch_section(self, dt: datetime,
+                          section: dict[str, BarData]) -> None:
+        """把一个时刻的横截面交给各策略。
+
+        只把策略自己订阅的标的传给它 —— 传全量会让策略看到不属于
+        自己的标的，`rebalance` 之类按持仓差异算的逻辑会直接算错。
+        """
+        for strategy in self.strategies.values():
+            if not strategy.trading:
+                continue
+            mine = {s: b for s, b in section.items()
+                    if s in strategy.vt_symbols}
+            if not mine:
+                continue
+            try:
+                strategy.on_bars(mine)
+            except Exception:
+                logger.exception("策略处理 bar 横截面异常: %s",
+                                 strategy.strategy_name)
+            for bar in mine.values():
+                try:
+                    strategy.on_bar(bar)
+                except Exception:
+                    logger.exception("策略处理 bar 异常: %s",
+                                     strategy.strategy_name)
+
     def _on_order(self, event: Event) -> None:
         order: OrderData = event.data
         self.orders[order.vt_orderid] = order
@@ -433,6 +478,9 @@ class LiveEngine:
         """定时健康检查：日切、超时撤单、行情停推、事件积压"""
         self._check_day_rollover()
         self._check_order_timeout()
+        # 没有这一步，最后一分钟的 bar 会一直攒着不发 ——
+        # 而收盘前那根往往正是要平仓的那根
+        self._dispatcher.check_timeout()
 
         if self._last_tick_time and not self._tick_warned:
             gap = (datetime.now() - self._last_tick_time).total_seconds()

@@ -102,6 +102,14 @@ def main() -> int:
                         help="启动后立即开启急停，只跑行情不下单")
     parser.add_argument("--no-store", action="store_true",
                         help="不持久化状态（策略状态、成交流水不落库）")
+    parser.add_argument("--replay", action="store_true",
+                        help="回放本地历史行情驱动策略。SimGateway 不产生行情，"
+                             "不开这个就一根 bar 都不会来")
+    parser.add_argument("--replay-start", default=None, help="回放起始日")
+    parser.add_argument("--replay-end", default=None, help="回放结束日")
+    parser.add_argument("--replay-speed", type=float, default=0.0,
+                        help="回放加速：0=尽快跑完，60=1分钟行情用1秒")
+    parser.add_argument("--replay-interval", default="1m", help="1m / 1d")
     args = parser.parse_args()
 
     cfg = get_config()
@@ -158,6 +166,23 @@ def main() -> int:
     engine.reconcile()
     engine.init_all()
     engine.start_all()
+
+    # ---- 行情回放（可选）
+    feeder = None
+    if args.replay:
+        from qmtquant.datafeed.replay import BarReplayFeeder
+        syms = sorted({s for st in engine.strategies.values()
+                       for s in st.vt_symbols})
+        feeder = BarReplayFeeder(
+            event_engine, cfg.data.store_dir, syms,
+            interval=args.replay_interval,
+            start=args.replay_start, end=args.replay_end,
+            speed=args.replay_speed)
+        if feeder.load() > 0:
+            feeder.start_replay()
+        else:
+            print("回放无数据，请检查 --replay-start/--replay-end 与本地行情")
+            feeder = None
     print(f"引擎已启动（网关={gateway_name}"
           f"{'，dry-run' if args.dry_run else ''}），Ctrl+C 退出")
 
@@ -196,6 +221,8 @@ def main() -> int:
                 services.beat("live")
     finally:
         print("\n正在退出：撤单 → 停策略 → 断开网关 ...")
+        if feeder is not None:
+            feeder.stop()
         engine.close()
         event_engine.stop()
         print("已安全退出")

@@ -49,6 +49,7 @@ class IntradayGBMStrategy(StrategyBase):
         "exit_time",            # 最晚持仓时间 HH:MM（到时强制平仓）
         "vol_z_threshold",      # momentum 模式的量能放大阈值
         "vwap_deviation",       # mean_reversion 模式的 VWAP 偏离阈值
+        "use_rank",             # 按概率排序选前 N 名，而非用绝对阈值
     ]
 
     variables = StrategyBase.variables + [
@@ -69,6 +70,10 @@ class IntradayGBMStrategy(StrategyBase):
         self.exit_time = "14:50"
         self.vol_z_threshold = 1.5
         self.vwap_deviation = 0.005
+        # 按排序选股而非绝对阈值。横截面模型的绝对概率取决于训练时的
+        # 正类比例，换个 horizon 重训一次就全变了；而**排序是稳定的**——
+        # 这也正是横截面选股模型该用的方式。
+        self.use_rank = False
 
         self.today_entries: dict[str, float] = {}
         self.entry_prices: dict[str, float] = {}
@@ -80,13 +85,61 @@ class IntradayGBMStrategy(StrategyBase):
         super().__init__(engine, strategy_name, vt_symbols, setting)
 
     def on_init(self) -> None:
-        if MODEL_PATH.exists():
-            data = joblib.load(MODEL_PATH)
-            self.model = data["model"]
-            self.features = data.get("features", INTRADAY_FEATURES)
-            self.write_log(f"模型加载成功，{len(self.features)} 维特征")
-        else:
+        if not MODEL_PATH.exists():
             self.write_log(f"模型不存在: {MODEL_PATH}，策略将不产生信号")
+            return
+
+        data = joblib.load(MODEL_PATH)
+        self.model = data["model"]
+        self.features = data.get("features", INTRADAY_FEATURES)
+        self.write_log(f"模型加载成功，{len(self.features)} 维特征")
+        self._check_threshold_reachable(data)
+
+    def _check_threshold_reachable(self, model_data: dict) -> None:
+        """检查买入阈值对当前模型是否可达。
+
+        ## 为什么必须查
+
+        概率阈值是绝对值，而模型输出的概率分布取决于**训练时的正类比例**。
+        重训换了 horizon / threshold 之后，正类比例从 38% 掉到 16.5%，
+        模型输出整体下移（实测中位数 0.058、最大 0.361），
+        而策略里写死的 0.6 永远达不到。
+
+        表现是最糟的那种：引擎正常、行情正常、打分正常、
+        **策略一整天不下一笔单，且不报任何错**。
+        查起来要从行情一路追到策略内部才能发现。
+
+        所以启动时就用训练集的正类比例估一下阈值是否离谱，
+        离谱就大声说出来，而不是等交易日结束才发现什么都没做。
+        """
+        import json
+        from pathlib import Path as _P
+
+        metrics_path = _P(MODEL_PATH).parent / "metrics.json"
+        pos_rate = None
+        if metrics_path.exists():
+            try:
+                m = json.loads(metrics_path.read_text(encoding="utf-8"))
+                pos_rate = m.get("test_positive_rate")
+                self.write_log(
+                    f"模型: horizon={m.get('horizon_bars')} bar, "
+                    f"阈值={m.get('threshold', 0) * 10000:.0f}bp, "
+                    f"正类率={pos_rate:.1%}, AUC={m.get('test_auc', 0):.4f}")
+            except (OSError, ValueError, TypeError):
+                pass
+
+        if pos_rate is None:
+            return
+
+        # 二分类模型的输出大致以正类比例为中心。买入阈值远高于它时，
+        # 能触发的样本会少到实际为零。这里用 3 倍作为「明显离谱」的界线 ——
+        # 精确阈值不重要，重要的是把静默失效变成显式告警。
+        if self.prob_buy_threshold > pos_rate * 3:
+            self.write_log(
+                f"【警告】买入阈值 {self.prob_buy_threshold} 相对模型正类率 "
+                f"{pos_rate:.1%} 过高，很可能一整天触发不了任何买入。"
+                f"建议设到 {pos_rate * 1.5:.2f} 附近，"
+                f"或改用 top_k 排序选股（设 use_rank=true）。")
 
     def on_start(self) -> None:
         self.today_entries = {}
@@ -238,7 +291,8 @@ class IntradayGBMStrategy(StrategyBase):
         """打板/追涨：高概率 + 量能放大。"""
         active = len([v for v in self.today_entries.values() if v > 0])
 
-        for _, row in scores.head(self.max_positions * 2).iterrows():
+        for rank, (_, row) in enumerate(
+                scores.head(self.max_positions * 2).iterrows()):
             vt = row["symbol"]
             price = row["close"]
             pos = self.get_pos(vt)
@@ -252,7 +306,12 @@ class IntradayGBMStrategy(StrategyBase):
                     continue
 
             # 高概率 + 量能放大 + 日内正收益
-            if (row["prob_up"] > self.prob_buy_threshold
+            # use_rank 下，prob 条件由「进入前 max_positions 名」代替 ——
+            # scores 已按 prob_up 降序，循环又只取前 max_positions*2 个，
+            # 所以名次由 rank 变量给出
+            prob_ok = (rank < self.max_positions if self.use_rank
+                       else row["prob_up"] > self.prob_buy_threshold)
+            if (prob_ok
                     and row["vol_z"] > self.vol_z_threshold
                     and row["day_ret"] > 0
                     and pos <= 0

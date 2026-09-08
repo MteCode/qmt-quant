@@ -1,0 +1,16 @@
+{
+  "date": "2026-09-08",
+  "generated_at": "2026-09-08T15:30:17",
+  "rows": [],
+  "missing": [],
+  "n_orders": 0,
+  "ordered_volume": 0,
+  "traded_volume": 0,
+  "fill_rate": 0.0,
+  "n_filled": 0,
+  "n_partial": 0,
+  "n_zero": 0,
+  "slippage_mean": null,
+  "slippage_median": null,
+  "slippage_worst": null
+}
