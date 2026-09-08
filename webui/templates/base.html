@@ -102,6 +102,7 @@ pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
   {% set p = request.path %}
   <a href="/"           class="{{ 'on' if p=='/' }}">总览</a>
   <a href="/strategies" class="{{ 'on' if p.startswith('/strategies') }}">策略中心</a>
+  <a href="/trading"    class="{{ 'on' if p=='/trading' }}">交易台</a>
   <a href="/live"       class="{{ 'on' if p=='/live' }}">实盘监控</a>
   <a href="/data"       class="{{ 'on' if p=='/data' }}">数据核对</a>
   <a href="/tasks"      class="{{ 'on' if p=='/tasks' }}">运行任务</a>
@@ -122,8 +123,18 @@ pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
 </nav></header>
 <main>{% block body %}{% endblock %}</main>
 <script>
-const el=document.getElementById('clock');
-setInterval(()=>{el.textContent=new Date().toLocaleTimeString('zh-CN')},1000);
+// 包在 IIFE 里，不往全局丢名字。此前这里裸声明 const el，
+// 任何页面脚本再声明同名变量就会抛
+// 「Identifier 'el' has already been declared」，
+// 而且是**整块脚本失效**，表现为页面上所有按钮都没反应 ——
+// 排查时很难联想到是被布局模板的时钟脚本撞掉的。
+(function () {
+  const clock = document.getElementById('clock');
+  if (!clock) return;
+  setInterval(() => {
+    clock.textContent = new Date().toLocaleTimeString('zh-CN');
+  }, 1000);
+})();
 </script>
 {% block script %}{% endblock %}
 </body>

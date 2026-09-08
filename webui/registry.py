@@ -176,6 +176,25 @@ TASKS = [
         params=[Param("date", "记录日期", "str", "", help="留空为今天")],
     ),
     Task(
+        id="risk_monitor",
+        name="盘中风控巡检",
+        script=f"{STRATEGY}/risk_monitor.py",
+        desc="跟踪回撤与当日盈亏，触线自动减仓/清仓。与回测共用同一套 "
+             "DrawdownController，口径一致。默认 --once 只查一次；"
+             "去掉 --once 会变成常驻守护。",
+        eta="--once 约 10 秒",
+        params=[
+            Param("once", "只检查一次", "bool", True,
+                  help="关闭则常驻轮询，适合手动长开"),
+            Param("dry_run", "只告警不下单", "bool", True,
+                  help="触线时是否真的减仓"),
+            Param("interval", "轮询间隔（秒）", "int", 30,
+                  help="仅常驻模式有效"),
+        ],
+        # 非 dry-run 时会真实减仓下单
+        dangerous=True,
+    ),
+    Task(
         id="reconcile",
         name="成交回报对账",
         script=f"{STRATEGY}/reconcile.py",

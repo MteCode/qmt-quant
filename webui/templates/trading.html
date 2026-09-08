@@ -1,0 +1,305 @@
+{% extends "base.html" %}
+{% block title %}实盘交易台{% endblock %}
+
+{% block body %}
+<h1>实盘交易台</h1>
+<p class="sub">按<b>策略</b>组织：谁在跑、下了哪些单、成交多少、赚了多少。
+  盈亏只覆盖经引擎下的单 —— paper_trade.py 直接下的单不进状态库，这里看不到。</p>
+
+{% if error %}
+<div class="card" style="border-left:4px solid var(--up)">
+  <b style="color:var(--up)">读取状态库失败</b>
+  <div style="font-size:12.5px;color:var(--muted);margin-top:4px">{{ error }}</div>
+</div>
+{% endif %}
+
+<div class="row" style="margin-bottom:14px">
+  <form method="get" class="row" style="gap:8px">
+    <select name="date" onchange="this.form.submit()" style="width:auto">
+      <option value="{{ day }}">{{ '全部历史' if day == 'all' else day }}</option>
+      {% if day != 'all' %}<option value="all">全部历史</option>{% endif %}
+      {% for d in dates %}
+        {% if d != day %}<option value="{{ d }}">{{ d }}</option>{% endif %}
+      {% endfor %}
+    </select>
+  </form>
+  <span id="poll" style="color:var(--muted);font-size:12px"></span>
+</div>
+
+{% if not rows %}
+  <div class="card"><div class="empty">
+    该日无策略活动。<br><br>
+    <span style="font-size:12.5px">
+      引擎从没跑过的话这里会一直是空的 ——
+      委托要经 <code>run_live.py</code> 下单才会入库。<br>
+      当前配置里登记的策略见「策略中心」，启用方法见
+      <code>config/config.example.yaml</code>。
+    </span>
+  </div></div>
+{% endif %}
+
+<!-- ---------------- 按策略 ---------------- -->
+{% for r in rows %}
+<div class="card strat" style="padding:0">
+  <div class="strat-head" onclick="tog('{{ loop.index }}')">
+    <div style="flex:1;min-width:0">
+      <div class="row" style="gap:8px;margin-bottom:3px">
+        <span style="font-weight:600;font-size:15px">{{ r.name }}</span>
+        {% if r.configured %}
+          <span class="tag t-ok">已登记</span>
+        {% else %}
+          <span class="tag t-warn">配置中已移除</span>
+        {% endif %}
+        {% if r.n_active %}
+          <span class="tag t-run">{{ r.n_active }} 笔挂单</span>
+        {% endif %}
+      </div>
+      <div style="color:var(--muted);font-size:12px">
+        {% if r.cls %}<code style="font-size:11.5px">{{ r.cls }}</code>{% endif %}
+      </div>
+    </div>
+
+    <div class="mini">
+      <div><span class="ml">委托</span>
+        <span class="mv">{{ r.n_orders }}</span></div>
+      <div><span class="ml">成交</span>
+        <span class="mv">{{ r.n_trades }}</span></div>
+      <div><span class="ml">未成交</span>
+        <span class="mv" style="color:{{ 'var(--warn)' if r.untraded
+              else 'inherit' }}">{{ '{:,.0f}'.format(r.untraded) }}</span></div>
+      <div><span class="ml">已实现</span>
+        <span class="mv" style="color:{{ 'var(--up)' if r.realized > 0
+              else ('var(--down)' if r.realized < 0 else 'inherit') }}">
+          {{ '{:+,.0f}'.format(r.realized) }}</span></div>
+      <div><span class="ml">浮动</span>
+        <span class="mv" style="color:{{ 'var(--up)' if r.unrealized > 0
+              else ('var(--down)' if r.unrealized < 0 else 'inherit') }}">
+          {% if r.priced %}{{ '{:+,.0f}'.format(r.unrealized) }}
+          {% else %}<span style="font-size:12px;color:var(--muted)">缺现价</span>
+          {% endif %}</span></div>
+      <div><span class="ml">合计</span>
+        <span class="mv" style="color:{{ 'var(--up)' if r.total_pnl > 0
+              else ('var(--down)' if r.total_pnl < 0 else 'inherit') }}">
+          {{ '{:+,.0f}'.format(r.total_pnl) }}</span></div>
+    </div>
+    <span class="chev" id="c{{ loop.index }}">▸</span>
+  </div>
+
+  <div class="strat-body" id="b{{ loop.index }}" hidden>
+    <div class="row" style="gap:20px;padding:10px 0;font-size:12.5px;
+         color:var(--muted);border-bottom:1px solid var(--line)">
+      <span>成交额 <b style="color:var(--ink)">
+        {{ '{:,.0f}'.format(r.turnover) }}</b></span>
+      <span>手续费 <b style="color:var(--ink)">
+        {{ '%.2f'|format(r.fee) }}</b></span>
+      <span>全部成交 <b style="color:var(--ink)">{{ r.n_filled }}</b></span>
+      <span>已撤/废单 <b style="color:var(--ink)">{{ r.n_dead }}</b></span>
+      <span>持仓 <b style="color:var(--ink)">{{ r.n_holdings }}</b> 只</span>
+    </div>
+
+    <!-- 该策略的持仓 -->
+    {% if r.holdings %}
+    <div class="lbl">持仓（按本策略成交推算）</div>
+    <table>
+      <thead><tr><th>代码</th><th class="num">数量</th>
+        <th class="num">成本</th><th class="num">现价</th>
+        <th class="num">浮动盈亏</th></tr></thead>
+      <tbody>
+      {% for h in r.holdings %}
+        <tr>
+          <td><code>{{ h.vt_symbol }}</code></td>
+          <td class="num">{{ '{:,.0f}'.format(h.volume) }}</td>
+          <td class="num">{{ '%.3f'|format(h.cost) }}</td>
+          <td class="num">
+            {% if h.price %}{{ '%.3f'|format(h.price) }}
+            {% else %}<span style="color:var(--muted)">-</span>{% endif %}</td>
+          <td class="num" style="color:{{ 'var(--up)' if (h.pnl or 0) > 0
+              else 'var(--down)' }}">
+            {% if h.pnl is not none %}{{ '{:+,.0f}'.format(h.pnl) }}
+            {% else %}<span style="color:var(--muted)">缺现价</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <!-- 该策略的委托 -->
+    <div class="lbl">委托明细</div>
+    {% if not r.orders %}
+      <div class="empty" style="padding:16px">无委托</div>
+    {% else %}
+    <table>
+      <thead><tr><th>时间</th><th>委托号</th><th>代码</th><th>方向</th>
+        <th class="num">价格</th><th class="num">委托量</th>
+        <th class="num">已成</th><th class="num">未成</th>
+        <th>状态</th><th>说明</th></tr></thead>
+      <tbody>
+      {% for o in r.orders %}
+        <tr>
+          <td style="color:var(--muted);font-size:12px">
+            {{ o.datetime[11:19] if o.datetime and o.datetime|length > 11
+               else o.datetime }}</td>
+          <td><code style="font-size:11px">{{ o.vt_orderid }}</code></td>
+          <td><code>{{ o.vt_symbol }}</code></td>
+          <td><span class="tag {{ 't-err' if o.direction == SELL else 't-ok' }}">
+            {{ '买' if o.direction == BUY else '卖' }}</span></td>
+          <td class="num">{{ '%.3f'|format(o.price or 0) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(o.volume or 0) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(o.traded or 0) }}</td>
+          <td class="num" style="color:{{ 'var(--warn)' if o.untraded
+              else 'var(--muted)' }}">{{ '{:,.0f}'.format(o.untraded) }}</td>
+          <td><span class="tag {{ 't-ok' if o.traded == o.volume
+                else ('t-err' if o.status in DEAD else 't-run') }}">
+            {{ o.status }}</span></td>
+          <td style="color:var(--muted);font-size:11.5px">{{ o.message or '-' }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+
+    <!-- 该策略的成交（交割单） -->
+    <div class="lbl">成交明细 · 交割单</div>
+    {% if not r.trades %}
+      <div class="empty" style="padding:16px">无成交</div>
+    {% else %}
+    <table>
+      <thead><tr><th>时间</th><th>成交号</th><th>代码</th><th>方向</th>
+        <th class="num">成交价</th><th class="num">成交量</th>
+        <th class="num">金额</th><th class="num">手续费</th></tr></thead>
+      <tbody>
+      {% for t in r.trades %}
+        <tr>
+          <td style="color:var(--muted);font-size:12px">
+            {{ t.datetime[11:19] if t.datetime and t.datetime|length > 11
+               else t.datetime }}</td>
+          <td><code style="font-size:11px">{{ t.vt_tradeid }}</code></td>
+          <td><code>{{ t.vt_symbol }}</code></td>
+          <td><span class="tag {{ 't-err' if t.direction == SELL else 't-ok' }}">
+            {{ '买' if t.direction == BUY else '卖' }}</span></td>
+          <td class="num">{{ '%.3f'|format(t.price or 0) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(t.volume or 0) }}</td>
+          <td class="num">
+            {{ '{:,.0f}'.format((t.price or 0) * (t.volume or 0)) }}</td>
+          <td class="num" style="color:var(--muted)">
+            {{ '%.2f'|format(t.commission or 0) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+</div>
+{% endfor %}
+
+<!-- ---------------- 账户持仓（券商口径） ---------------- -->
+<h2>账户持仓 <span style="font-size:12px;color:var(--muted);
+  font-weight:400">券商快照 · 全账户口径</span></h2>
+{% if not positions %}
+  <div class="card"><div class="empty">
+    无持仓快照。
+    <div style="margin-top:12px">
+      <button onclick="runTask('snapshot_positions','快照持仓')"
+              {{ 'disabled' if 'snapshot_positions' in running }}>
+        {{ '运行中…' if 'snapshot_positions' in running else '刷新持仓' }}
+      </button>
+    </div>
+  </div></div>
+{% else %}
+  <div class="card">
+    <div class="row" style="margin-bottom:10px;justify-content:space-between">
+      <span style="color:var(--muted);font-size:12px">
+        账户 {{ positions.account_id }} ·
+        总资产 {{ '{:,.0f}'.format(positions.total_asset or 0) }} ·
+        可用 {{ '{:,.0f}'.format(positions.cash or 0) }} ·
+        浮盈 {{ '{:+,.0f}'.format(positions.total_pnl or 0) }} ·
+        更新于 {{ (positions.updated_at or '')[:16]|replace('T',' ') }}
+      </span>
+      <button onclick="runTask('snapshot_positions','快照持仓')"
+              style="padding:4px 10px;font-size:12px"
+              {{ 'disabled' if 'snapshot_positions' in running }}>刷新</button>
+    </div>
+    <table>
+      <thead><tr><th>代码</th><th>名称</th><th class="num">数量</th>
+        <th class="num">可用</th><th class="num">成本价</th>
+        <th class="num">市值</th><th class="num">盈亏</th>
+        <th class="num">收益率</th></tr></thead>
+      <tbody>
+      {% for p in positions.holdings or [] %}
+        <tr>
+          <td><code>{{ p.code }}</code></td>
+          <td>{{ p.name or '-' }}</td>
+          <td class="num">{{ p.volume }}</td>
+          <td class="num">{{ p.available }}</td>
+          <td class="num">{{ '%.3f'|format(p.avg_price or 0) }}</td>
+          <td class="num">{{ '{:,.0f}'.format(p.market_value or 0) }}</td>
+          <td class="num" style="color:{{ 'var(--up)' if (p.pnl or 0) > 0
+              else 'var(--down)' }}">{{ '{:+,.0f}'.format(p.pnl or 0) }}</td>
+          <td class="num" style="color:{{ 'var(--up)' if (p.pnl_pct or 0) > 0
+              else 'var(--down)' }}">
+            {{ '%+.2f'|format((p.pnl_pct or 0) * 100) }}%</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <p class="sub" style="margin:10px 0 0">
+      这是<b>全账户</b>口径，包含引擎之外（如 paper_trade.py 手动下单、
+      人工交易）建立的仓位。上方按策略的持仓是从该策略的成交记录推算的，
+      两者对不上就说明有仓位不是引擎建的。
+    </p>
+  </div>
+{% endif %}
+
+<style>
+.strat-head{display:flex;align-items:center;gap:14px;padding:14px 16px;
+  cursor:pointer;user-select:none}
+.strat-head:hover{background:var(--bg)}
+.strat-body{padding:0 16px 16px;border-top:1px solid var(--line)}
+.mini{display:flex;gap:15px;white-space:nowrap}
+.mini .ml{color:var(--muted);font-size:11px;display:block}
+.mini .mv{font-size:15px;font-weight:600;font-variant-numeric:tabular-nums}
+.chev{color:var(--muted);transition:transform .15s;font-size:13px}
+.chev.open{transform:rotate(90deg)}
+.lbl{color:var(--muted);font-size:11.5px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.4px;margin:14px 0 6px}
+@media(max-width:900px){
+  .strat-head{flex-wrap:wrap}
+  .mini{width:100%;order:3;flex-wrap:wrap;gap:12px}
+}
+</style>
+{% endblock %}
+
+{% block script %}
+<script>
+// onclick 属性需要函数在全局可见，其余变量一律局部
+function tog(i){
+  const b = document.getElementById('b'+i), c = document.getElementById('c'+i);
+  b.hidden = !b.hidden;
+  c.classList.toggle('open', !b.hidden);
+}
+async function runTask(taskId, label){
+  if(!confirm('运行「' + label + '」？')) return;
+  const r = await fetch('/api/run', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({task_id: taskId})});
+  const d = await r.json();
+  if(d.ok) location.href = '/jobs/' + d.job_id;
+  else alert('启动失败：' + (d.error || '未知错误'));
+}
+
+// 盘中轮询：数字变了才提示，避免整页刷新打断查看
+const _pollBase = {o: {{ orders|length }}, t: {{ trades|length }}};
+const _pollEl = document.getElementById('poll');
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/trading/refresh?date={{ day }}');
+    if(!r.ok) return;
+    const d = await r.json();
+    if(d.ok && (d.orders !== _pollBase.o || d.trades !== _pollBase.t)){
+      _pollEl.innerHTML = '有新的委托/成交 · ' +
+        '<a href="javascript:location.reload()">点此刷新</a>';
+    }
+  } catch(e) {}
+}, 10000);
+</script>
+{% endblock %}

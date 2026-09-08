@@ -63,27 +63,75 @@ class Schedule:
     last_job_id: str = ""
 
 
-#: 开箱即用的预设。盘前 08:40 留足时间在 09:15 生成信号之前完成，
-#: 盘后 15:20 是收盘后 20 分钟 —— 行情商的日线定稿通常需要十几分钟
+#: 开箱即用的预设，按交易日时序排列。
+#:
+#: 此前只有两条补行情的计划，交易动作一条都没有 —— 生成信号、快照持仓、
+#: 下单执行全靠人手点，这正是「这运行一下那运行一下」的由来。
+#:
+#: 下单类计划默认 **enabled=False**：自动下单是要花真钱的，
+#: 必须由人显式打开。其余环节（补数据、生成信号、快照、对账）
+#: 都是只读或只写本地文件，默认开启是安全的。
 PRESETS = [
+    # ---- 盘前 ----
     Schedule(id="pre_market", name="盘前补齐行情", task_id="update_market_data",
              time="08:40", params={"mode": "pre"},
              # 过了开盘再补「盘前」就没意义了
              catchup_hours=2.0),
+    Schedule(id="gen_signal", name="盘前生成信号", task_id="generate_signal",
+             time="09:05",
+             # 信号要在开盘前算好；开盘后再算就错过了预期的建仓时点
+             catchup_hours=1.0),
+    Schedule(id="pre_snapshot", name="盘前快照持仓", task_id="snapshot_positions",
+             time="09:15", catchup_hours=1.0),
+
+    # ---- 开盘后下单 ----
+    # 09:30 集合竞价刚结束，价格波动最剧烈；等 5 分钟让盘口稳一稳。
+    # 默认关闭 —— 打开它意味着系统会自动花钱。
+    Schedule(id="execute_trade", name="开盘调仓下单", task_id="paper_trade",
+             time="09:35", params={"dry_run": "false"},
+             catchup_hours=1.0, enabled=False),
+
+    # ---- 盘中 ----
+    Schedule(id="risk_check", name="盘中风控巡检", task_id="risk_monitor",
+             time="11:00", catchup_hours=1.0, enabled=False),
+
+    # ---- 收盘 ----
     Schedule(id="post_market", name="盘后更新行情", task_id="update_market_data",
              time="15:20", params={"mode": "post"},
              # 当晚任何时候开机，补上今日数据都是有用的
              catchup_hours=8.0),
+    Schedule(id="post_snapshot", name="盘后快照持仓", task_id="snapshot_positions",
+             time="15:25", catchup_hours=6.0),
+    Schedule(id="reconcile", name="盘后对账", task_id="reconcile",
+             time="15:30", catchup_hours=6.0),
+    Schedule(id="track_equity", name="记录实盘净值", task_id="track_equity",
+             # 漏记的日子补不回来 —— 券商查不到历史净值序列，
+             # 所以补跑窗口给到当晚全程
+             time="15:35", catchup_hours=8.0),
 ]
 
 
 def _load() -> list:
+    """读取计划表，并把新增的预设合并进来。
+
+    只读文件的话，老装机永远看不到后来加的预设 —— 加了「盘前生成信号」
+    「盘后对账」这些计划，用户那边却什么都没变，还以为是配置没生效。
+    合并策略：文件里已有的保留（用户可能改过时间或关掉了），
+    文件里没有的按预设补进去。
+    """
     if not SCHEDULE_FILE.exists():
         return [asdict(s) for s in PRESETS]
     try:
-        return json.loads(SCHEDULE_FILE.read_text(encoding="utf-8"))
+        rows = json.loads(SCHEDULE_FILE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return [asdict(s) for s in PRESETS]
+
+    have = {r.get("id") for r in rows}
+    added = [asdict(s) for s in PRESETS if s.id not in have]
+    if added:
+        rows.extend(added)
+        _save(rows)
+    return rows
 
 
 def _save(rows: list) -> None:

@@ -26,6 +26,7 @@ from pathlib import Path
 from plotly.offline import get_plotlyjs
 
 from . import data_browser, jobs, loaders, scheduler
+from . import attribution
 from . import strategies as strat
 from .registry import TASKS, TASK_BY_ID
 
@@ -220,6 +221,52 @@ def api_strategy_equity(sid):
     if not eq:
         return jsonify(ok=False, error="无净值数据"), 404
     return jsonify(eq)
+
+
+@app.route("/trading")
+def trading_page():
+    """实盘交易台 —— 按策略归因的委托、成交、持仓与盈亏。
+
+    以**策略**为主轴组织，而不是把所有委托平铺：量化系统最基本的问题
+    是「哪个策略在赚钱」，平铺展示回答不了这个。
+    """
+    from datetime import date as _d
+
+    day = request.args.get("date") or _d.today().isoformat()
+    data = attribution.by_strategy(None if day == "all" else day)
+    from qmtquant.core.constants import Status
+    return render_template(
+        "trading.html", day=day,
+        BUY=attribution.BUY, SELL=attribution.SELL,
+        DEAD={Status.CANCELLED.value, Status.REJECTED.value},
+        dates=attribution.order_dates(),
+        rows=data["rows"],
+        orders=data["orders"], trades=data["trades"],
+        positions=loaders.positions(),
+        running={r["task_id"] for r in jobs.running_jobs()},
+        error=data.get("error"))
+
+
+@app.get("/api/trading/refresh")
+def api_trading_refresh():
+    """交易台轮询接口：只回统计数字，够判断要不要重载页面。"""
+    from datetime import date as _d
+    day = request.args.get("date") or _d.today().isoformat()
+    try:
+        from qmtquant.config import DATA_DIR
+        from qmtquant.store.database import StateStore
+        store = StateStore(DATA_DIR / "state.db")
+        orders = store.load_orders(day)
+        trades = store.load_trades(day)
+    except Exception as e:                          # noqa: BLE001
+        return jsonify(ok=False, error=str(e)), 500
+    from qmtquant.core.constants import Status
+    done = {Status.ALLTRADED.value, Status.CANCELLED.value,
+            Status.REJECTED.value}
+    n_active = sum(1 for o in orders
+                   if (o.get("status") or "") not in done)
+    return jsonify(ok=True, orders=len(orders), trades=len(trades),
+                   active=n_active)
 
 
 @app.route("/live")
