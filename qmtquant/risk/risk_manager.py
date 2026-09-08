@@ -178,6 +178,18 @@ class RiskManager:
         """在途买单总金额"""
         return sum(self._pending_buy.values())
 
+    def release_reservation(self, req: OrderRequest) -> None:
+        """撤销一笔已放行但最终没发出去的预留。
+
+        风控放行后网关仍可能报单失败（未连接、参数错、券商拒收）。
+        这时预留必须还回去，否则额度被一笔根本不存在的委托永久占着，
+        当天后续下单会被逐渐挤死。
+        """
+        if req.direction == Direction.LONG:
+            self._release_buy(req.vt_symbol, req.price * req.volume)
+        else:
+            self._release_sell(req.vt_symbol, req.volume)
+
     def reset_reservations(self) -> None:
         """清空在途预留。
 

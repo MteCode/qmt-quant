@@ -58,17 +58,28 @@ STATE_SAVE_INTERVAL = 60
 #: 券商当日撤销后本地仍认为它活着，第二天的调仓会基于错误的在途状态计算。
 MARKET_CLOSE = _dtime(15, 0)
 
+#: 委托挂多久没成交就撤（秒）。
+#:
+#: 不撤的后果不是「单还挂着」这么轻描淡写：限价单挂一天不成交，
+#: 目标持仓永远达不到，而系统不会告诉你 —— 调仓差异下次还这么算，
+#: 风控的在途预留也一直占着额度。撤掉至少让状态回到确定：
+#: 要么成交要么没有，下一轮重新决策。
+ORDER_TIMEOUT = 300
+
 
 class LiveEngine:
     """实盘/模拟盘交易引擎"""
 
     def __init__(self, event_engine: EventEngine, gateway: BaseGateway,
-                 risk_manager: RiskManager, store=None) -> None:
+                 risk_manager: RiskManager, store=None,
+                 order_timeout: int = ORDER_TIMEOUT) -> None:
         """
         :param store: StateStore。传入后策略状态、回撤记忆、成交流水会落库，
             重启可恢复。**持仓与资金不从这里恢复** —— 券商是唯一真相来源，
             信本地会导致重复下单或以为持有已被卖出的仓位。
+        :param order_timeout: 委托挂单超时（秒），0 表示不撤。
         """
+        self.order_timeout = order_timeout
         self.event_engine = event_engine
         self.gateway = gateway
         self.risk_manager = risk_manager
@@ -92,6 +103,10 @@ class LiveEngine:
         self._engine_date: _date = datetime.now().date()
         #: 今日收盘处理是否已执行（撤单 + 落库），避免重复触发
         self._closed_today: bool = False
+        #: vt_orderid -> 报单时刻，用于超时撤单
+        self._order_submit_time: dict[str, float] = {}
+        #: 已因超时发过撤单指令的委托，避免反复发撤单
+        self._timeout_cancelled: set[str] = set()
 
         self._register_handlers()
 
@@ -213,10 +228,14 @@ class LiveEngine:
 
         vt_orderid = self.gateway.send_order(req)
         if not vt_orderid:
+            # 风控已经为这笔单预留了额度，单没发出去就要还回去，
+            # 否则额度被一笔不存在的委托永久占着
+            self.risk_manager.release_reservation(req)
             logger.error("网关报单失败: %s %s", strategy_name, vt_symbol)
             return ""
 
         self._orderid_strategy[vt_orderid] = strategy_name
+        self._order_submit_time[vt_orderid] = time.time()
         trade_logger.info(
             "报单 strategy=%s symbol=%s dir=%s price=%.3f vol=%s orderid=%s",
             strategy_name, vt_symbol, direction.value, req.price, volume, vt_orderid,
@@ -411,8 +430,9 @@ class LiveEngine:
             logger.error("网关断开，暂停下单: %s", data.get("msg", ""))
 
     def _on_timer(self, event: Event) -> None:
-        """定时健康检查：日切、收盘处理、行情停推、事件积压"""
+        """定时健康检查：日切、超时撤单、行情停推、事件积压"""
         self._check_day_rollover()
+        self._check_order_timeout()
 
         if self._last_tick_time and not self._tick_warned:
             gap = (datetime.now() - self._last_tick_time).total_seconds()
@@ -429,6 +449,47 @@ class LiveEngine:
                 and time.time() - self._last_state_save >= STATE_SAVE_INTERVAL):
             self._last_state_save = time.time()
             self.save_all_states()
+
+    def _check_order_timeout(self, now_ts: float | None = None) -> None:
+        """撤掉挂太久没成交的委托。
+
+        部分成交的单同样撤 —— 撤掉的是未成交余量，已成交部分不受影响。
+        撤单回报到达时 risk_manager.on_order 会把余量的预留还回去。
+
+        这里只发撤单指令，不假设它一定成功：券商可能已经成交或已撤。
+        `_timeout_cancelled` 记录发过指令的单，避免每次定时器都重发。
+        """
+        if self.order_timeout <= 0:
+            return
+        now_ts = now_ts or time.time()
+
+        for vt_orderid, order in list(self.orders.items()):
+            if not order.is_active():
+                self._order_submit_time.pop(vt_orderid, None)
+                self._timeout_cancelled.discard(vt_orderid)
+                continue
+            if vt_orderid in self._timeout_cancelled:
+                continue
+            submit = self._order_submit_time.get(vt_orderid)
+            if submit is None:
+                # 重启后从券商同步回来的单没有本地报单时刻。
+                # 按「此刻开始计时」处理，给它完整的超时窗口 ——
+                # 当成 0 会在重启瞬间把所有在途单全撤掉。
+                self._order_submit_time[vt_orderid] = now_ts
+                continue
+            waited = now_ts - submit
+            if waited < self.order_timeout:
+                continue
+
+            self._timeout_cancelled.add(vt_orderid)
+            untraded = (order.volume or 0) - (order.traded or 0)
+            logger.warning(
+                "委托挂单超时 %.0f 秒未成交，撤单: %s %s 未成交 %s 股",
+                waited, vt_orderid, order.vt_symbol, untraded)
+            try:
+                self.cancel_order(vt_orderid)
+            except Exception:
+                logger.exception("超时撤单失败: %s", vt_orderid)
 
     def _check_day_rollover(self, now: datetime | None = None) -> None:
         """跨日重置与收盘撤单。
