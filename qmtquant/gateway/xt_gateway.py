@@ -102,10 +102,16 @@ class XtGateway(BaseGateway):
                 logger.error("委托错误: %s %s",
                              order_error.order_id, order_error.error_msg)
 
-            def on_order_callback(self, order_info):
+            # 方法名必须是 on_stock_order / on_stock_trade —— SDK 在
+            # xttrader.py:302,308 调的是这两个名字。曾经写成
+            # on_order_callback / on_trade_callback，因为本类继承了
+            # XtQuantTraderCallback，SDK 命中的是基类的空实现，
+            # 自定义回调成了永不执行的死代码：下完单没有任何委托或成交
+            # 回流，系统不知道成交了没有、成交价多少、是不是废单。
+            def on_stock_order(self, order_info):
                 self.gateway._on_order(order_info)
 
-            def on_trade_callback(self, trade_info):
+            def on_stock_trade(self, trade_info):
                 self.gateway._on_trade(trade_info)
 
         try:
@@ -145,26 +151,38 @@ class XtGateway(BaseGateway):
             logger.error("未连接，无法下单")
             return ""
 
+        from xtquant import xtconstant as c
+
         stock_code = _to_xt_code(req.symbol, req.exchange)
         account = StockAccount(self.account_id)
 
-        if req.direction == Direction.LONG:
-            order_type = 23  # STOCK_BUY
-        else:
-            order_type = 24  # STOCK_SELL
+        order_type = (c.STOCK_BUY if req.direction == Direction.LONG
+                      else c.STOCK_SELL)
+        # SDK 签名是 (account, stock_code, order_type, order_volume,
+        # price_type, price, strategy_name, order_remark) —— 曾经漏传
+        # price_type，把 req.price 顶到了 price_type 的位置，price 无默认值，
+        # 必抛 TypeError。之所以线上没炸，是因为没有任何代码调用这个方法：
+        # 生产路径直接调 gateway.trader.order_stock 绕过了整层网关抽象。
+        price_type = (c.FIX_PRICE if req.order_type == OrderType.LIMIT
+                      else getattr(c, "LATEST_PRICE", c.FIX_PRICE))
 
         self._order_count += 1
         order_id = self.trader.order_stock(
             account, stock_code, order_type,
-            int(req.volume), req.price,
-            strategy_name="ALSTM_PPO",
-            order_remark=f"signal_{self._order_count}",
+            int(req.volume), price_type, req.price,
+            req.reference or "qmtquant",
+            f"signal_{self._order_count}",
         )
+        if order_id is None or order_id < 0:
+            logger.error("报单失败 code=%s symbol=%s dir=%s vol=%s price=%.3f",
+                         order_id, stock_code, req.direction.value,
+                         req.volume, req.price)
+            return ""
 
         vt_orderid = f"{self.gateway_name}.{order_id}"
         logger.info("委托已发送: %s %s %s %d股 %.2f",
-                     vt_orderid, req.direction.value, stock_code,
-                     req.volume, req.price)
+                    vt_orderid, req.direction.value, stock_code,
+                    req.volume, req.price)
         return vt_orderid
 
     def cancel_order(self, req: CancelRequest) -> None:
@@ -212,16 +230,23 @@ class XtGateway(BaseGateway):
 
     def _on_order(self, order_info) -> None:
         symbol, exchange = _to_vt_symbol(order_info.stock_code)
+        # 从 xtconstant 读常量而非硬编码。原先手写的表整体错位约 2：
+        # 50(已报) 当成部成、54(已撤) 当成废单、55(部成) 当成全成，
+        # 且完全没有 57(废单) —— 废单会 fallback 成 SUBMITTING，
+        # 于是一笔被交易所拒掉的单，系统认为它还活着、is_active() 为真，
+        # 撤单会去撤一笔不存在的单，风控也不知道这笔钱其实没花出去。
+        from xtquant import xtconstant as c
         status_map = {
-            48: Status.SUBMITTING,
-            49: Status.NOTTRADED,
-            50: Status.PARTTRADED,
-            51: Status.PARTTRADED,
-            52: Status.CANCELLED,
-            53: Status.CANCELLED,
-            54: Status.REJECTED,
-            55: Status.ALLTRADED,
-            56: Status.ALLTRADED,
+            c.ORDER_UNREPORTED: Status.SUBMITTING,       # 48 未报
+            c.ORDER_WAIT_REPORTING: Status.SUBMITTING,   # 49 待报
+            c.ORDER_REPORTED: Status.NOTTRADED,          # 50 已报
+            c.ORDER_REPORTED_CANCEL: Status.NOTTRADED,   # 51 已报待撤
+            c.ORDER_PARTSUCC_CANCEL: Status.PARTTRADED,  # 52 部成待撤
+            c.ORDER_PART_CANCEL: Status.CANCELLED,       # 53 部撤
+            c.ORDER_CANCELED: Status.CANCELLED,          # 54 已撤
+            c.ORDER_PART_SUCC: Status.PARTTRADED,        # 55 部成
+            c.ORDER_SUCCEEDED: Status.ALLTRADED,         # 56 已成
+            c.ORDER_JUNK: Status.REJECTED,               # 57 废单
         }
         self.on_order(OrderData(
             symbol=symbol,
