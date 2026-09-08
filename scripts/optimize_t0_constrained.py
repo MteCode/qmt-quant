@@ -38,6 +38,16 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 控制台是 GBK 时，数学减号、警告符号这类字符会直接抛
+# UnicodeEncodeError 让脚本崩在 print 上 —— 算了半小时的结果全丢。
+# 降级为替换字符，宁可显示成 ? 也不能因为一个字符丢掉整轮结果。
+try:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except (AttributeError, ValueError):
+    pass
+
+
 OUT_DIR = ROOT / "models" / "t0_constrained"
 
 

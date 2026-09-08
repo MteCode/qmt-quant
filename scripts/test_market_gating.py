@@ -37,6 +37,16 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+# 控制台是 GBK 时，数学减号、警告符号这类字符会直接抛
+# UnicodeEncodeError 让脚本崩在 print 上 —— 算了半小时的结果全丢。
+# 降级为替换字符，宁可显示成 ? 也不能因为一个字符丢掉整轮结果。
+try:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
+except (AttributeError, ValueError):
+    pass
+
+
 OUT_DIR = ROOT / "models" / "t0_market"
 
 
@@ -177,7 +187,7 @@ def main() -> int:
               f"{s['n_trades'].median():>11.0f}")
 
     # ---- 配对差异：同一组参数，带门控 vs 不带 ----
-    print(f"\n  配对差异（同一组策略参数，门控 − 无门控）：")
+    print(f"\n  配对差异（同一组策略参数，门控 - 无门控）：")
     print(f"  这才是门控的真实贡献 —— 策略本身的好坏被抵消掉了")
     print(f"  {'门控':<18} {'差异中位':>10} {'差异均值':>10} "
           f"{'变好占比':>9} {'交易量变化':>11}")
