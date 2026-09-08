@@ -58,11 +58,43 @@ except (AttributeError, ValueError):
 
 OUT_DIR = ROOT / "models" / "t0_divergence"
 
-COMMISSION = 0.00025
-STAMP_TAX = 0.001
-SLIPPAGE = 0.0005
-ROUND_TRIP = 2 * COMMISSION + STAMP_TAX + 2 * SLIPPAGE
+COMMISSION = 0.0000854      # 万 0.854
+STAMP_TAX = 0.001           # 千 1，仅卖出，法定不可谈
+SLIPPAGE = 0.0005           # 万 5，单边
+MIN_COMMISSION = 5.0        # 券商最低佣金（元/笔）
 LOT = 100
+
+
+def _fee(amount: float, is_sell: bool) -> float:
+    """单笔交易费用。
+
+    ## 最低佣金是做 T 的隐藏杀手
+
+    券商按费率收佣金，但通常有「每笔最低 5 元」。万 0.854 的费率下，
+    单笔低于 58,548 元就会触发下限 —— 而做 T 天然要把资金拆成多笔小额，
+    笔数越多单笔越小，实际佣金率越高：
+
+        单笔 25,000 元 -> 实收 5 元 -> 等效万 2.00（是名义费率的 2.3 倍）
+        单笔 10,000 元 -> 实收 5 元 -> 等效万 5.00（5.9 倍）
+
+    用固定费率回测会系统性低估小额交易的成本，把不赚钱的策略
+    算成接近盈亏平衡。
+    """
+    comm = max(amount * COMMISSION, MIN_COMMISSION)
+    tax = amount * STAMP_TAX if is_sell else 0.0
+    slip = amount * SLIPPAGE
+    return comm + tax + slip
+
+
+def round_trip_rate(amount: float) -> float:
+    """给定单笔金额的往返成本率。金额越小越高（最低佣金所致）。"""
+    if amount <= 0:
+        return 0.0
+    return (_fee(amount, False) + _fee(amount, True)) / amount
+
+
+#: 名义往返成本率（不含最低佣金影响），仅用于对照
+ROUND_TRIP = 2 * COMMISSION + STAMP_TAX + 2 * SLIPPAGE
 
 
 def load_bars(symbol: str, exchange: str, start=None, end=None) -> pd.DataFrame:
@@ -238,8 +270,8 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                 if leg is not None:
                     sh = leg["shares"]
                     if leg["side"] == "buy" and base_shares >= sh:
-                        pro = px * sh * (1 - COMMISSION - STAMP_TAX - SLIPPAGE)
-                        cst = leg["price"] * sh * (1 + COMMISSION + SLIPPAGE)
+                        pro = px * sh - _fee(px * sh, True)
+                        cst = leg["price"] * sh + _fee(leg["price"] * sh, False)
                         base_shares -= sh; locked += sh; cash += pro
                         t_pnl += pro - cst
                         trades.append({
@@ -252,10 +284,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                             "reason": "尾盘"})
                         dtr += 1
                     elif leg["side"] == "sell":
-                        cst = px * sh * (1 + COMMISSION + SLIPPAGE)
+                        cst = px * sh + _fee(px * sh, False)
                         if cash >= cst:
-                            pro = leg["price"] * sh * (
-                                1 - COMMISSION - STAMP_TAX - SLIPPAGE)
+                            pro = leg["price"] * sh - _fee(leg["price"] * sh, True)
                             cash -= cst; locked += sh
                             t_pnl += pro - cst
                             trades.append({
@@ -291,8 +322,8 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                     why = ("止盈" if chg >= take_profit else
                            "止损" if chg <= -stop_loss else "超时")
                     if leg["side"] == "buy" and base_shares >= sh:
-                        pro = px * sh * (1 - COMMISSION - STAMP_TAX - SLIPPAGE)
-                        cst = ep * sh * (1 + COMMISSION + SLIPPAGE)
+                        pro = px * sh - _fee(px * sh, True)
+                        cst = ep * sh + _fee(ep * sh, False)
                         base_shares -= sh; locked += sh; cash += pro
                         t_pnl += pro - cst
                         trades.append({
@@ -303,10 +334,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                             "pnl_pct": round(chg, 5), "reason": why})
                         leg = None; n_done += 1; dtr += 1
                     elif leg["side"] == "sell":
-                        cst = px * sh * (1 + COMMISSION + SLIPPAGE)
+                        cst = px * sh + _fee(px * sh, False)
                         if cash >= cst:
-                            pro = ep * sh * (
-                                1 - COMMISSION - STAMP_TAX - SLIPPAGE)
+                            pro = ep * sh - _fee(ep * sh, True)
                             cash -= cst; locked += sh
                             t_pnl += pro - cst
                             trades.append({
@@ -351,13 +381,13 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
 
             sh = t_shares
             if buy_sig:
-                cst = px * sh * (1 + COMMISSION + SLIPPAGE)
+                cst = px * sh + _fee(px * sh, False)
                 if cash >= cst:
                     cash -= cst
                     leg = {"side": "buy", "price": px, "shares": sh,
                            "t": t, "tmin": tm}
             elif sell_sig and base_shares >= sh:
-                pro = px * sh * (1 - COMMISSION - STAMP_TAX - SLIPPAGE)
+                pro = px * sh - _fee(px * sh, True)
                 base_shares -= sh; cash += pro
                 leg = {"side": "sell", "price": px, "shares": sh,
                        "t": t, "tmin": tm}
