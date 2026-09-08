@@ -245,5 +245,10 @@ class TestPeriodicSave:
         engine = LiveEngine(ee, gw, RiskManager(RiskConfig()), store=store)
         engine.add_strategy(DemoStrategy, "S1", ["000001.SZSE"])
 
+        # 收盘处理会主动落库一次（这是对的），但那条路径与本用例要验的
+        # 「节流」无关。不标记已收盘的话，用例在 15:00 之后跑就会失败 ——
+        # 一个随时间变化的测试比没有测试更糟。
+        engine._closed_today = True
+
         engine._on_timer(Event("eTimer"))
         assert store.load_state("S1") == {}, "间隔未到不应保存"

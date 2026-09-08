@@ -27,6 +27,7 @@ from plotly.offline import get_plotlyjs
 
 from . import data_browser, jobs, loaders, scheduler
 from . import attribution
+from . import services
 from . import strategies as strat
 from .registry import TASKS, TASK_BY_ID
 
@@ -221,6 +222,47 @@ def api_strategy_equity(sid):
     if not eq:
         return jsonify(ok=False, error="无净值数据"), 404
     return jsonify(eq)
+
+
+@app.route("/services")
+def services_page():
+    """常驻服务 —— 后端到底有没有东西在跑。"""
+    return render_template("services.html", rows=services.list_status())
+
+
+@app.get("/api/services")
+def api_services():
+    return jsonify(services.list_status())
+
+
+@app.post("/api/services/<sid>/<action>")
+def api_service_action(sid, action):
+    if action not in ("start", "stop"):
+        return jsonify(ok=False, error="未知操作"), 400
+
+    svc = services.BY_ID.get(sid)
+    if svc is None:
+        return jsonify(ok=False, error="未登记的服务"), 400
+
+    # 会产生真实委托的服务必须二次确认 —— 与下单类任务同一条规则
+    if svc.dangerous and action == "start":
+        data = request.get_json(silent=True) or {}
+        if data.get("confirm") != "yes":
+            return jsonify(ok=False,
+                           error="该服务会产生真实委托，需要二次确认"), 400
+
+    ok, msg = (services.start(sid) if action == "start"
+               else services.stop(sid))
+    return jsonify(ok=ok, message=msg)
+
+
+@app.get("/api/services/<sid>/log")
+def api_service_log(sid):
+    if sid not in services.BY_ID:
+        return jsonify(ok=False, error="未登记的服务"), 400
+    st = services.status(sid)
+    return jsonify(ok=True, log=services.read_log(sid),
+                   running=st["running"], healthy=st["healthy"])
 
 
 @app.route("/trading")

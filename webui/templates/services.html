@@ -1,0 +1,180 @@
+{% extends "base.html" %}
+{% block title %}常驻服务{% endblock %}
+
+{% block body %}
+<h1>常驻服务</h1>
+<p class="sub">后端真正在跑的进程。与「运行任务」的区别：任务跑完就退，
+  服务起来就一直跑 —— <b>服务停了就没人干活了</b>，所以要能一眼看出死没死。</p>
+
+<div class="note">
+  <b>健康怎么判断</b>：三段递进，任何一段不成立就不算健康 ——
+  ① 有启动记录 ② PID 对应的进程还活着且启动时间对得上（PID 会被系统复用）
+  ③ 心跳在容忍窗口内更新过。<b>第三段最关键</b>：进程活着不等于在干活，
+  实盘引擎可能卡在一次阻塞调用上，进程状态正常但事件循环早已冻住 ——
+  只看进程会得到「一切正常」的假象。
+</div>
+
+{% for r in rows %}
+<div class="card svc" data-id="{{ r.id }}">
+  <div class="row" style="justify-content:space-between;align-items:flex-start">
+    <div style="flex:1;min-width:0">
+      <div class="row" style="gap:8px;margin-bottom:4px">
+        <span style="font-weight:600;font-size:15px">{{ r.name }}</span>
+        {% if r.healthy %}
+          <span class="tag t-ok">运行中</span>
+        {% elif r.running %}
+          <span class="tag t-err">进程在但心跳失联</span>
+        {% else %}
+          <span class="tag t-mut">已停止</span>
+        {% endif %}
+        {% if r.dangerous %}<span class="tag t-err">会真实下单</span>{% endif %}
+      </div>
+      <div style="color:var(--muted);font-size:12.5px;line-height:1.7">
+        {{ r.desc }}</div>
+      {% if r.note %}
+      <div style="color:var(--muted);font-size:12px;margin-top:3px">
+        {{ r.note }}</div>{% endif %}
+    </div>
+
+    <div class="row" style="gap:8px">
+      {% if r.running %}
+        <button class="danger" onclick="act('{{ r.id }}','stop','{{ r.name }}',false)">
+          停止</button>
+      {% else %}
+        <button class="primary"
+                onclick="act('{{ r.id }}','start','{{ r.name }}',{{ 'true' if r.dangerous else 'false' }})">
+          启动</button>
+      {% endif %}
+      <button onclick="toggleLog('{{ r.id }}')">日志</button>
+    </div>
+  </div>
+
+  {% if r.running %}
+  <table style="margin-top:12px">
+    <tbody>
+      <tr>
+        <th style="width:110px">PID</th><td class="num">{{ r.pid }}</td>
+        <th style="width:110px">启动于</th>
+        <td>{{ r.started_at|replace('T',' ') }}</td>
+        <th style="width:110px">已运行</th>
+        <td class="num">{{ r.uptime_s|int|dur }}</td>
+      </tr>
+      <tr>
+        <th>心跳</th>
+        <td colspan="5">
+          {% if not r.has_heartbeat %}
+            <span style="color:var(--muted)">该服务未实现心跳，
+              只能判断进程存活</span>
+          {% elif r.heartbeat_ok %}
+            <span class="tag t-ok">正常</span>
+            <span style="color:var(--muted);font-size:12px;margin-left:6px">
+              {{ r.heartbeat_age }} 秒前</span>
+          {% else %}
+            <span class="tag t-err">失联</span>
+            <span style="color:var(--muted);font-size:12px;margin-left:6px">
+              {% if r.heartbeat_age %}{{ r.heartbeat_age }} 秒未更新
+              {% else %}从未写入{% endif %} ——
+              进程还在但可能已经卡死，建议停掉重启并查日志</span>
+          {% endif %}
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  {% elif r.stopped_at %}
+  <div style="margin-top:10px;color:var(--muted);font-size:12px">
+    上次停止于 {{ r.stopped_at|replace('T',' ') }}
+    {% if r.exit_note %}（{{ r.exit_note }}）{% endif %}
+  </div>
+  {% endif %}
+
+  <pre class="log" id="log-{{ r.id }}" hidden
+       style="margin-top:12px;max-height:340px"></pre>
+</div>
+{% endfor %}
+
+<h2>怎么用</h2>
+<div class="card">
+  <ol class="steps">
+    <li><b>定时调度守护</b> —— 常开。它按交易日程自动跑盘前补数据、
+      生成信号、快照持仓、盘后对账。计划表在
+      <a href="/schedule">定时任务</a>页，下单类计划默认关闭。</li>
+    <li><b>实盘引擎（模拟撮合）</b> —— 先用它跑通全链路。不接券商，
+      不会产生真实委托，委托与成交照常落库，可在
+      <a href="/trading">交易台</a>看到按策略归因的结果。</li>
+    <li><b>实盘引擎（miniQMT）</b> —— 模拟撮合跑通、策略在
+      <a href="/strategies">策略中心</a>确认无误后再切。
+      需要 QMT 客户端已登录。两个引擎不能同时开 ——
+      会重复下单，系统会拒绝。</li>
+  </ol>
+  <p class="sub" style="margin:12px 0 0">
+    服务由管理台启停，但**不随管理台退出**：关掉浏览器和 Flask 进程后
+    它们仍在跑。要开机自启，外面再包一层 Windows 计划任务或 NSSM。
+  </p>
+</div>
+
+<style>
+.svc{margin-bottom:14px}
+.steps{margin:0;padding-left:20px;font-size:13px;line-height:2}
+</style>
+{% endblock %}
+
+{% block script %}
+<script>
+async function act(sid, action, name, dangerous){
+  let msg = (action === 'start' ? '启动' : '停止') + '「' + name + '」？';
+  const body = {};
+  if(dangerous && action === 'start'){
+    msg = '【警告】「' + name + '」会产生真实委托。\n\n' +
+          '确认 QMT 客户端已登录、策略配置无误、已用模拟撮合跑通？';
+    if(!confirm(msg)) return;
+    if(!confirm('再次确认：这会用真实资金下单。继续？')) return;
+    body.confirm = 'yes';
+  } else {
+    if(!confirm(msg)) return;
+  }
+  const r = await fetch('/api/services/' + sid + '/' + action,
+    {method:'POST', headers:{'Content-Type':'application/json'},
+     body: JSON.stringify(body)});
+  const d = await r.json();
+  alert(d.message || d.error || '完成');
+  setTimeout(() => location.reload(), 600);
+}
+
+const openLogs = new Set();
+function toggleLog(sid){
+  const el = document.getElementById('log-' + sid);
+  el.hidden = !el.hidden;
+  if(el.hidden){ openLogs.delete(sid); return; }
+  openLogs.add(sid);
+  loadLog(sid);
+}
+async function loadLog(sid){
+  const el = document.getElementById('log-' + sid);
+  if(!el || el.hidden) return;
+  try {
+    const r = await fetch('/api/services/' + sid + '/log');
+    const d = await r.json();
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    el.textContent = d.log || '（暂无日志）';
+    if(atBottom) el.scrollTop = el.scrollHeight;
+  } catch(e) {}
+}
+// 打开着的日志每 3 秒刷新一次，服务状态每 10 秒刷一次
+setInterval(() => openLogs.forEach(loadLog), 3000);
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/services');
+    const rows = await r.json();
+    const changed = rows.some(x => {
+      const card = document.querySelector('.svc[data-id="' + x.id + '"]');
+      if(!card) return false;
+      const shown = card.querySelector('.tag').textContent.trim();
+      const now = x.healthy ? '运行中'
+                : (x.running ? '进程在但心跳失联' : '已停止');
+      return shown !== now;
+    });
+    if(changed) location.reload();
+  } catch(e) {}
+}, 10000);
+</script>
+{% endblock %}

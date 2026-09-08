@@ -516,6 +516,8 @@ class LiveEngine:
                 logger.info("收盘撤单：%d 笔未成交委托", len(active))
                 self.cancel_all()
             self.save_all_states()
+            # 同步节流计时，否则紧接着的定时落库会再存一次
+            self._last_state_save = time.time()
 
         # ---- 跨日：重置风控当日额度 ----
         if today != self._engine_date:

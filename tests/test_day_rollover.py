@@ -206,3 +206,19 @@ def test_跨日后收盘标记复位(engine):
     eng._closed_today = True
     eng._check_day_rollover(datetime.now() + timedelta(days=1))
     assert eng._closed_today is False
+
+
+# ------------------------------------------------------------ 落库节流
+
+def test_收盘保存后不重复落库(engine):
+    """收盘分支会主动 save_all_states()。若不同步节流计时，
+    紧接着的定时落库会再存一次 —— 每次收盘白写两遍。"""
+    import time as _t
+    eng, _, _ = engine
+    eng._last_state_save = 0            # 让节流条件成立
+    t = datetime.now().replace(hour=15, minute=2)
+    if t.weekday() >= 5:
+        t += timedelta(days=(7 - t.weekday()))
+    before = _t.time()
+    eng._check_day_rollover(t)
+    assert eng._last_state_save >= before, "收盘落库后未同步节流计时"

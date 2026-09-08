@@ -102,6 +102,7 @@ pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
   {% set p = request.path %}
   <a href="/"           class="{{ 'on' if p=='/' }}">总览</a>
   <a href="/strategies" class="{{ 'on' if p.startswith('/strategies') }}">策略中心</a>
+  <a href="/services"  class="{{ 'on' if p=='/services' }}">服务</a>
   <a href="/trading"    class="{{ 'on' if p=='/trading' }}">交易台</a>
   <a href="/live"       class="{{ 'on' if p=='/live' }}">实盘监控</a>
   <a href="/data"       class="{{ 'on' if p=='/data' }}">数据核对</a>

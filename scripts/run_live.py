@@ -169,9 +169,31 @@ def main() -> int:
         running = False
 
     signal.signal(signal.SIGINT, _stop)
+    # 管理台停服务时：Windows 发 CTRL_BREAK_EVENT（表现为 SIGBREAK），
+    # 其他平台发 SIGTERM。两者都要走优雅退出（撤单 → 停策略 → 断网关）——
+    # Windows 上 os.kill(pid, SIGTERM) 实际是 TerminateProcess，
+    # 会直接杀死进程，挂单留在券商那边、状态来不及落库。
+    for _sig in ("SIGBREAK", "SIGTERM"):
+        h = getattr(signal, _sig, None)
+        if h is None:
+            continue
+        try:
+            signal.signal(h, _stop)
+        except (OSError, ValueError):
+            pass
+
+    from webui import services
+
     try:
+        tick = 0
         while running:
             time.sleep(1)
+            tick += 1
+            # 心跳只在事件引擎仍在处理事件时写。进程活着不等于在干活 ——
+            # 卡在一次阻塞的 order_stock 上时进程状态正常，
+            # 但事件循环早已冻住，只看进程会得到「一切正常」的假象。
+            if tick % 30 == 0 and event_engine.is_active():
+                services.beat("live")
     finally:
         print("\n正在退出：撤单 → 停策略 → 断开网关 ...")
         engine.close()

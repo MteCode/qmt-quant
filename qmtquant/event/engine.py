@@ -69,6 +69,16 @@ class EventEngine:
         self._thread.join(timeout=5)
         logger.info("事件引擎已停止")
 
+    def is_active(self) -> bool:
+        """引擎是否仍在处理事件。
+
+        看的是**处理线程**是否存活，不只是 `_active` 标志 ——
+        处理线程若被未捕获异常打死，标志位仍是 True，
+        外部据此判断会得到「一切正常」的假象。心跳依赖这个方法，
+        所以它必须反映真实情况而非意图。
+        """
+        return self._active and self._thread.is_alive()
+
     # ---------------------------------------------------------------- 内部循环
 
     def _run(self) -> None:

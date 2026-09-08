@@ -123,9 +123,30 @@ def main() -> int:
         running = False
 
     signal.signal(signal.SIGINT, _stop)
+    # 管理台停服务时：Windows 发 CTRL_BREAK_EVENT（表现为 SIGBREAK），
+    # 其他平台发 SIGTERM。两者都要走同一条优雅退出路径 ——
+    # Windows 上 os.kill(pid, SIGTERM) 实际是 TerminateProcess，
+    # 直接杀死、信号处理器不触发，所以那条路不能用。
+    for _sig in ("SIGBREAK", "SIGTERM"):
+        h = getattr(signal, _sig, None)
+        if h is None:
+            continue
+        try:
+            signal.signal(h, _stop)
+        except (OSError, ValueError):
+            pass
+
+    from webui import services
+
     try:
+        tick = 0
         while running:
             time.sleep(1)
+            tick += 1
+            # 每 30 秒写一次心跳：进程活着不等于调度线程还在转，
+            # 只看进程会把「线程死了但进程还在」误判成健康
+            if tick % 30 == 0 and scheduler.is_running():
+                services.beat("scheduler")
     finally:
         print("\n正在停止调度 ...")
         scheduler.stop_scheduler()
