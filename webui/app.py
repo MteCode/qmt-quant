@@ -27,6 +27,7 @@ from plotly.offline import get_plotlyjs
 
 from . import data_browser, jobs, loaders, scheduler
 from . import attribution
+from . import console
 from . import services
 from . import strategies as strat
 from .registry import TASKS, TASK_BY_ID
@@ -222,6 +223,46 @@ def api_strategy_equity(sid):
     if not eq:
         return jsonify(ok=False, error="无净值数据"), 404
     return jsonify(eq)
+
+
+@app.route("/console")
+def console_page():
+    """交易台 —— 右侧策略列表，左侧选中策略的回测数据。"""
+    ov = console.overview()
+    sid = request.args.get("s") or (ov["rows"][0]["id"] if ov["rows"] else "")
+    det = console.detail(sid) if sid else None
+    return render_template("console.html", ov=ov, sid=sid, det=det)
+
+
+@app.get("/api/console/overview")
+def api_console_overview():
+    """轮询接口：策略运行状态与实盘盈亏。"""
+    ov = console.overview()
+    return jsonify({
+        "engine_up": ov["engine_up"], "engine_mode": ov["engine_mode"],
+        "n_running": ov["n_running"],
+        "total_live_pnl": ov["total_live_pnl"],
+        "rows": [{"id": r["id"], "running": r["running"],
+                  "live_pnl": r["live_pnl"], "live_orders": r["live_orders"],
+                  "live_active": r["live_active"]} for r in ov["rows"]],
+    })
+
+
+@app.route("/console/<sid>/live")
+def console_live_page(sid):
+    """单策略实盘可视化 —— 委托、成交、持仓、信号、盈亏。"""
+    det = console.detail(sid)
+    if det is None:
+        return render_template("console.html", ov=console.overview(),
+                               sid="", det=None,
+                               error=f"策略不存在: {sid}"), 404
+    from qmtquant.core.constants import Status
+    return render_template(
+        "console_live.html", **det, sid=sid,
+        BUY=attribution.BUY, SELL=attribution.SELL,
+        DEAD={Status.CANCELLED.value, Status.REJECTED.value},
+        running={r["task_id"] for r in jobs.running_jobs()},
+        task_by_id=TASK_BY_ID)
 
 
 @app.route("/services")

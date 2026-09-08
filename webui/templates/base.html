@@ -100,6 +100,7 @@ pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
 <header><nav class="nav">
   <span class="brand">量化管理台</span>
   {% set p = request.path %}
+  <a href="/console"    class="{{ 'on' if p.startswith('/console') }}">交易台</a>
   <a href="/"           class="{{ 'on' if p=='/' }}">总览</a>
   <a href="/strategies" class="{{ 'on' if p.startswith('/strategies') }}">策略中心</a>
   <a href="/services"  class="{{ 'on' if p=='/services' }}">服务</a>

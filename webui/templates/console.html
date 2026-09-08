@@ -1,0 +1,410 @@
+{% extends "base.html" %}
+{% block title %}交易台{% endblock %}
+
+{% block body %}
+{% if error %}<div class="note"><b>{{ error }}</b></div>{% endif %}
+
+<!-- ---------------- 顶部状态条 ---------------- -->
+<div class="topbar">
+  <div class="row" style="gap:18px">
+    <div>
+      <span class="tl">引擎</span>
+      {% if ov.engine_up %}
+        <span class="tag t-ok">运行中 · {{ ov.engine_mode }}</span>
+      {% else %}
+        <span class="tag t-mut">未启动</span>
+      {% endif %}
+    </div>
+    <div><span class="tl">在跑策略</span>
+      <b class="tv">{{ ov.n_running }}</b></div>
+    <div><span class="tl">实盘盈亏</span>
+      <b class="tv" style="color:{{ 'var(--up)' if ov.total_live_pnl > 0
+         else ('var(--down)' if ov.total_live_pnl < 0 else 'inherit') }}">
+        {{ '{:+,.0f}'.format(ov.total_live_pnl) }}</b></div>
+  </div>
+  <div class="row" style="gap:8px">
+    {% if not ov.engine_up %}
+      <button class="primary" onclick="svc('live_sim','start')">启动引擎（模拟）</button>
+    {% else %}
+      <a href="/trading" class="btn" style="text-decoration:none">交易明细</a>
+      <button class="danger" onclick="svc(
+        '{{ 'live_qmt' if ov.engine_mode == 'miniQMT' else 'live_sim' }}','stop')">
+        停止引擎</button>
+    {% endif %}
+    <a href="/services" class="btn" style="text-decoration:none">服务</a>
+  </div>
+</div>
+
+<div class="split">
+  <!-- ============ 左：选中策略的回测数据 ============ -->
+  <div class="pane-main">
+    {% if not det %}
+      <div class="card"><div class="empty">选择右侧策略查看详情</div></div>
+    {% else %}
+      {% set s = det.s %}{% set r = det.r %}{% set row = det.row %}
+      {% set m = r.metrics or {} %}
+
+      <div class="row" style="justify-content:space-between;
+           align-items:flex-start;margin-bottom:12px">
+        <div>
+          <h1 style="margin-bottom:2px">{{ s.name }}</h1>
+          <div style="color:var(--muted);font-size:12.5px">{{ s.summary }}</div>
+        </div>
+        <div class="row" style="gap:8px">
+          {% if row.can_run %}
+            <a href="/console/{{ s.id }}/live" class="btn primary"
+               style="text-decoration:none">实盘可视化 →</a>
+          {% endif %}
+          <a href="/strategies/{{ s.id }}" class="btn"
+             style="text-decoration:none">完整报告</a>
+        </div>
+      </div>
+
+      {% if s.caveat %}
+      <div class="card" style="border-left:4px solid var(--up);padding:12px 14px">
+        <b style="color:var(--up);font-size:13px">结论</b>
+        <div style="font-size:12.5px;line-height:1.7;margin-top:3px">
+          {{ s.caveat }}</div>
+      </div>
+      {% endif %}
+
+      <!-- 回测指标 -->
+      {% if r.has_result and m %}
+      <div class="grid g4">
+        <div class="kpi">
+          <div class="l">年化收益</div>
+          <div class="v" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0
+              else 'var(--down)' }}">
+            {{ '%+.2f'|format((m.annual_return or 0) * 100) }}%</div>
+          <div class="s">{{ r.period or '-' }}</div>
+        </div>
+        <div class="kpi">
+          <div class="l">总收益</div>
+          <div class="v" style="color:{{ 'var(--up)' if (m.total_return or 0) > 0
+              else 'var(--down)' }}">
+            {{ '%+.2f'|format((m.total_return or 0) * 100) }}%</div>
+          <div class="s">{{ m.n_periods or r.n_trades or '' }}
+            {{ '个交易日' if m.n_periods else ('笔交易' if r.n_trades else '') }}</div>
+        </div>
+        <div class="kpi bad">
+          <div class="l">最大回撤</div>
+          <div class="v">{{ '%.2f'|format((m.max_drawdown or 0) * 100) }}%</div>
+          <div class="s">峰值到谷底</div>
+        </div>
+        <div class="kpi">
+          <div class="l">夏普比率</div>
+          <div class="v">{{ '%.2f'|format(m.sharpe or 0) }}</div>
+          <div class="s">{% if m.volatility %}波动
+            {{ '%.1f'|format(m.volatility * 100) }}%{% endif %}</div>
+        </div>
+      </div>
+      {% else %}
+      <div class="card"><div class="empty">该策略尚无回测结果</div></div>
+      {% endif %}
+
+      <!-- 净值 + 回撤 -->
+      {% if r.equity %}
+      <div class="card">
+        <div class="lbl" style="margin-top:0">净值曲线</div>
+        <div id="eq" style="height:260px"></div>
+      </div>
+      <div class="card">
+        <div class="lbl" style="margin-top:0">回撤</div>
+        <div id="dd" style="height:150px"></div>
+      </div>
+      <div class="card">
+        <div class="lbl" style="margin-top:0">月度收益</div>
+        <div id="heat" style="height:180px"></div>
+      </div>
+      {% endif %}
+
+      <!-- 多模式对比 -->
+      {% if r.modes %}
+      <div class="card">
+        <div class="lbl" style="margin-top:0">各模式对比</div>
+        <table>
+          <thead><tr><th>模式</th><th class="num">总收益</th>
+            <th class="num">回撤</th><th class="num">夏普</th>
+            <th class="num">交易</th><th class="num">胜率</th></tr></thead>
+          <tbody>
+          {% for x in r.modes %}
+            <tr><td><b>{{ x.mode }}</b></td>
+              <td class="num" style="color:{{ 'var(--up)' if (x.total_return or 0) > 0
+                  else 'var(--down)' }}">
+                {{ '%+.2f'|format((x.total_return or 0) * 100) }}%</td>
+              <td class="num">{{ '%.2f'|format((x.max_drawdown or 0) * 100) }}%</td>
+              <td class="num">{{ '%.2f'|format(x.sharpe or 0) }}</td>
+              <td class="num">{{ x.n_trades }}</td>
+              <td class="num">{{ '%.1f'|format((x.win_rate or 0) * 100) }}%</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+
+      <!-- 样本外验证 -->
+      {% if r.walkforward %}
+      {% set rb = r.robustness or {} %}
+      <div class="card">
+        <div class="lbl" style="margin-top:0">样本外验证</div>
+        <div class="row" style="gap:20px;margin-bottom:10px;font-size:12.5px">
+          <span>参数组数 <b>{{ rb.n_configs }}</b></span>
+          <span>做T为正 <b style="color:var(--warn)">{{ rb.n_positive_t }}
+            （{{ '%.1f'|format((rb.pct_positive_t or 0) * 100) }}%）</b></span>
+          <span>样本外存活 <b style="color:var(--down)">
+            {{ rb.walkforward_survivors if rb.walkforward_survivors is not none
+               else rb.walkforward_top10_survivors }}/10</b></span>
+        </div>
+        <table>
+          <thead><tr><th style="width:44px">#</th>
+            <th class="num">样本内</th><th class="num">样本外</th>
+            <th>结果</th></tr></thead>
+          <tbody>
+          {% for w in r.walkforward[:6] %}
+            <tr><td style="color:var(--muted)">{{ w.rank }}</td>
+              <td class="num" style="color:var(--up)">
+                {{ '%+.2f'|format(w.in_sample_t_annual * 100) }}%</td>
+              <td class="num" style="color:{{ 'var(--up)' if w.out_sample_t_annual > 0
+                  else 'var(--down)' }}">
+                {{ '%+.2f'|format(w.out_sample_t_annual * 100) }}%</td>
+              <td><span class="tag {{ 't-ok' if w.out_sample_t_annual > 0
+                    else 't-err' }}">
+                {{ '存活' if w.out_sample_t_annual > 0 else '失效' }}</span></td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  <!-- ============ 右：策略列表 ============ -->
+  <aside class="pane-side">
+    <div class="side-head">
+      <span>策略 <span style="color:var(--muted)">{{ ov.rows|length }}</span></span>
+      <a href="/strategies" style="font-size:12px">管理</a>
+    </div>
+
+    {% for r in ov.rows %}
+    <a class="scard {{ 'on' if r.id == sid }}" href="/console?s={{ r.id }}">
+      <div class="row" style="justify-content:space-between;
+           align-items:flex-start;gap:6px">
+        <div style="min-width:0;flex:1">
+          <div class="sname">{{ r.name }}</div>
+          <div class="smeta">
+            <span class="tag t-mut">{{ r.category }}</span>
+            {% if r.caveat %}<span class="tag t-err">有结论</span>{% endif %}
+          </div>
+        </div>
+
+        <!-- 实盘连接图标 -->
+        <span class="icons" onclick="event.preventDefault();event.stopPropagation()">
+          {% if r.can_run %}
+            <a class="ico {{ 'live' if r.running else '' }}"
+               href="/console/{{ r.id }}/live"
+               title="{{ '实盘运行中 — 点击查看' if r.running
+                        else '已接入实盘 — 点击查看' }}">
+              <span class="dot {{ 'pulse' if r.running }}"></span>实盘
+            </a>
+          {% else %}
+            <span class="ico off" title="未接入实盘：config.yaml 里没有登记">
+              <span class="dot"></span>未接
+            </span>
+          {% endif %}
+        </span>
+      </div>
+
+      <div class="srow">
+        <span class="sk">年化</span>
+        <span class="sv" style="color:{{ 'var(--up)' if (r.annual_return or 0) > 0
+            else ('var(--down)' if r.annual_return is not none else 'var(--muted)') }}">
+          {% if r.annual_return is not none %}
+            {{ '%+.1f'|format(r.annual_return * 100) }}%
+          {% else %}-{% endif %}</span>
+        <span class="sk">回撤</span>
+        <span class="sv">{% if r.max_drawdown is not none %}
+          {{ '%.1f'|format(r.max_drawdown * 100) }}%{% else %}-{% endif %}</span>
+        <span class="sk">夏普</span>
+        <span class="sv">{% if r.sharpe is not none %}
+          {{ '%.2f'|format(r.sharpe) }}{% else %}-{% endif %}</span>
+      </div>
+
+      {% if r.live_orders or r.running %}
+      <div class="srow live">
+        <span class="sk">实盘</span>
+        <span class="sv">{{ r.live_orders }} 委托</span>
+        {% if r.live_active %}
+          <span class="sv" style="color:var(--warn)">{{ r.live_active }} 挂单</span>
+        {% endif %}
+        <span class="sk">盈亏</span>
+        <span class="sv" style="color:{{ 'var(--up)' if r.live_pnl > 0
+            else ('var(--down)' if r.live_pnl < 0 else 'inherit') }}">
+          {{ '{:+,.0f}'.format(r.live_pnl) }}</span>
+      </div>
+      {% endif %}
+    </a>
+    {% endfor %}
+  </aside>
+</div>
+
+<style>
+.topbar{display:flex;justify-content:space-between;align-items:center;
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:11px 16px;margin-bottom:14px;flex-wrap:wrap;gap:10px}
+.topbar .tl{color:var(--muted);font-size:11.5px;margin-right:5px}
+.topbar .tv{font-size:16px;font-variant-numeric:tabular-nums}
+
+.split{display:grid;grid-template-columns:1fr 340px;gap:14px;align-items:start}
+.pane-main{min-width:0}
+.pane-side{position:sticky;top:70px;max-height:calc(100vh - 90px);
+  overflow-y:auto;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);padding:10px}
+.side-head{display:flex;justify-content:space-between;align-items:center;
+  padding:2px 4px 10px;font-weight:600;font-size:13px;
+  border-bottom:1px solid var(--line);margin-bottom:8px}
+
+.scard{display:block;padding:10px;border-radius:8px;border:1px solid transparent;
+  margin-bottom:6px;color:var(--ink);text-decoration:none}
+.scard:hover{background:var(--bg);text-decoration:none}
+.scard.on{background:var(--bg);border-color:var(--accent)}
+.sname{font-weight:600;font-size:13px;margin-bottom:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.smeta{display:flex;gap:4px;flex-wrap:wrap}
+.srow{display:flex;gap:6px;align-items:baseline;margin-top:7px;
+  font-size:11.5px;flex-wrap:wrap}
+.srow.live{padding-top:6px;border-top:1px dashed var(--line)}
+.sk{color:var(--muted)}
+.sv{font-weight:600;font-variant-numeric:tabular-nums;margin-right:6px}
+
+.icons{display:flex;gap:4px;flex-shrink:0}
+.ico{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;
+  border-radius:20px;font-size:11px;font-weight:500;border:1px solid var(--line);
+  background:var(--bg);color:var(--muted);text-decoration:none;white-space:nowrap}
+.ico:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+.ico.live{background:rgba(46,158,91,.12);color:var(--down);
+  border-color:rgba(46,158,91,.3)}
+.ico.off{opacity:.5;cursor:default}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor;
+  display:inline-block;flex-shrink:0}
+.dot.pulse{animation:bp 1.6s ease-in-out infinite}
+@keyframes bp{0%,100%{opacity:1}50%{opacity:.25}}
+
+.lbl{color:var(--muted);font-size:11.5px;font-weight:500;
+  text-transform:uppercase;letter-spacing:.4px;margin:12px 0 6px}
+
+@media(max-width:1000px){
+  .split{grid-template-columns:1fr}
+  .pane-side{position:static;max-height:none;order:-1}
+}
+</style>
+{% endblock %}
+
+{% block script %}
+<script>
+async function svc(id, action){
+  const label = action === 'start' ? '启动' : '停止';
+  if(!confirm(label + '引擎？')) return;
+  const r = await fetch('/api/services/' + id + '/' + action,
+    {method:'POST', headers:{'Content-Type':'application/json'},
+     body: JSON.stringify({})});
+  const d = await r.json();
+  alert(d.message || d.error || '完成');
+  setTimeout(() => location.reload(), 800);
+}
+
+const dark = matchMedia('(prefers-color-scheme:dark)').matches;
+// 显式指定轴类型。Plotly 的自动推断会把百分比数组识别成日期轴，
+// 表现为 Y 轴刻度变成 00:00:00 / 59:59.9 这种时间格式 ——
+// 数值本身是对的，只是显示完全不可读。不该赌自动推断。
+const AX = {gridcolor: dark ? '#272d3a' : '#e5e8ee'};
+const NUM = Object.assign({type:'linear'}, AX);
+const DATE = Object.assign({type:'date'}, AX);
+const LAY = {
+  paper_bgcolor:'rgba(0,0,0,0)', plot_bgcolor:'rgba(0,0,0,0)',
+  font:{color: dark ? '#e6e9ef' : '#1c2333', size:11},
+  showlegend:false,
+};
+
+{% if det and det.r.equity %}
+fetch('/api/strategy/{{ sid }}/equity').then(r => r.ok ? r.json() : null)
+  .then(d => {
+    if(!d || !d.values) return;
+    // 净值
+    Plotly.newPlot('eq', [{
+      x:d.dates, y:d.values, type:'scatter', mode:'lines',
+      line:{color:'#2c7be5', width:2},
+      fill:'tozeroy', fillcolor:'rgba(44,123,229,.07)'}],
+      Object.assign({margin:{l:58,r:14,t:6,b:30},
+        xaxis:DATE, yaxis:Object.assign({title:'净值'}, NUM)}, LAY),
+      {displayModeBar:false, responsive:true});
+
+    // 回撤：净值相对历史峰值的跌幅
+    let peak = -Infinity;
+    const dd = d.values.map(v => { peak = Math.max(peak, v);
+      return peak > 0 ? (v/peak - 1) * 100 : 0; });
+    Plotly.newPlot('dd', [{
+      x:d.dates, y:dd, type:'scatter', mode:'lines',
+      line:{color:'#e04b4b', width:1.4},
+      fill:'tozeroy', fillcolor:'rgba(224,75,75,.12)'}],
+      Object.assign({margin:{l:58,r:14,t:6,b:30},
+        xaxis:DATE, yaxis:Object.assign({title:'回撤 %'}, NUM)}, LAY),
+      {displayModeBar:false, responsive:true});
+
+    // 月度收益热力图：把日净值折成月度
+    const byMonth = {};
+    d.dates.forEach((ds, i) => {
+      const k = ds.slice(0,7);
+      if(!(k in byMonth)) byMonth[k] = {first: d.values[i], last: d.values[i]};
+      byMonth[k].last = d.values[i];
+    });
+    const keys = Object.keys(byMonth).sort();
+    // 上月末作为本月起点，避免把月内首日的涨跌算漏
+    let prevEnd = null;
+    const rets = keys.map(k => {
+      const b = prevEnd === null ? byMonth[k].first : prevEnd;
+      prevEnd = byMonth[k].last;
+      return b > 0 ? (byMonth[k].last / b - 1) * 100 : 0;
+    });
+    const years = [...new Set(keys.map(k => k.slice(0,4)))].sort();
+    const months = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+    const z = years.map(y => months.map(mo => {
+      const i = keys.indexOf(y + '-' + mo);
+      return i < 0 ? null : rets[i];
+    }));
+    Plotly.newPlot('heat', [{
+      z:z, x:months.map(m => m + '月'), y:years, type:'heatmap',
+      colorscale:[[0,'#2e9e5b'],[0.5,dark?'#1a1f29':'#f6f7f9'],[1,'#e04b4b']],
+      zmid:0, hovertemplate:'%{y}-%{x}: %{z:.2f}%<extra></extra>',
+      showscale:false}],
+      Object.assign({margin:{l:52,r:14,t:6,b:28}, xaxis:{}, yaxis:{}}, LAY),
+      {displayModeBar:false, responsive:true});
+  });
+{% endif %}
+
+// 运行状态与实盘盈亏轮询：变了才提示，不打断查看
+let _base = null;
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/console/overview');
+    if(!r.ok) return;
+    const d = await r.json();
+    const sig = JSON.stringify([d.engine_up, d.n_running,
+      Math.round(d.total_live_pnl)]);
+    if(_base === null){ _base = sig; return; }
+    if(sig !== _base){
+      _base = sig;
+      const el = document.querySelector('.topbar');
+      if(el && !document.getElementById('rl')){
+        const a = document.createElement('a');
+        a.id = 'rl'; a.href = 'javascript:location.reload()';
+        a.style.cssText = 'font-size:12px;margin-left:10px';
+        a.textContent = '状态已变化 · 刷新';
+        el.querySelector('.row').appendChild(a);
+      }
+    }
+  } catch(e) {}
+}, 8000);
+</script>
+{% endblock %}
