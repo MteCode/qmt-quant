@@ -139,14 +139,17 @@ def main():
                 break
 
         elif step == "execute_trade":
+            # 超时给足：20+ 笔委托每笔 sleep(0.2) 再加查行情，120 秒会中途
+            # 被 kill —— 委托已发出，进程被杀。paper_trade 现在逐笔先落盘，
+            # 被杀也查得到下过什么单，但仍应给足时间让它自己跑完。
             if args.dry_run:
                 ok = run_cmd(desc + " (DRY RUN)", [
                     PYTHON, str(S / "paper_trade.py"), "--dry-run",
-                ], timeout=120)
+                ], timeout=600)
             else:
                 ok = run_cmd(desc, [
                     PYTHON, str(S / "paper_trade.py"),
-                ], timeout=120)
+                ], timeout=600)
             results.append((desc, ok))
 
     # 汇总

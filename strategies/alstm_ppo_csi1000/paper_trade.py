@@ -167,9 +167,60 @@ def _split_code(vt: str):
     return code, f"{code}.SZ", Exchange.SZSE
 
 
-#: 执行记录的列。顺序即 CSV 列序，改动会影响已有文件的可读性
-EXEC_COLUMNS = ["time", "vt_symbol", "name", "direction", "volume",
-                "price", "amount", "result", "reason", "order_id", "mode"]
+#: 执行记录的列。顺序即 CSV 列序，改动会影响已有文件的可读性。
+#: run_id / remark 用于幂等与逐笔对账 —— 见 append_execution 的说明
+EXEC_COLUMNS = ["time", "run_id", "remark", "vt_symbol", "name", "direction",
+                "volume", "price", "amount", "result", "reason", "order_id",
+                "mode"]
+
+
+def append_execution(row: dict, run_id: str) -> None:
+    """**发单前**逐笔落盘。
+
+    ## 为什么必须先写再发
+
+    原实现在所有委托发完之后才一次性写文件。而 scheduled_trade.py 给
+    paper_trade 的 subprocess 超时只有 120 秒，20+ 笔委托每笔 sleep(0.2)
+    加上查行情很容易超时 —— 被 kill 时委托已经发出去了，执行记录一行都没写。
+    事后既查不到下过什么单，重跑还会再下一遍。
+
+    先写「已提交」再发单，最坏情况是记录了一笔实际没发出去的单（可对账查出），
+    远好于发了单却没有记录（无从查起，且会重复下单）。
+    """
+    import csv
+
+    paths.ensure_dirs()
+    path = paths.execution_file(datetime.now().strftime("%Y-%m-%d"))
+    exists = path.exists()
+    try:
+        with open(path, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=EXEC_COLUMNS)
+            if not exists:
+                w.writeheader()
+            row = {**row, "run_id": run_id}
+            w.writerow({k: row.get(k, "") for k in EXEC_COLUMNS})
+            f.flush()
+    except OSError as e:
+        print(f"  [WARN] 执行记录写入失败: {e}")
+
+
+def today_orders_sent() -> list[dict]:
+    """今日已实际发出的委托（排除预览与被拦截的）。
+
+    用于幂等检查：重复运行不应重复下单。
+    """
+    import csv
+
+    path = paths.execution_file(datetime.now().strftime("%Y-%m-%d"))
+    if not path.exists():
+        return []
+    try:
+        with open(path, encoding="utf-8-sig") as f:
+            return [r for r in csv.DictReader(f)
+                    if r.get("mode") == "实盘"
+                    and r.get("result") in ("已委托", "已提交")]
+    except OSError:
+        return []
 
 
 def record_executions(rows: list, dry_run: bool) -> Path | None:
@@ -213,82 +264,102 @@ def _load_names() -> dict:
         return {}
 
 
-def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None, dry_run=False):
+def execute_orders(gateway, sell_orders, buy_orders, risk_mgr=None,
+                   dry_run=False, run_id=""):
     """先卖后买，每笔经过风控校验。
 
     风控在 dry-run 下**同样执行** —— 预览的意义就是看到真实执行时会发生什么。
     只跳过最后的 `order_stock` 调用。若 dry-run 不跑风控，你会看到 10 笔委托，
     实际执行时被风控砍掉 4 笔而毫不知情。
+
+    每笔委托带唯一 order_remark（run_id + 序号），用途有二：
+    重复运行时能识别出「这笔今天已经下过」；对账时能把券商回报逐笔关联到
+    本地意图。原先所有单的 remark 都是常量 "paper_buy"/"paper_sell"，
+    两件事都做不到。
     """
     from qmtquant.core.constants import Direction
     from qmtquant.core.objects import OrderRequest
     from xtquant.xttype import StockAccount
     account = StockAccount(gateway.account_id)
     names = _load_names()
-    records = []
+    run_id = run_id or datetime.now().strftime("%H%M%S")
 
     passed_sell = passed_buy = rejected = 0
+    seq = 0
 
-    def handle(order, direction, xt_order_type, remark, tag):
-        nonlocal rejected
+    def handle(order, direction, xt_order_type, tag):
+        nonlocal rejected, seq
+        seq += 1
         vt = order["vt_symbol"]
         vol = int(order["volume"])
         price = order.get("price", 0)
         amount = order.get("amount", 0)
         code, xt_code, exchange = _split_code(vt)
+        # order_remark 有长度限制，run_id 用时分秒足够当日唯一
+        remark = f"{run_id}_{seq:03d}"
 
         rec = {
             "time": datetime.now().strftime("%H:%M:%S"),
+            "remark": remark,
             "vt_symbol": vt, "name": names.get(vt, ""),
             "direction": tag, "volume": vol,
             "price": round(price, 3), "amount": round(amount, 2),
+            "reason": order.get("reason", ""),
             "mode": "预览" if dry_run else "实盘",
         }
 
         if risk_mgr is not None:
             ok, reason = risk_mgr.check(OrderRequest(
                 symbol=code, exchange=exchange, direction=direction,
-                price=price, volume=vol,
+                price=price, volume=vol, reference=remark,
             ))
             if not ok:
                 print(f"  [拦截] {xt_code} {vol:>6d} 股 -- {reason.value}")
                 rejected += 1
                 rec.update(result="风控拦截", reason=reason.value)
-                records.append(rec)
+                append_execution(rec, run_id)
                 return False
 
         print(f"  {xt_code}  {vol:>6d} 股  {amount:>10,.0f} 元  {order['reason']}")
-        order_id = ""
-        if not dry_run:
-            order_id = gateway.trader.order_stock(
-                account, xt_code, xt_order_type,
-                vol, 5, 0,  # price_type=5(最优五档即时成交), price=0
-                strategy_name="ALSTM_PPO", order_remark=remark,
-            )
-            time.sleep(0.2)
-        rec.update(result="已预览" if dry_run else "已委托",
-                   reason=order.get("reason", ""), order_id=order_id or "")
-        records.append(rec)
+
+        if dry_run:
+            rec.update(result="已预览", order_id="")
+            append_execution(rec, run_id)
+            return True
+
+        # 先落盘「已提交」再发单：进程被 kill 时宁可留下一条实际没发出去的
+        # 记录（对账查得出来），也不能发了单却没有记录（无从查起且会重下）
+        rec.update(result="已提交", order_id="")
+        append_execution(rec, run_id)
+
+        order_id = gateway.trader.order_stock(
+            account, xt_code, xt_order_type,
+            vol, 5, 0,  # price_type=5(最优五档即时成交), price=0
+            "ALSTM_PPO", remark,
+        )
+        time.sleep(0.2)
+        # 补一条带券商单号的确认记录，与上面那条靠 remark 关联
+        append_execution({**rec, "time": datetime.now().strftime("%H:%M:%S"),
+                          "result": "已委托", "order_id": order_id or ""},
+                         run_id)
         return True
 
     if sell_orders:
         print(f"\n--- 卖出 ({len(sell_orders)} 笔) ---")
         for o in sell_orders:
-            if handle(o, Direction.SHORT, 24, "paper_sell", "卖"):
+            if handle(o, Direction.SHORT, 24, "卖"):
                 passed_sell += 1
 
     if buy_orders:
         print(f"\n--- 买入 ({len(buy_orders)} 笔) ---")
         for o in buy_orders:
-            if handle(o, Direction.LONG, 23, "paper_buy", "买"):
+            if handle(o, Direction.LONG, 23, "买"):
                 passed_buy += 1
 
     if rejected:
         print(f"\n  风控拦截 {rejected} 笔")
 
-    path = record_executions(records, dry_run)
-    if path:
-        print(f"  执行记录: {path}")
+    print(f"  执行记录: {paths.execution_file(datetime.now().strftime('%Y-%m-%d'))}")
     return passed_sell, passed_buy
 
 
@@ -298,6 +369,8 @@ def main():
                     help="只计算差异，不实际下单")
     p.add_argument("--capital", type=float,
                     default=paths.load_params()["capital"])
+    p.add_argument("--force", action="store_true",
+                    help="今日已下过单时仍强制执行（默认拒绝，防重复建仓）")
     args = p.parse_args()
 
     from qmtquant.config import get_config
@@ -308,6 +381,24 @@ def main():
     print("=" * 50)
     if args.dry_run:
         print("** DRY RUN 模式 — 不实际下单 **\n")
+
+    # ---- 幂等闸门 ----
+    # 差异是按「券商持仓 vs 目标持仓」算的，而挂单未成交时持仓不变。
+    # 09:31 买了 20 只还没成交，任何原因再跑一次（手点 webui、
+    # scheduled_trade --now、超时重试）会算出同样的差异，再下一遍 ——
+    # 直接双倍建仓。
+    if not args.dry_run:
+        sent = today_orders_sent()
+        if sent and not args.force:
+            print(f"[拒绝执行] 今日已发出 {len(sent)} 笔委托，"
+                  f"重复运行会造成双倍建仓。")
+            print(f"  执行记录: "
+                  f"{paths.execution_file(datetime.now().strftime('%Y-%m-%d'))}")
+            print("  确认要追加下单请加 --force；"
+                  "只想看差异请加 --dry-run")
+            return 1
+        if sent and args.force:
+            print(f"[警告] 今日已发出 {len(sent)} 笔委托，--force 继续\n")
 
     # 1. 加载信号
     target_df = load_target()
@@ -442,7 +533,8 @@ def main():
 
     sent_sell, sent_buy = execute_orders(
         gateway, sell_orders, buy_orders,
-        risk_mgr=risk_mgr, dry_run=args.dry_run)
+        risk_mgr=risk_mgr, dry_run=args.dry_run,
+        run_id=datetime.now().strftime("%H%M%S"))
 
     print(f"\n卖出 {sent_sell}/{len(sell_orders)} 笔, "
           f"买入 {sent_buy}/{len(buy_orders)} 笔")
