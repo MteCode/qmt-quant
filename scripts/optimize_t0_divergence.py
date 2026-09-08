@@ -186,8 +186,16 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
         return {"error": "底仓资金不足一手"}
     cash = cash_value
     locked = 0
-    t_shares = max(LOT, int(cash_value / first_px / max(1, max_trades)
-                            / LOT) * LOT)
+    # 单次做 T 的股数，受两边同时约束：
+    #   - 现金：正T 要先买入，买不起就开不了仓
+    #   - 底仓：正T 买入后要从**底仓**卖出等量平掉（今日买入的锁定，
+    #           卖不了），底仓不够这条腿就永远平不掉
+    #
+    # 只按现金算的话，底仓 6 万 / 现金 14 万这种配置下 t_shares 会
+    # 超过底仓股数，腿开出去平不回来，现金被抽干、净值算崩 ——
+    # 表现为「底仓越小回撤越大」这种明显反直觉的结果。
+    by_cash = int(cash_value / first_px / max(1, max_trades) / LOT) * LOT
+    t_shares = max(LOT, min(by_cash, base_shares))
 
     t_pnl = 0.0
     trades, daily = [], []
