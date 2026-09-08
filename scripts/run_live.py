@@ -83,6 +83,7 @@ def main() -> int:
         "account_type": cfg.gateway.account_type,
         "reconnect_max_retry": cfg.gateway.reconnect_max_retry,
         "reconnect_base_delay": cfg.gateway.reconnect_base_delay,
+        "request_timeout": cfg.gateway.request_timeout,
     }
     if not gateway.connect(setting):
         print("网关连接失败，详见日志")

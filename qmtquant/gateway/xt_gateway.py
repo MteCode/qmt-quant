@@ -118,6 +118,13 @@ class XtGateway(BaseGateway):
             self.trader = XtQuantTrader(qmt_path, session_id)
             callback = Callback(self)
             self.trader.register_callback(callback)
+            # SDK 同步接口不带 timeout，默认永久阻塞。见 miniqmt_gateway
+            # 里 REQUEST_TIMEOUT 的说明。
+            try:
+                self.trader.set_timeout(
+                    int(setting.get("request_timeout", 15)))
+            except Exception as e:                  # noqa: BLE001
+                logger.warning("设置交易接口超时失败（SDK 可能不支持）: %s", e)
             self.trader.start()
 
             result = self.trader.connect()

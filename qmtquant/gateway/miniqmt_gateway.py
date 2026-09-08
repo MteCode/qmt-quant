@@ -81,6 +81,12 @@ DIRECTION_XT2VT = {v: k for k, v in DIRECTION_VT2XT.items()}
 PRICE_TYPE_LIMIT_VALUE = (_XT or {}).get("limit", 11)
 PRICE_TYPE_MARKET_VALUE = (_XT or {}).get("market", 5)
 
+#: 交易接口同步调用超时（秒）。
+#: SDK 的同步接口是 future.result() 不带 timeout，默认会永久阻塞；
+#: 而事件引擎只有一个处理线程，一次阻塞就冻住整个系统。宁可这笔单失败
+#: 并告警，也不能让行情与回报处理静默停摆。
+REQUEST_TIMEOUT = 15
+
 
 class MiniQmtGateway(BaseGateway):
     """miniQMT 网关"""
@@ -103,6 +109,11 @@ class MiniQmtGateway(BaseGateway):
         # 内部 orderid -> 券商返回的 order_id，撤单需要
         self._orderid_map: dict[str, int] = {}
         self._local_id: int = 0
+        #: 进程会话标识。委托号只带日期+序号的话，盘中重启后序号从 0 重来，
+        #: 下午第一笔新单会和上午第一笔同名 —— _orderid_map 是直接赋值，
+        #: 会把旧单的券商单号覆盖掉，之后撤单撤的是新单还是旧单取决于时序，
+        #: 旧单的状态推送回来又会覆盖新单的状态。加进程会话前缀根除撞号。
+        self._session: str = f"{datetime.now():%H%M%S}"
 
         self._subscribed: set[str] = set()
         self._reconnecting: bool = False
@@ -125,6 +136,21 @@ class MiniQmtGateway(BaseGateway):
 
         self._trader = XtQuantTrader(path, session_id)
         self._trader.register_callback(_TraderCallback(self))
+
+        # 同步接口（order_stock / cancel_order_stock / query_*）内部是
+        # future.result() 且不带 timeout，QMT 客户端卡死或网络抖动时会**永久阻塞**。
+        # 而 EventEngine 只有一个处理线程，策略的 on_tick → send_order 全在
+        # 这个线程上 —— 一次阻塞就冻住整个事件循环：行情不再处理、成交回报
+        # 进不了队列、健康检查也停摆，且日志里什么都不会打。
+        # 超时时间由 gateway.request_timeout 配置，默认 15 秒。
+        timeout = int(setting.get("request_timeout", REQUEST_TIMEOUT))
+        try:
+            self._trader.set_timeout(timeout)
+            logger.info("交易接口超时设为 %d 秒", timeout)
+        except Exception as e:                      # noqa: BLE001
+            # 老版本 SDK 可能没有这个方法，不该因此连不上
+            logger.warning("设置交易接口超时失败（SDK 可能不支持）: %s", e)
+
         self._trader.start()
 
         if self._trader.connect() != 0:
@@ -238,7 +264,7 @@ class MiniQmtGateway(BaseGateway):
 
     def _new_orderid(self) -> str:
         self._local_id += 1
-        return f"{datetime.now():%Y%m%d}_{self._local_id:06d}"
+        return f"{datetime.now():%Y%m%d}_{self._session}_{self._local_id:05d}"
 
     def send_order(self, req: OrderRequest) -> str:
         if not self.connected or not self._trader:

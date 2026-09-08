@@ -75,6 +75,9 @@ class GatewayConfig:
     account_type: str = "STOCK"
     reconnect_max_retry: int = 10
     reconnect_base_delay: float = 2.0        # 指数退避基数（秒）
+    #: 交易接口同步调用超时（秒）。SDK 内部是 future.result() 不带 timeout，
+    #: 默认永久阻塞；而事件引擎只有一个处理线程，一次阻塞就冻住整个系统。
+    request_timeout: int = 15
 
 
 @dataclass
