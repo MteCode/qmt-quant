@@ -102,6 +102,13 @@ def main() -> int:
     print(f"  资金配置优化 —— {args.symbol}.{args.exchange}")
     print(f"  可动用资金 {cap:,.0f} 元   现有持仓成本价 {args.cost_basis} 元")
     print("=" * 80)
+    thr = m.MIN_COMMISSION / m.COMMISSION
+    print(f"  成本模型：佣金 {m.COMMISSION:.6%}（最低 {m.MIN_COMMISSION:.0f} 元/笔）"
+          f" + 印花税 {m.STAMP_TAX:.2%}（仅卖出）+ 滑点 {m.SLIPPAGE:.2%}（单边）")
+    print(f"  名义往返 {m.ROUND_TRIP:.4%}；单笔 {thr:,.0f} 元以下最低佣金生效：", end="")
+    print("  ".join(f"{a//1000}k={m.round_trip_rate(a):.4%}"
+                    for a in (10000, 25000, 50000)))
+    print("=" * 80)
 
     df = m.load_bars(args.symbol, args.exchange)
     d = m.prep(df)
@@ -270,7 +277,19 @@ def main() -> int:
         "t_annual_mean": round(float(g["t_annual"].mean()), 4),
         "frontier": frontier,
         "t_wins": n_t_wins,
-        "cost_model": {"round_trip": m.ROUND_TRIP},
+        "cost_model": {
+            "commission": m.COMMISSION,
+            "commission_min": m.MIN_COMMISSION,
+            "stamp_tax": m.STAMP_TAX,
+            "slippage": m.SLIPPAGE,
+            "round_trip_nominal": m.ROUND_TRIP,
+            "round_trip_by_amount": {
+                str(a): round(m.round_trip_rate(a), 6)
+                for a in (5000, 10000, 25000, 50000, 100000, 200000)
+            },
+            "min_commission_threshold": round(
+                m.MIN_COMMISSION / m.COMMISSION, 0),
+        },
     }
     (out / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2, default=str),
