@@ -77,7 +77,10 @@ notify:
   channel: wecom            # wecom / dingtalk
   webhook: ""               # 机器人 webhook，属于 secret，勿提交
 
+# 引擎启动时加载的策略。只有列在这里的策略才会真正跑起来 ——
+# 写好了策略类但没登记在此，它就只是躺在磁盘上的代码。
 strategies:
+  # --- 演示：均线交叉，用于验证链路 ---
   - name: MaCrossDemo
     class: qmtquant.strategy.ma_cross.MaCrossStrategy
     vt_symbols:
@@ -86,6 +89,38 @@ strategies:
       fast_window: 5
       slow_window: 20
       position_ratio: 0.95
+
+  # --- 把离线选股的信号接进引擎 ---
+  # generate_signal.py 产出 target_latest.csv，这个策略读它调仓。
+  # 相比 paper_trade.py 直接下单，走引擎能拿到：风控硬约束、
+  # 订单状态机、成交回报、状态持久化、启动对账。
+  #
+  # vt_symbols 填 from_signal：从信号文件读标的，并与当前持仓求并集
+  # —— 持仓里有而信号里没有的票也要订阅行情，否则卖不掉。
+  #
+  # 默认注释掉。启用前先用 --gateway sim 或 --dry-run 跑通再说。
+  # - name: ALSTM_Signal
+  #   class: qmtquant.strategy.signal_file.SignalFileStrategy
+  #   vt_symbols: from_signal
+  #   setting:
+  #     signal_file: strategies/alstm_ppo_csi1000/signals/target_latest.csv
+  #     max_signal_age_days: 3      # 信号超过 3 天不执行
+  #     cash_buffer: 0.05           # 留 5% 现金应对滑点
+  #     price_buffer: 0.03          # 限价单相对现价的缓冲
+  #     min_order_value: 5000       # 低于此金额不下单，避免碎单
+
+  # --- 全市场日内 GBM 选股 ---
+  # strategies/intraday_gbm/strategy.py 本就是 StrategyBase 子类，
+  # 只是一直没登记在此，所以从未真正跑起来过。
+  # - name: IntradayGBM
+  #   class: strategies.intraday_gbm.strategy.IntradayGBMStrategy
+  #   vt_symbols: from_signal
+  #   setting:
+  #     trade_mode: momentum        # t_plus_0 / mean_reversion / momentum
+  #     max_positions: 5
+  #     prob_buy_threshold: 0.6
+  #     max_intraday_loss: 0.02
+  #     exit_time: "14:50"
 
 # Tushare Pro 数据源（2000 积分档 / 200 元每年）
 # 补 QMT 拿不到的两样东西：历史指数成分股、逐日估值因子

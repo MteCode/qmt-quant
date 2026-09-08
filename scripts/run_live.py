@@ -11,12 +11,14 @@
 """
 import argparse
 import importlib
+import json
 import signal
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 
 from qmtquant.config import LOG_DIR, get_config  # noqa: E402
 from qmtquant.engine.live_engine import LiveEngine  # noqa: E402
@@ -43,6 +45,54 @@ def load_strategy_class(dotted_path: str):
     module_path, _, class_name = dotted_path.rpartition(".")
     module = importlib.import_module(module_path)
     return getattr(module, class_name)
+
+
+def resolve_symbols(item: dict) -> list[str]:
+    """解析策略的标的列表。
+
+    信号驱动的策略标的是变化的，在 config 里写死几百只既难维护、
+    也会在信号更新后失配。`vt_symbols: from_signal` 表示从信号文件读取，
+    并与当前持仓求并集 —— 持仓里有而信号里没有的票也要订阅行情，
+    否则卖不掉（`rebalance` 拿不到 bar 就跳过）。
+    """
+    raw = item.get("vt_symbols", [])
+    if raw != "from_signal" and not (
+            isinstance(raw, list) and "from_signal" in raw):
+        return list(raw)
+
+    import csv as _csv
+
+    syms: set[str] = set()
+    sig = (item.get("setting") or {}).get("signal_file", "")
+    if sig:
+        p = Path(sig)
+        if not p.is_absolute():
+            p = ROOT / p
+        if p.exists():
+            try:
+                with p.open(encoding="utf-8-sig") as f:
+                    syms.update(r["vt_symbol"].strip()
+                                for r in _csv.DictReader(f)
+                                if r.get("vt_symbol"))
+            except (OSError, KeyError, _csv.Error) as e:
+                print(f"  [WARN] 读取信号标的失败: {e}")
+        else:
+            print(f"  [WARN] 信号文件不存在: {p}")
+
+    # 并上当前持仓，否则要卖的票收不到行情
+    pos_file = ROOT / "strategies" / "alstm_ppo_csi1000" / "state" / "positions.json"
+    if pos_file.exists():
+        try:
+            snap = json.loads(pos_file.read_text(encoding="utf-8"))
+            syms.update(h["vt_symbol"] for h in snap.get("holdings", [])
+                        if h.get("vt_symbol"))
+        except (OSError, ValueError, KeyError):
+            pass
+
+    # 显式列出的标的照样保留
+    if isinstance(raw, list):
+        syms.update(s for s in raw if s != "from_signal")
+    return sorted(syms)
 
 
 def main() -> int:
@@ -100,7 +150,7 @@ def main() -> int:
         try:
             engine.add_strategy(
                 load_strategy_class(item["class"]),
-                item["name"], item["vt_symbols"], item.get("setting", {}),
+                item["name"], resolve_symbols(item), item.get("setting", {}),
             )
         except Exception as e:
             print(f"加载策略 {item.get('name')} 失败: {e}")
