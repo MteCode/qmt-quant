@@ -10,7 +10,9 @@
 """
 import logging
 import time
+from datetime import date as _date
 from datetime import datetime, timedelta
+from datetime import time as _dtime
 
 from ..core.constants import Direction, OrderType, Status
 from ..core.objects import (
@@ -52,6 +54,10 @@ TICK_TIMEOUT = 60
 #: 上限压到这个间隔内。
 STATE_SAVE_INTERVAL = 60
 
+#: 收盘时间。过了这个点撤掉未成交挂单 —— 留到隔夜没有意义：
+#: 券商当日撤销后本地仍认为它活着，第二天的调仓会基于错误的在途状态计算。
+MARKET_CLOSE = _dtime(15, 0)
+
 
 class LiveEngine:
     """实盘/模拟盘交易引擎"""
@@ -81,6 +87,11 @@ class LiveEngine:
         self._last_tick_time: datetime | None = None
         self._tick_warned: bool = False
         self._last_state_save: float = time.time()
+
+        #: 引擎认为的当前交易日。与系统日期不符即触发日切。
+        self._engine_date: _date = datetime.now().date()
+        #: 今日收盘处理是否已执行（撤单 + 落库），避免重复触发
+        self._closed_today: bool = False
 
         self._register_handlers()
 
@@ -400,7 +411,9 @@ class LiveEngine:
             logger.error("网关断开，暂停下单: %s", data.get("msg", ""))
 
     def _on_timer(self, event: Event) -> None:
-        """定时健康检查：行情是否停推、事件是否积压"""
+        """定时健康检查：日切、收盘处理、行情停推、事件积压"""
+        self._check_day_rollover()
+
         if self._last_tick_time and not self._tick_warned:
             gap = (datetime.now() - self._last_tick_time).total_seconds()
             if gap > TICK_TIMEOUT and self._is_trading_time():
@@ -416,6 +429,41 @@ class LiveEngine:
                 and time.time() - self._last_state_save >= STATE_SAVE_INTERVAL):
             self._last_state_save = time.time()
             self.save_all_states()
+
+    def _check_day_rollover(self, now: datetime | None = None) -> None:
+        """跨日重置与收盘撤单。
+
+        ## 不做会怎样
+
+        `risk_manager.new_day()` 此前全仓没有调用者，后果是跨日累加：
+        `_order_count` 跑到第三天就撞上 max_order_count_per_day 全天拒单；
+        `_day_start_balance` 停在进程启动那天，日亏 3% 线拿今天和三天前比；
+        `close_only` 一旦触发永不复位，之后每个交易日都只平不开。
+
+        引擎要跨日常驻，所以这里做的是**滚动日切**而非停机结算：
+        收盘撤单、次日零点重置计数，策略不停。停机式结算见 `daily_settle()`。
+        """
+        now = now or datetime.now()
+        today = now.date()
+
+        # ---- 收盘：撤掉未成交挂单并落库 ----
+        if (not self._closed_today and today.weekday() < 5
+                and now.time() >= MARKET_CLOSE):
+            self._closed_today = True
+            active = [o for o in self.orders.values() if o.is_active()]
+            if active:
+                logger.info("收盘撤单：%d 笔未成交委托", len(active))
+                self.cancel_all()
+            self.save_all_states()
+
+        # ---- 跨日：重置风控当日额度 ----
+        if today != self._engine_date:
+            self._engine_date = today
+            self._closed_today = False
+            balance = self.account.balance if self.account else 0
+            self.risk_manager.new_day(balance)
+            logger.info("交易日切换至 %s，风控当日额度已重置（日初总资产=%.2f）",
+                        today, balance)
 
     @staticmethod
     def _is_trading_time(now: datetime | None = None) -> bool:
