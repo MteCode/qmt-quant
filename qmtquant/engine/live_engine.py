@@ -316,6 +316,10 @@ class LiveEngine:
         self.orders[order.vt_orderid] = order
         self._persist(lambda s: s.save_order(order), "委托")
 
+        # 撤单/废单要把未成交部分的额度还给风控，否则预留会一直占着，
+        # 当天后续调仓会被误拒
+        self.risk_manager.on_order(order)
+
         if order.status in (Status.REJECTED, Status.CANCELLED):
             trade_logger.warning("委托%s orderid=%s symbol=%s msg=%s",
                                  order.status.value, order.vt_orderid,
