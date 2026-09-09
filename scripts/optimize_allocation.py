@@ -219,9 +219,13 @@ def main() -> int:
     print(f"\n{'=' * 80}")
     print("  三、有效前沿 —— 每个回撤档位下收益最高的方案")
     print(f"{'=' * 80}")
+    print("  注意「年化」是该档位下的**最大值**：做T一侧从几千组里挑，")
+    print("  纯持有一侧只有 10 档可选。所以额外列出做T的中位与组数 ——")
+    print("  中位远低于同档纯持有时，那个最大值就是选择偏差而非策略有效。")
     print(f"  {'回撤上限':>9} {'最优方案':<14} {'底仓':>10} "
-          f"{'年化':>9} {'实际回撤':>10} {'做T贡献':>10} {'对比纯持有':>11}")
-    print("  " + "-" * 78)
+          f"{'年化':>9} {'实际回撤':>10} {'做T贡献':>10} {'对比纯持有':>11} "
+          f"{'做T中位':>10} {'做T组数':>7}")
+    print("  " + "-" * 96)
 
     frontier = []
     for cap_dd in (0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.50):
@@ -250,14 +254,30 @@ def main() -> int:
             base_v, real_dd = best_b["base_value"], best_b["max_drawdown"]
             t_contrib = 0.0
         delta = ann - b_ann if best_b else float("nan")
+        med = ok_t["annual_return"].median() if len(ok_t) else float("nan")
         print(f"  {cap_dd:>9.0%} {kind:<14} {base_v:>10,.0f} "
               f"{ann:>9.2%} {real_dd:>10.2%} {t_contrib:>+10.2%} "
-              f"{delta:>+11.2%}")
+              f"{delta:>+11.2%} {med:>10.2%} {len(ok_t):>7d}")
+        # 只报最大值会误导：做 T 那一侧是从**几千组**里挑最好的，
+        # 纯持有那一侧只有 10 档可选。拿 max(7776) 比 max(10)，
+        # 前者赢是选择偏差的必然结果，不是策略有效。
+        #
+        # 实测同一份数据：回撤≤35% 档，做T最大 21.35%、**中位 -3.78%**，
+        # 而同档纯持有 14.15% —— 中位数一放上来，结论立刻反转。
+        # 所以把分布一起记下来，让读的人不必自己去翻 grid.csv。
+        n_ok = len(ok_t)
         frontier.append({
             "max_dd": cap_dd, "feasible": True, "kind": kind,
             "annual_return": float(ann), "base_value": float(base_v),
             "actual_dd": float(real_dd), "t_contribution": float(t_contrib),
             "vs_buyhold": float(delta) if best_b else None,
+            # 做 T 一侧的分布 —— 上面那个 annual_return 是它的最大值
+            "t_pool_size": int(n_ok),
+            "t_annual_median": (float(ok_t["annual_return"].median())
+                                if n_ok else None),
+            "t_positive_count": (int((ok_t["t_annual"] > 0).sum())
+                                 if n_ok else 0),
+            "buyhold_at_same_dd": float(b_ann) if best_b else None,
             "params": ({k: (best_t[k].item()
                             if hasattr(best_t[k], "item") else best_t[k])
                         for k in ("signal", "thr", "vol_thr", "take_profit",
