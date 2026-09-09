@@ -126,7 +126,16 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
     keep = ["close", "day_ret", "vol_z_30", "vwap_gap"]
     chunks, batch = [], []
     factors: dict[str, float | None] = {}
+    #: 因 ST 被排除的标的数。与实盘 forbid_st 对齐，
+    #: 不为零是正常的；为零反而要查 ST 数据是不是没加载上。
+    n_st = 0
     skipped = n_ok = 0
+
+    from qmtquant.engine.backtest_engine import _load_st_checker
+    is_st = _load_st_checker()
+    if is_st is None:
+        print("  [!] 加载不到 ST 历史，ST 标的不会被排除 —— "
+              "回测会成交实盘风控拒绝的委托")
     t0 = time.time()
 
     for i, (path, vt) in enumerate(files, 1):
@@ -142,6 +151,33 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
         if px > MAX_PRICE:
             skipped += 1
             continue
+
+        # ST 标的不进候选池 —— 实盘风控 forbid_st 会拒绝买入它们
+        # （见 RiskManager._do_check）。回测里放行等于让回测成交
+        # 实盘拒单的委托，系统性高估机会集。1m 池里 74 只（1.8%）
+        # 在回测期间是 ST；它们波动大、5% 涨跌停下更容易触及模型阈值，
+        # 所以更容易被选中。
+        #
+        # 判据取「期间**任一时点**为 ST 就排除」，而不是只看最后一根 bar：
+        # ST 状态会变，只看末值会把「前半段 ST、后半段摘帽」的标的
+        # 整段放进来，回测就在它还是 ST 的那半段上成交了。
+        #
+        # 代价是保守：前半段 ST、后半段干净的标的，后半段本来可以交易。
+        # 更精确的做法是逐 bar 过滤（在选股时按当日 ST 状态判），
+        # 但那要把 (标的, 日期) 的 ST 表带进撮合循环。
+        # 在 1.8% 的量级上，先取保守的一侧。
+        if is_st is not None and len(feat):
+            try:
+                probe = pd.date_range(feat.index[0], feat.index[-1],
+                                      freq="MS")
+                if len(probe) == 0:
+                    probe = [feat.index[0], feat.index[-1]]
+                if any(is_st(vt, d) for d in probe):
+                    n_st += 1
+                    skipped += 1
+                    continue
+            except Exception:                       # noqa: BLE001
+                pass
 
         if start:
             feat = feat[feat.index >= start]
@@ -185,6 +221,8 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
     n_nf = sum(1 for v in factors.values() if v is None)
     print(f"  完成：{n_ok} 只标的，{len(df):,} 条打分，跳过 {skipped} 只，"
           f"耗时 {time.time()-t0:.0f}s")
+    if n_st:
+        print(f"  排除 ST 标的 {n_st} 只（与实盘 forbid_st 对齐）")
     if n_nf:
         print(f"  [!] {n_nf} 只反推不出复权因子，整手取整退回按后复权价 —— "
               f"这些标的可能被算成不足一手而跳过")

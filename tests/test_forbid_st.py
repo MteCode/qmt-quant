@@ -142,3 +142,65 @@ class TestRealData:
         """
         for d in pd.date_range("2025-09-08", "2026-09-04", freq="MS"):
             assert not checker("600711.SSE", d), f"{d.date()} 变成 ST 了"
+
+
+class TestBacktestAlignsWithLive:
+    """回测的候选池必须和实盘风控口径一致。
+
+    回测没有 ST 过滤时，它会成交实盘风控拒绝的委托 —— 系统性高估
+    机会集。1m 池里 74 只（1.8%）在回测期间是 ST，而且它们波动大、
+    5% 涨跌停下更容易触及模型阈值，被选中的概率高于占比。
+    """
+
+    @pytest.fixture(scope="class")
+    def checker(self):
+        from qmtquant.engine.backtest_engine import _load_st_checker
+
+        f = _load_st_checker()
+        if f is None:
+            pytest.skip("缺 ST 历史数据")
+        return f
+
+    def test_last_bar_check_would_miss_everything(self, checker):
+        """只看最后一根 bar 判 ST，在这份数据上会排除 0 只。
+
+        我第一版就是这么写的。74 只在回测期间是 ST 的标的全都在期间
+        摘帽了，所以末值判定全为 False —— 过滤等于没有，
+        但代码看起来「加了 ST 过滤」。
+
+        这条把那个陷阱钉住：判据必须覆盖整个区间，不是某个时点。
+        """
+        import glob
+        import os
+
+        files = [x for x in glob.glob("data/clean/1m/*/*.parquet")
+                 if "BSE" not in x
+                 and not os.path.basename(x).startswith("688")]
+        if len(files) < 100:
+            pytest.skip("1m 数据不足")
+
+        def _vt(x):
+            p = x.replace("\\", "/").split("/")
+            return f"{p[-1][:-8]}.{p[-2]}"
+
+        last_only = sum(1 for x in files
+                        if checker(_vt(x), pd.Timestamp("2026-09-04")))
+        any_time = sum(
+            1 for x in files
+            if any(checker(_vt(x), d)
+                   for d in pd.date_range("2025-09-08", "2026-09-04",
+                                          freq="MS")))
+        assert any_time > last_only, (
+            f"期间任一判定应当排除更多（{any_time}）"
+            f"than 末值判定（{last_only}）")
+        assert any_time > 0, "回测期间应当确实存在 ST 标的"
+
+    def test_period_probe_covers_status_changes(self, checker):
+        """600711 的 ST 在 2025-08-13 结束。
+
+        用 2024-06 ~ 2026-09 的月度探针应当命中它曾经是 ST；
+        只看 2026-09-04 则完全看不到。
+        """
+        probe = pd.date_range("2024-06-01", "2026-09-01", freq="MS")
+        assert any(checker("600711.SSE", d) for d in probe)
+        assert not checker("600711.SSE", pd.Timestamp("2026-09-04"))
