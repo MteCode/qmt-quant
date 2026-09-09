@@ -59,21 +59,96 @@ def _load_st_checker():
 class BacktestEngine:
     """历史回测引擎"""
 
+    #: 成交量的单位。A 股行情有的按股、有的按手（100 股）计。
+    #: None = 还没判定；100 = 手；1 = 股。见 _resolve_volume_unit()
+    _volume_unit: int | None = None
+
+    def _resolve_volume_unit(self) -> int:
+        """判定装载数据里 volume 的单位：股还是手。
+
+        ## 为什么必须判定，又为什么能判定
+
+        推复权因子需要真实价，真实价 = turnover / (volume * 单位)。
+        单看一只股票，两种单位都说得通 —— 平安银行按股算因子 1.04、
+        按手算 104，都不离谱。
+
+        但**全市场一起看**就能判：后复权价按定义不低于真实价，
+        且没有哪只 A 股复权了 500 倍。所以哪种单位算出的因子更多地
+        落在 [0.8, 500]，就是哪种。实测 579 只：
+            假设按股 -> 99.7% 的因子落在区间外（几乎全部 < 1）
+            假设按手 ->  8.8% 落在区间外（因子≈1 的新股，
+                                          收盘价与日均价的日内噪声）
+
+        注意这**不是**逻辑上的决定性判据，只是统计上的：
+        两种单位都能算出合理因子的数据集是存在的
+        （adj=100 / real=10 / volume 按股，两种解释都自洽）。
+        判不出来时会告警，不会静默猜。
+
+        判不出来时返回 100（本仓库数据的实际约定），
+        并留下告警 —— 静默猜错会让持仓规模差 100 倍。
+        """
+        if self._volume_unit is not None:
+            return self._volume_unit
+
+        # 判据：哪种单位算出来的复权因子更多地落在合理区间 [1, 500]。
+        #
+        # 「后复权价 >= 真实价」这条不变量只能**排除**不可能的解释，
+        # 两种单位都自洽时选不出来（造一份 adj=100/real=10 的按股数据，
+        # 两种解释都不违反）。所以要用完整的因子区间做判据：
+        #   因子 < 1   -> 后复权价低于真实价，不可能
+        #   因子 > 500 -> 没有哪只 A 股复权了 500 倍，数据有问题
+        bad = {1: 0, 100: 0}
+        n = 0
+        for vt, (adj, turnover, volume) in self._last_bar_stats.items():
+            if adj <= 0 or turnover <= 0 or volume <= 0:
+                continue
+            n += 1
+            for unit in (1, 100):
+                real = turnover / (volume * unit)
+                f = adj / real if real > 0 else 0.0
+                if not (0.8 <= f <= 500.0):
+                    bad[unit] += 1
+        if n < 20:
+            # 样本太少，判据不可靠。用本仓库数据的约定，并说明。
+            self._volume_unit = 100
+            return 100
+
+        self._volume_unit = 1 if bad[1] < bad[100] else 100
+        if min(bad.values()) / n > 0.3:
+            logger.warning(
+                "成交量单位判定不可靠（违反率 股 %.1f%% / 手 %.1f%%），"
+                "按 %d 处理；复权因子可能不准，整手取整会受影响",
+                bad[1] / n * 100, bad[100] / n * 100, self._volume_unit)
+        return self._volume_unit
+
     def _adj_factor(self, vt_symbol: str) -> float | None:
         """该标的的复权因子（后复权价 / 真实价）。
 
-        本地存的是后复权价，比真实价高出很多（茅台约 5.4 倍）。
-        整手约束作用在真实股数上，用后复权价直接取整会把高价股
-        静默剔出标的池 —— 实测 100 万/10 只时沪深300 有 36 只取整后为 0 股。
+        本地存的是后复权价，且锚在 IPO，因子差异极大：
+        工商银行 1.6、贵州茅台 6.2、盛屯矿业 9.7、平安银行 104。
 
-        因子来自 `data/1d_raw/`（不复权价，由 download_adj_factor.py 下载）。
-        取不到返回 None，调用方退回按后复权价取整的旧行为并计数，
-        以便评估影响面 —— 静默降级比报错更危险。
+        整手约束作用在**真实股数**上。用后复权价直接取整会把高因子的
+        标的静默剔出标的池 —— 实测沪深300、10 万/只时剔掉 33 只（11%），
+        2 万/只时剔掉 123 只（41%），而被剔掉的正是平安银行、云南白药、
+        泸州老窖、格力、五粮液这类蓝筹。每个组合回测都因此偏向小盘股。
+
+        ## 两条推导路径
+
+        1. `data/1d_raw/`（不复权价，download_adj_factor.py 下载）—— 更准
+        2. 没有 1d_raw 时，从 turnover / (volume * 单位) 推真实价
+
+        路径 2 是必须的：`data/1d_raw` 在本仓库**并不存在**，
+        路径 1 对所有标的恒返回 None，整个通道曾经是死的，
+        而失效方式是静默降级 —— 回测照跑，只是少了一批蓝筹。
+
+        取不到返回 None，调用方退回按后复权价取整并计数。
         """
         if vt_symbol in self._factor_cache:
             return self._factor_cache[vt_symbol]
 
         factor = None
+
+        # ---- 路径 1：不复权价目录
         if self._raw_dir is not None:
             code, _, ex = vt_symbol.rpartition(".")
             p = self._raw_dir / ex / f"{code}.parquet"
@@ -88,6 +163,27 @@ class BacktestEngine:
                             factor = a / r
                 except (OSError, ValueError, KeyError):
                     factor = None
+
+        # ---- 路径 2：从成交额与成交量反推
+        if factor is None:
+            stats = self._last_bar_stats.get(vt_symbol)
+            if stats:
+                adj, turnover, volume = stats
+                unit = self._resolve_volume_unit()
+                if adj > 0 and turnover > 0 and volume > 0:
+                    real = turnover / (volume * unit)
+                    if real > 0:
+                        f = adj / real
+                        # 因子按定义 >= 1。略小于 1 是收盘价与日均价的
+                        # 日内噪声（真实价用的是当日均价，不是收盘价），
+                        # 夹到 1；显著偏离则说明数据有问题，不猜。
+                        if 0.8 <= f < 1.0:
+                            f = 1.0
+                        if 1.0 <= f <= 500.0:
+                            factor = f
+
+        if factor is None:
+            self.factor_fallbacks += 1
         self._factor_cache[vt_symbol] = factor
         return factor
 
@@ -159,6 +255,12 @@ class BacktestEngine:
         self._is_st = _load_st_checker()
         #: 各标的最后一根 Bar 的后复权收盘价，算因子用
         self._last_adj_close: dict[str, float] = {}
+        #: {vt_symbol: (后复权收盘价, 成交额, 成交量)}，反推真实价用
+        self._last_bar_stats: dict[str, tuple[float, float, float]] = {}
+        #: 复权因子取不到、退回按后复权价取整的标的数。
+        #: 不为零说明部分标的的整手取整用的是后复权口径，
+        #: 高因子的会被静默剔除。
+        self.factor_fallbacks: int = 0
         #: 回撤控制强制发出的减仓委托笔数
         self.risk_exit_orders: int = 0
         #: 上一次执行过强制减仓的档位，防止同一档位反复卖出
@@ -177,6 +279,9 @@ class BacktestEngine:
             # 记末根收盘价，与不复权价相除得到复权因子（见 _adj_factor）
             if bar.close_price > 0:
                 self._last_adj_close[bar.vt_symbol] = bar.close_price
+                # 成交额与成交量用于反推真实价（见 _adj_factor 路径 2）
+                self._last_bar_stats[bar.vt_symbol] = (
+                    bar.close_price, bar.turnover, bar.volume)
         self.history = dict(sorted(grouped.items()))
         logger.info("已装载 %d 个时间截面，标的数 %d",
                     len(self.history), len({b.vt_symbol for b in bars}))
@@ -418,6 +523,21 @@ class BacktestEngine:
             if excess <= 0:
                 continue
             sell_volume = min(excess, sellable)
+
+            # 整手取整。正常下单路径做了这件事，这条强平路径原先没做 ——
+            # 会发出 137 股这种委托，实盘会被券商拒掉，回测却照单成交，
+            # 于是回测里的「减仓能力」强于实际。
+            #
+            # A 股的规则是：部分卖出须为 100 的整数倍，但**清空整个可卖
+            # 持仓**时零股可以一次性卖掉。所以只在不是清仓时取整。
+            #
+            # 与买入路径同样，整手约束作用在真实股数上，要按复权因子换算
+            # （见 _adj_factor）。
+            if sell_volume < sellable:
+                factor = self._adj_factor(vt_symbol) or 1.0
+                real = sell_volume * factor
+                real = int(real // self.lot_size) * self.lot_size
+                sell_volume = real / factor
             if sell_volume <= 0:
                 continue
 
