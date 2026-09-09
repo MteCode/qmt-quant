@@ -157,7 +157,7 @@
       <div class="v">{{ '{:,.0f}'.format(positions.cash or 0) }}</div>
       <div class="s">持仓市值
         {{ '{:,.0f}'.format(positions.market_value or 0) }}
-        （{{ '%.1f'|format((positions.position_ratio or 0) * 100) }}%）</div>
+        （{{ positions.position_ratio|pct(1) }}）</div>
     </div>
     <div class="kpi {{ 'good' if (positions.total_pnl or 0) > 0 else 'bad' }}">
       <div class="l">浮动盈亏</div>
@@ -196,7 +196,7 @@
               else 'var(--down)' }}">{{ '{:+,.0f}'.format(p.pnl or 0) }}</td>
           <td class="num" style="color:{{ 'var(--up)' if (p.pnl_pct or 0) > 0
               else 'var(--down)' }}">
-            {{ '%+.2f'|format((p.pnl_pct or 0) * 100) }}%</td>
+            {{ p.pnl_pct|pct(sign=True) }}</td>
           <td>
             {% if p.in_target %}<span class="tag t-ok">在目标</span>
             {% else %}<span class="tag t-warn">不在目标</span>{% endif %}
@@ -256,7 +256,7 @@
             <td class="num">{{ '{:,.0f}'.format(x.market_value or 0) }}</td>
             <td class="num" style="color:{{ 'var(--up)' if (x.pnl_pct or 0) > 0
                 else 'var(--down)' }}">
-              {{ '%+.2f'|format((x.pnl_pct or 0) * 100) }}%</td>
+              {{ x.pnl_pct|pct(sign=True) }}</td>
           </tr>
         {% endfor %}
         </tbody>

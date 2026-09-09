@@ -4,6 +4,61 @@
 {% block body %}
 {% if error %}<div class="note"><b>{{ error }}</b></div>{% endif %}
 
+{#- 两条自查横幅。它们平时不出现；一出现说明页面上的数字有问题，
+    而不是页面本身有问题。放在最顶上是因为这类失真不会报错，
+    读的人不会主动去找。 -#}
+{% if stale_cost %}
+<div class="note warn" style="border-left:3px solid var(--warn);
+     padding:10px 14px;margin-bottom:10px">
+  <b>{{ stale_cost|length }} 个策略的数字是用旧成本模型跑的</b>
+  <div style="color:var(--muted);font-size:12px;margin-top:4px">
+    成本模型改过（印花税 2023-08-28 起为 0.05%，此前系统里写死 0.10%；
+    佣金万 2.5 → 万 0.854；并补上了最低佣金 5 元与过户费）。
+    下面这些结果偏悲观，<b>不能与新结果直接比较</b>，重跑后才是现行口径。
+  </div>
+  <div style="margin-top:6px;font-size:12px">
+    {% for x in stale_cost %}
+      <div style="padding:2px 0">
+        <a href="/console?s={{ x.id }}"><b>{{ x.name }}</b></a>
+        <span style="color:var(--muted)">
+          {% for k, v in x.drift.fields.items() %}
+            {{ k }} {{ v.recorded }} → {{ v.current }}{% if not loop.last %}，{% endif %}
+          {% endfor %}
+        </span>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if orphans %}
+<div class="note" style="border-left:3px solid var(--down);
+     padding:10px 14px;margin-bottom:10px">
+  <b>{{ orphans|length }} 个结果目录还没接进管理台</b>
+  <div style="color:var(--muted);font-size:12px;margin-top:4px">
+    这些目录有产物，但没有任何策略认领它们，所以页面上看不到。
+    需要在 <code>webui/strategies.py</code> 里补 <code>Strategy(...)</code>
+    和对应的 loader —— 补的时候要真的去读产物字段，
+    每个实验的回撤正负号、收益含不含底仓 beta 都不一样。
+  </div>
+  <table style="margin-top:6px;font-size:12px">
+    <thead><tr><th>目录</th><th class="num">文件</th>
+      <th class="num">大小</th><th>最后修改</th></tr></thead>
+    <tbody>
+      {% for o in orphans %}
+      <tr>
+        <td><code>{{ o.dir }}</code>
+          <span style="color:var(--muted)">{{ o.files|join(', ') }}</span></td>
+        <td class="num">{{ o.n_files }}</td>
+        <td class="num">{{ '%.1f'|format(o.size_kb) }} KB</td>
+        <td>{{ o.mtime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <!-- ---------------- 顶部状态条 ---------------- -->
 <div class="topbar">
   <div class="row" style="gap:18px">
@@ -75,25 +130,25 @@
           <div class="l">年化收益</div>
           <div class="v" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0
               else 'var(--down)' }}">
-            {{ '%+.2f'|format((m.annual_return or 0) * 100) }}%</div>
+            {{ m.annual_return|pct(sign=True) }}</div>
           <div class="s">{{ r.period or '-' }}</div>
         </div>
         <div class="kpi">
           <div class="l">总收益</div>
           <div class="v" style="color:{{ 'var(--up)' if (m.total_return or 0) > 0
               else 'var(--down)' }}">
-            {{ '%+.2f'|format((m.total_return or 0) * 100) }}%</div>
+            {{ m.total_return|pct(sign=True) }}</div>
           <div class="s">{{ m.n_periods or r.n_trades or '' }}
             {{ '个交易日' if m.n_periods else ('笔交易' if r.n_trades else '') }}</div>
         </div>
         <div class="kpi bad">
           <div class="l">最大回撤</div>
-          <div class="v">{{ '%.2f'|format((m.max_drawdown or 0) * 100) }}%</div>
+          <div class="v">{{ m.max_drawdown|pct }}</div>
           <div class="s">峰值到谷底</div>
         </div>
         <div class="kpi">
           <div class="l">夏普比率</div>
-          <div class="v">{{ '%.2f'|format(m.sharpe or 0) }}</div>
+          <div class="v">{{ m.sharpe|num(2) }}</div>
           <div class="s">{% if m.volatility %}波动
             {{ '%.1f'|format(m.volatility * 100) }}%{% endif %}</div>
         </div>
@@ -131,11 +186,11 @@
             <tr><td><b>{{ x.mode }}</b></td>
               <td class="num" style="color:{{ 'var(--up)' if (x.total_return or 0) > 0
                   else 'var(--down)' }}">
-                {{ '%+.2f'|format((x.total_return or 0) * 100) }}%</td>
-              <td class="num">{{ '%.2f'|format((x.max_drawdown or 0) * 100) }}%</td>
-              <td class="num">{{ '%.2f'|format(x.sharpe or 0) }}</td>
+                {{ x.total_return|pct(sign=True) }}</td>
+              <td class="num">{{ x.max_drawdown|pct }}</td>
+              <td class="num">{{ x.sharpe|num(2) }}</td>
               <td class="num">{{ x.n_trades }}</td>
-              <td class="num">{{ '%.1f'|format((x.win_rate or 0) * 100) }}%</td>
+              <td class="num">{{ x.win_rate|pct(1) }}</td>
             </tr>
           {% endfor %}
           </tbody>
@@ -151,7 +206,7 @@
         <div class="row" style="gap:20px;margin-bottom:10px;font-size:12.5px">
           <span>参数组数 <b>{{ rb.n_configs }}</b></span>
           <span>做T为正 <b style="color:var(--warn)">{{ rb.n_positive_t }}
-            （{{ '%.1f'|format((rb.pct_positive_t or 0) * 100) }}%）</b></span>
+            （{{ rb.pct_positive_t|pct(1) }}）</b></span>
           <span>样本外存活 <b style="color:var(--down)">
             {{ rb.walkforward_survivors if rb.walkforward_survivors is not none
                else rb.walkforward_top10_survivors }}/10</b></span>

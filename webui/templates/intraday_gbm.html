@@ -22,18 +22,18 @@
 <div class="grid g4">
   <div class="kpi">
     <div class="l">验证集 AUC</div>
-    <div class="v">{{ '%.4f'|format(metrics.test_auc or 0) }}</div>
-    <div class="s">训练集 {{ '%.4f'|format(metrics.train_auc or 0) }}</div>
+    <div class="v">{{ metrics.test_auc|num(4) }}</div>
+    <div class="s">训练集 {{ metrics.train_auc|num(4) }}</div>
   </div>
   <div class="kpi">
     <div class="l">验证集准确率</div>
-    <div class="v">{{ '%.2f'|format((metrics.test_accuracy or 0) * 100) }}%</div>
-    <div class="s">训练集 {{ '%.2f'|format((metrics.train_accuracy or 0) * 100) }}%</div>
+    <div class="v">{{ metrics.test_accuracy|pct }}</div>
+    <div class="s">训练集 {{ metrics.train_accuracy|pct }}</div>
   </div>
   <div class="kpi">
     <div class="l">预测窗口</div>
     <div class="v">{{ metrics.horizon_bars or '-' }}<span style="font-size:14px"> bar</span></div>
-    <div class="s">正类阈值 {{ '%.2f'|format((metrics.threshold or 0) * 10000) }} bp</div>
+    <div class="s">正类阈值 {{ metrics.threshold|pct(2, scale=10000, unit=' bp') }}</div>
   </div>
   <div class="kpi">
     <div class="l">特征维度</div>
@@ -49,7 +49,7 @@
       <tr>
         <th>训练集</th>
         <td class="num">{{ '{:,}'.format(metrics.train_samples or 0) }} 条</td>
-        <td>正类 {{ '%.1f'|format((metrics.train_positive_rate or 0) * 100) }}%</td>
+        <td>正类 {{ metrics.train_positive_rate|pct(1) }}</td>
         <td class="num" style="color:var(--muted)">
           {{ (metrics.train_date_range or ['-','-'])[0] }}
           &nbsp;→&nbsp;
@@ -59,7 +59,7 @@
       <tr>
         <th>验证集</th>
         <td class="num">{{ '{:,}'.format(metrics.test_samples or 0) }} 条</td>
-        <td>正类 {{ '%.1f'|format((metrics.test_positive_rate or 0) * 100) }}%</td>
+        <td>正类 {{ metrics.test_positive_rate|pct(1) }}</td>
         <td class="num" style="color:var(--muted)">
           {{ (metrics.test_date_range or ['-','-'])[0] }}
           &nbsp;→&nbsp;
@@ -116,11 +116,11 @@
     <b>硬性指标</b>：月收益 ≥ 30%、最大回撤 ≤ 10%、夏普 &gt; 1。
     初始资金 {{ '{:,.0f}'.format(cfg.capital or 0) }} 元，
     最多持仓 {{ cfg.max_positions }} 只，
-    单票止损 {{ '%.1f'|format((cfg.max_intraday_loss or 0) * 100) }}%，
-    组合回撤 {{ '%.0f'|format((cfg.max_drawdown_stop or 0) * 100) }}% 停止开仓。
-    成本：佣金 {{ '%.2f'|format((cfg.commission or 0) * 10000) }}‱ +
-    印花税 {{ '%.1f'|format((cfg.stamp_tax or 0) * 1000) }}‰ +
-    滑点 {{ '%.1f'|format((cfg.slippage or 0) * 10000) }}‱。
+    单票止损 {{ cfg.max_intraday_loss|pct(1) }}，
+    组合回撤 {{ cfg.max_drawdown_stop|pct(0) }} 停止开仓。
+    成本：佣金 {{ cfg.commission|pct(2, scale=10000, unit='‱') }} +
+    印花税 {{ cfg.stamp_tax|pct(1, scale=1000, unit='‰') }} +
+    滑点 {{ cfg.slippage|pct(1, scale=10000, unit='‱') }}。
   </div>
 
   <div class="card">

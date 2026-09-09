@@ -54,6 +54,40 @@ def _fmt_duration(seconds) -> str:
     return f"{s // 3600} 时 {(s % 3600) // 60} 分"
 
 
+@app.template_filter("pct")
+def _fmt_pct(value, digits: int = 2, sign: bool = False,
+             scale: float = 100.0, unit: str = "%") -> str:
+    """百分比渲染。None 一律出「—」，绝不出 0。
+
+    模板里原先普遍写成 `'%+.2f'|format((m.annual_return or 0) * 100)`，
+    于是「从未测出的值」和「实测为零」在页面上长得一模一样 ——
+    未回测的策略显示 +0.00% 年化、0.00% 回撤，还带着涨跌色。
+    一个从没跑过回测的实验因此看起来像跑过且刚好打平。
+
+    渲染缺失值是 UI 里最容易骗到人的地方，因为它不报错。
+    """
+    if value is None:
+        return "—"
+    try:
+        v = float(value) * scale
+    except (TypeError, ValueError):
+        return "—"
+    fmt = f"%+.{digits}f" if sign else f"%.{digits}f"
+    return (fmt % v) + unit
+
+
+@app.template_filter("num")
+def _fmt_num(value, digits: int = 2, sign: bool = False) -> str:
+    """无单位数值（夏普等）。同样，None 出「—」。"""
+    if value is None:
+        return "—"
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    return (f"%+.{digits}f" if sign else f"%.{digits}f") % v
+
+
 @app.route("/plotly.js")
 def plotly_js():
     """内联提供 plotly，不依赖 CDN —— 离线环境也要能用。"""
@@ -231,7 +265,11 @@ def console_page():
     ov = console.overview()
     sid = request.args.get("s") or (ov["rows"][0]["id"] if ov["rows"] else "")
     det = console.detail(sid) if sid else None
-    return render_template("console.html", ov=ov, sid=sid, det=det)
+    # 这两块是「系统在骗你」的自查：有产物没接进来、数字用的是旧成本。
+    # 不显示出来，两种失真都只会在有人正好去问的时候才暴露。
+    return render_template("console.html", ov=ov, sid=sid, det=det,
+                           orphans=strat.unregistered_outputs(),
+                           stale_cost=strat.stale_cost_strategies())
 
 
 @app.get("/api/console/overview")

@@ -97,25 +97,27 @@
     <div class="l">总收益</div>
     <div class="v" style="color:{{ 'var(--up)' if (m.total_return or 0) > 0
         else 'var(--down)' }}">
-      {{ '%+.2f'|format((m.total_return or 0) * 100) }}%</div>
+      {{ m.total_return|pct(sign=True) }}</div>
     <div class="s">{{ r.period or '-' }}</div>
   </div>
   <div class="kpi">
     <div class="l">年化收益</div>
     <div class="v" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0
-        else 'var(--down)' }}">
-      {{ '%+.2f'|format((m.annual_return or 0) * 100) }}%</div>
+        else ('var(--down)' if m.annual_return is not none else 'var(--muted)') }}">
+      {% if m.annual_return is not none %}
+        {{ '%+.2f'|format(m.annual_return * 100) }}%
+      {% else %}&mdash;{% endif %}</div>
     <div class="s">{{ m.n_periods or r.n_trades or '' }}
       {{ '个交易日' if m.n_periods else ('笔交易' if r.n_trades else '') }}</div>
   </div>
   <div class="kpi bad">
     <div class="l">最大回撤</div>
-    <div class="v">{{ '%.2f'|format((m.max_drawdown or 0) * 100) }}%</div>
+    <div class="v">{{ m.max_drawdown|pct }}</div>
     <div class="s">峰值到谷底</div>
   </div>
   <div class="kpi">
     <div class="l">夏普比率</div>
-    <div class="v">{{ '%.2f'|format(m.sharpe or 0) }}</div>
+    <div class="v">{{ m.sharpe|num(2) }}</div>
     <div class="s">
       {% if m.volatility %}年化波动 {{ '%.1f'|format(m.volatility * 100) }}%
       {% endif %}</div>
@@ -137,11 +139,11 @@
   <table>
     <tbody>
       <tr><th style="width:250px">目标要求的毛 edge / 笔</th>
-        <td class="num"><b>{{ '%.2f'|format((tg.need_gross_edge or 0) * 100) }}%</b></td>
+        <td class="num"><b>{{ tg.need_gross_edge|pct }}</b></td>
         <td style="color:var(--muted);font-size:12px">
-          净 {{ '%.2f'|format((tg.need_net_edge or 0) * 100) }}% + 往返成本 0.25%</td></tr>
+          净 {{ tg.need_net_edge|pct }} + 往返成本（见该策略 cost_model）</td></tr>
       <tr><th>实际达到的毛 edge</th>
-        <td class="num">{{ '%.3f'|format((tg.actual_gross_edge or 0) * 100) }}%</td>
+        <td class="num">{{ tg.actual_gross_edge|pct(3) }}</td>
         <td style="color:var(--muted);font-size:12px">最优组合的平均买卖价差</td></tr>
       <tr><th>差距</th>
         <td class="num" style="color:var(--up)"><b>{{ tg.shortfall_multiple }} 倍</b></td>
@@ -157,8 +159,8 @@
 {% set ab = r.alpha_beta %}
 <div class="note">
   <b>收益拆解</b>：做 T 操作贡献
-  <b>{{ '%+.2f'|format((ab.t_annual or 0) * 100) }}%</b>（alpha），
-  纯持有底仓年化 {{ '%.2f'|format((ab.buyhold_annual or 0) * 100) }}%（beta）。
+  <b>{{ ab.t_annual|pct(sign=True) }}</b>（alpha），
+  纯持有底仓年化 {{ ab.buyhold_annual|pct }}（beta）。
   两者要分开看 —— 把底仓涨跌算进策略业绩是自欺欺人。
 </div>
 {% endif %}
@@ -176,12 +178,12 @@
       <tr>
         <td><b>{{ x.mode }}</b></td>
         <td class="num" style="color:{{ 'var(--up)' if (x.total_return or 0) > 0
-            else 'var(--down)' }}">{{ '%+.2f'|format((x.total_return or 0) * 100) }}%</td>
-        <td class="num">{{ '%+.2f'|format((x.monthly_return or 0) * 100) }}%</td>
-        <td class="num">{{ '%.2f'|format((x.max_drawdown or 0) * 100) }}%</td>
-        <td class="num">{{ '%.2f'|format(x.sharpe or 0) }}</td>
+            else 'var(--down)' }}">{{ x.total_return|pct(sign=True) }}</td>
+        <td class="num">{{ x.monthly_return|pct(sign=True) }}</td>
+        <td class="num">{{ x.max_drawdown|pct }}</td>
+        <td class="num">{{ x.sharpe|num(2) }}</td>
         <td class="num">{{ x.n_trades }}</td>
-        <td class="num">{{ '%.1f'|format((x.win_rate or 0) * 100) }}%</td>
+        <td class="num">{{ x.win_rate|pct(1) }}</td>
         <td><span class="tag {{ 't-ok' if x.targets_passed == x.targets_total
               else ('t-warn' if x.targets_passed else 't-err') }}">
           {{ x.targets_passed }}/{{ x.targets_total }}</span></td>
@@ -199,11 +201,11 @@
   <div class="card">
     <table><tbody>
       <tr><th>验证集 AUC</th><td class="num">
-        {{ '%.4f'|format(r.model.test_auc or 0) }}</td></tr>
+        {{ r.model.test_auc|num(4) }}</td></tr>
       <tr><th>验证集准确率</th><td class="num">
-        {{ '%.2f'|format((r.model.test_accuracy or 0) * 100) }}%</td></tr>
+        {{ r.model.test_accuracy|pct }}</td></tr>
       <tr><th>训练集 AUC</th><td class="num">
-        {{ '%.4f'|format(r.model.train_auc or 0) }}</td></tr>
+        {{ r.model.train_auc|num(4) }}</td></tr>
       <tr><th>特征维度</th><td class="num">{{ r.model.n_features }}</td></tr>
       <tr><th>训练样本</th><td class="num">
         {{ '{:,}'.format(r.model.train_samples or 0) }}</td></tr>
@@ -245,10 +247,10 @@
       <b>{{ rb.n_configs }}</b></div>
     <div><span class="lbl" style="margin:0">做T为正</span>
       <b style="color:var(--warn)">{{ rb.n_positive_t }}
-      （{{ '%.1f'|format((rb.pct_positive_t or 0) * 100) }}%）</b></div>
+      （{{ rb.pct_positive_t|pct(1) }}）</b></div>
     <div><span class="lbl" style="margin:0">全体均值</span>
       <b style="color:var(--down)">
-      {{ '%.2f'|format((rb.t_annual_mean or 0) * 100) }}%</b></div>
+      {{ rb.t_annual_mean|pct }}</b></div>
     <div><span class="lbl" style="margin:0">样本外存活</span>
       <b style="color:{{ 'var(--up)' if (rb.walkforward_survivors
          or rb.walkforward_top10_survivors or 0) > 0 else 'var(--down)' }}">

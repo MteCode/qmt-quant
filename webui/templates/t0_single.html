@@ -23,8 +23,8 @@
               color:var(--up)">结论：策略不成立，不建议实盘</div>
   <div style="font-size:13px;line-height:1.75">
     {{ rb.n_configs }} 组参数中仅 <b>{{ rb.n_positive_t }} 组</b>做 T 收益为正
-    （{{ '%.1f'|format((rb.pct_positive_t or 0) * 100) }}%），全体均值
-    <b>{{ '%.2f'|format((rb.t_annual_mean or 0) * 100) }}%</b>。
+    （{{ rb.pct_positive_t|pct(1) }}），全体均值
+    <b>{{ rb.t_annual_mean|pct }}</b>。
     样本内最优的前 10 组参数，
     <b>样本外无一存活</b>（全部转为亏损）。
     样本内的正收益是在 {{ rb.n_configs }} 次检验中挑出的噪声极值，
@@ -38,35 +38,35 @@
   <div class="kpi">
     <div class="l">纯持有底仓（不做T）</div>
     <div class="v" style="color:var(--up)">
-      {{ '%.2f'|format((pf.buyhold_annual or 0) * 100) }}%</div>
+      {{ pf.buyhold_annual|pct }}</div>
     <div class="s">年化 · 基准</div>
   </div>
   <div class="kpi">
     <div class="l">最优做T方案（样本内）</div>
-    <div class="v">{{ '%.2f'|format((pf.annual_return or 0) * 100) }}%</div>
+    <div class="v">{{ pf.annual_return|pct }}</div>
     <div class="s">年化 · 含底仓涨跌</div>
   </div>
   <div class="kpi">
     <div class="l">做 T 部分贡献</div>
     <div class="v" style="color:{{ 'var(--up)' if (pf.t_annual or 0) > 0
         else 'var(--down)' }}">
-      {{ '%+.2f'|format((pf.t_annual or 0) * 100) }}%</div>
+      {{ pf.t_annual|pct(sign=True) }}</div>
     <div class="s">样本内 · 样本外为负</div>
   </div>
   <div class="kpi bad">
     <div class="l">最大回撤</div>
-    <div class="v">{{ '%.2f'|format((pf.max_drawdown or 0) * 100) }}%</div>
-    <div class="s">夏普 {{ '%.2f'|format(pf.sharpe or 0) }}</div>
+    <div class="v">{{ pf.max_drawdown|pct }}</div>
+    <div class="s">夏普 {{ pf.sharpe|num(2) }}</div>
   </div>
 </div>
 
 <div class="note">
-  <b>收益拆解</b>：总收益 {{ '%.2f'|format((pf.total_return or 0) * 100) }}%
+  <b>收益拆解</b>：总收益 {{ pf.total_return|pct }}
   中，底仓自身涨跌贡献
-  <b>{{ '%.2f'|format((pf.base_return or 0) * 100) }}%</b>（beta），
-  做 T 操作贡献 {{ '%+.2f'|format((pf.t_return or 0) * 100) }}%（alpha）。
+  <b>{{ pf.base_return|pct }}</b>（beta），
+  做 T 操作贡献 {{ pf.t_return|pct(sign=True) }}（alpha）。
   把 beta 计入策略业绩是自欺欺人 —— 不做任何操作、纯持有底仓，
-  年化就有 {{ '%.2f'|format((pf.buyhold_annual or 0) * 100) }}%。
+  年化就有 {{ pf.buyhold_annual|pct }}。
 </div>
 
 <h2>成本门槛 —— 做 T 亏损的根本原因</h2>
@@ -74,18 +74,15 @@
   <table>
     <tbody>
       <tr><th style="width:230px">单次往返成本</th>
-          <td class="num"><b>{{ '%.3f'|format(
-            (summary.cost_model.round_trip or 0) * 100) }}%</b></td>
+          <td class="num"><b>{{ summary.cost_model.round_trip|pct(3) }}</b></td>
           <td style="color:var(--muted);font-size:12px">
-            佣金双边 0.05% + 印花税 0.10% + 滑点双边 0.10%</td></tr>
+            见 summary.cost_model（印花税 2023-08-28 起为 0.05%）</td></tr>
       <tr><th>实际毛价差（均值）</th>
-          <td class="num">{{ '%.4f'|format(
-            (cc.gross_edge_per_trade or 0) * 100) }}%</td>
+          <td class="num">{{ cc.gross_edge_per_trade|pct(4) }}</td>
           <td style="color:var(--muted);font-size:12px">
             最优组合 {{ pf.n_trades }} 笔交易的平均买卖价差</td></tr>
       <tr><th>扣成本后净 edge</th>
-          <td class="num" style="color:var(--warn)"><b>{{ '%+.4f'|format(
-            (cc.net_edge or 0) * 100) }}%</b></td>
+          <td class="num" style="color:var(--warn)"><b>{{ cc.net_edge|pct(4, sign=True) }}</b></td>
           <td style="color:var(--muted);font-size:12px">
             信号捕获的价差有
             {{ '%.0f'|format((cc.cost_per_trade or 0)
@@ -172,7 +169,7 @@
 <p class="sub">
   数据区间 {{ summary.date_range[0] }} ~ {{ summary.date_range[1] }}
   （{{ summary.trading_days }} 个交易日），
-  日均振幅 {{ '%.2f'|format((summary.daily_amplitude or 0) * 100) }}%。
+  日均振幅 {{ summary.daily_amplitude|pct }}。
   生成于 {{ summary.generated_at }}
 </p>
 {% endif %}

@@ -237,7 +237,7 @@
               else 'var(--down)' }}">{{ '{:+,.0f}'.format(p.pnl or 0) }}</td>
           <td class="num" style="color:{{ 'var(--up)' if (p.pnl_pct or 0) > 0
               else 'var(--down)' }}">
-            {{ '%+.2f'|format((p.pnl_pct or 0) * 100) }}%</td>
+            {{ p.pnl_pct|pct(sign=True) }}</td>
         </tr>
       {% endfor %}
       </tbody>

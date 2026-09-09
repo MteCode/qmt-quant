@@ -28,12 +28,15 @@ loader，把自己的产物翻译成统一的 dict，页面据此渲染同一套
 from __future__ import annotations
 
 import csv
+import datetime as _dt
 import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
 
 
 # --------------------------------------------------------------- 工具
@@ -70,6 +73,75 @@ def _norm_dd(v) -> float | None:
         return -abs(float(v))
     except (TypeError, ValueError):
         return None
+
+
+
+def _cost_drift(recorded: dict | None) -> dict | None:
+    """把产物里记的成本模型和当前的比一比。
+
+    研究结果是一次性快照：跑完就固定在那儿，而成本模型会改。
+    2026-09 那次修正把印花税从 0.001 改成 0.0005（2023-08-28 起就该是
+    这个数）、佣金从万2.5 改成万0.854、并补上了最低佣金与过户费。
+    在这之前跑出来的结果，数字全部偏悲观。
+
+    页面把它们和新结果并排显示而不加区分，等于拿两套成本的结论互相比较。
+    所以这里返回一个 drift 描述，让页面能标出「这批数字用的是旧成本」。
+    返回 None 表示一致或无从判断。
+    """
+    if not recorded:
+        return None
+    cur = {
+        "commission": DEFAULT_COST.commission_rate,
+        "stamp_tax": DEFAULT_COST.stamp_tax_rate,
+        "slippage": DEFAULT_COST.slippage_rate,
+    }
+    diff = {}
+    for k, now in cur.items():
+        was = recorded.get(k)
+        if was is None:
+            continue
+        try:
+            was = float(was)
+        except (TypeError, ValueError):
+            continue
+        if abs(was - now) > 1e-9:
+            diff[k] = {"recorded": was, "current": now}
+    if not diff:
+        return None
+    return {
+        "fields": diff,
+        "note": ("这批结果是用旧成本模型跑的，数字不能与新结果直接比较。"
+                 "重跑后才是现行口径。"),
+    }
+
+
+def _num(v):
+    """CSV 里的数值可能是空串、'nan'、'inf'。float() 会抛，静默跳过更糟。"""
+    if v is None:
+        return None
+    t = str(v).strip()
+    if not t or t.lower() in ("nan", "none", "null", "inf", "-inf", "na"):
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def _median(xs):
+    xs = sorted(x for x in xs if x is not None)
+    if not xs:
+        return None
+    n = len(xs)
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def _col(rows, key):
+    return [_num(r.get(key)) for r in rows]
+
+
+def _count_pos(rows, key):
+    return sum(1 for x in _col(rows, key) if x is not None and x > 0)
 
 
 def _metrics_from_equity(dates: list, values: list[float],
@@ -123,6 +195,10 @@ class Strategy:
     #: alstm_ppo_csi1000 —— 直接拿 id 拼路径会找不到信号文件，
     #: 表现为「明明跑通了却显示未运行」。
     dir: str = ""
+    #: 该策略/实验的产物目录（相对仓库根）。unregistered_outputs() 靠它
+    #: 判断磁盘上哪些结果目录还没接进管理台 —— 从 loader 反推做不到，
+    #: loader 是个闭包，路径藏在函数体里，扫不出来。
+    output_dir: str = ""
     backtest_task: str = ""       # registry.py 中的 task_id
     live_task: str = ""           # 实盘/信号生成的 task_id
     status: str = "research"      # research / backtest_only / live_ready
@@ -223,6 +299,7 @@ def _load_t0_single() -> dict:
         "robustness": s.get("robustness", {}),
         "walkforward": s.get("walkforward", []),
         "cost": s.get("cost_model", {}),
+        "cost_drift": _cost_drift(s.get("cost_model")),
         "conclusion": s.get("conclusion", {}),
         "equity": eq,
         "n_trades": pf.get("n_trades"),
@@ -260,6 +337,8 @@ def _load_t0_divergence() -> dict:
         "robustness": s.get("robustness", {}),
         "walkforward": s.get("walkforward", []),
         "best_params": s.get("best_params", {}),
+        "cost": s.get("cost_model", {}),
+        "cost_drift": _cost_drift(s.get("cost_model")),
         "equity": eq,
         "n_trades": pf.get("n_trades"),
         "coverage": pf.get("coverage"),
@@ -388,6 +467,337 @@ def _load_intraday_920368() -> dict:
     }
 
 
+
+def _load_t0_constrained() -> dict:
+    """回撤约束下的做 T 搜索 —— 底仓规模和策略参数一起搜。
+
+    口径提醒（这两处最容易读反）：
+      - annual_return / max_drawdown / sharpe 是**整个账户**（底仓市值 +
+        现金）的，底仓跟着股票涨的钱全算在里面。判断做 T 有没有 alpha
+        只能看 t_annual —— 看前者会把 beta 记成做 T 的战绩。
+      - max_drawdown 产物里已是负数，_norm_dd 只做兜底。
+
+    metrics 给约束内最好的一组（上限），feasible 给可行域的中位数。
+    只报前者会让人把上限当成典型表现。
+    """
+    d = ROOT / "models" / "t0_constrained"
+    s = _read_json(d / "summary.json")
+    if not s:
+        return {"has_result": False}
+
+    best = s.get("best_under_constraint") or {}
+    bh = s.get("best_buyhold_under_constraint") or {}
+    limit = s.get("max_drawdown_limit")
+
+    feasible = {}
+    rows = _read_csv(d / "grid.csv")
+    if rows and limit is not None:
+        ok = []
+        for r in rows:
+            dd = _num(r.get("max_drawdown"))
+            if dd is not None and abs(dd) <= abs(float(limit)):
+                ok.append(r)
+        if ok:
+            feasible = {
+                "n": len(ok),
+                "annual_median": _median(_col(ok, "annual_return")),
+                "t_annual_median": _median(_col(ok, "t_annual")),
+                "max_drawdown_median": _norm_dd(
+                    _median(_col(ok, "max_drawdown"))),
+                "gross_edge_median": _median(_col(ok, "gross_edge")),
+                "n_annual_positive": _count_pos(ok, "annual_return"),
+                "n_t_positive": _count_pos(ok, "t_annual"),
+            }
+
+    return {
+        "has_result": True,
+        "source": str((d / "summary.json").relative_to(ROOT)),
+        "symbol": s.get("symbol"),
+        "period": " ~ ".join(s.get("date_range") or []),
+        "n_days": s.get("n_days"),
+        "capital": s.get("total_capital"),
+        "drawdown_limit": _norm_dd(limit),
+        "metrics": {
+            "total_return": best.get("total_return"),
+            "annual_return": best.get("annual_return"),
+            "max_drawdown": _norm_dd(best.get("max_drawdown")),
+            "sharpe": best.get("sharpe"),
+        },
+        "alpha_beta": {
+            "t_annual": best.get("t_annual"),
+            "t_return": best.get("t_return"),
+            "buyhold_annual": bh.get("annual_return"),
+        },
+        "feasible": feasible,
+        "n_trades": int(best["n_trades"]) if best.get("n_trades") else None,
+        "search": {
+            "n_combos": s.get("n_combos"),
+            "n_satisfying": s.get("n_satisfying"),
+            "n_positive_t": s.get("n_positive_t"),
+            "t_annual_mean": s.get("t_annual_mean"),
+            "t_vs_buyhold": s.get("t_vs_buyhold"),
+        },
+        "stock_max_drawdown": _norm_dd(s.get("stock_max_drawdown")),
+        "max_base_for_constraint": s.get("max_base_for_constraint"),
+        "cost": s.get("cost_model", {}),
+        "cost_drift": _cost_drift(s.get("cost_model")),
+        "equity": None,          # 这个实验不产净值曲线，不硬造
+        "generated_at": s.get("generated_at"),
+    }
+
+
+def _load_t0_analysis() -> dict:
+    """盈利日归因 + 门控对照 + 与大盘/行业的关系。
+
+    没有净值曲线，也没有「年化收益」这类指标 —— 它是一份分析，
+    不是一次回测。所以整个 metrics 不给，页面显示「无回测指标」，
+    而不是把 None 渲染成 0。
+    """
+    d = ROOT / "models" / "t0_analysis"
+    a = _read_json(d / "deep_analysis.json")
+    if not a:
+        return {"has_result": False}
+
+    w = a.get("winning_days") or {}
+    mk = a.get("market") or {}
+    ind = a.get("industry") or {}
+    gates = (a.get("gating") or {}).get("paired") or []
+
+    # per_trade_ratio > 1 = 门控后每笔反而亏得更多，即门控只减少了交易
+    # 次数而没有改善交易质量。这是判断门控有没有用的关键列。
+    worse = 0
+    for g in gates:
+        v = g.get("per_trade_ratio")
+        if v is not None and v > 1:
+            worse += 1
+
+    return {
+        "has_result": True,
+        "source": str((d / "deep_analysis.json").relative_to(ROOT)),
+        "symbol": a.get("symbol"),
+        "kind": "analysis",       # 分析型产物：没有 metrics / equity
+        "equity": None,
+        "winning_days": {
+            "n_days": w.get("n_days"),
+            "win_days": w.get("win_days"),
+            "win_rate": w.get("win_rate"),
+            "total_t_pnl": w.get("total_t_pnl"),
+            "top7_share_of_gains": w.get("top7_share_of_gains"),
+            "features": w.get("features") or [],
+        },
+        "gating": {
+            "n_gates": len(gates),
+            "n_worse_per_trade": worse,
+            "rows": gates,
+        },
+        "market": {
+            "corr": mk.get("corr"), "r2": mk.get("r2"),
+            "beta": mk.get("beta"),
+            "same_direction_pct": mk.get("same_direction_pct"),
+            "n_days": mk.get("n_days"),
+            "buckets": mk.get("buckets") or [],
+        },
+        "industry": {
+            "industry": ind.get("industry"), "name": ind.get("name"),
+            "corr": ind.get("corr"), "r2": ind.get("r2"),
+            "beta": ind.get("beta"),
+            "n_peers": ind.get("n_peers"), "n_used": ind.get("n_used"),
+            "n_days": ind.get("n_days"),
+        },
+        "generated_at": a.get("generated_at"),
+    }
+
+
+def _load_t0_downday() -> dict:
+    """「只在下跌日做反 T」这条假设的检验。
+
+    lookahead 这一列是关键：用当日实际涨跌决定要不要做，是**未来函数**，
+    只能作上界参考。实时可实现的只有 lookahead=0 那批。
+    两者混在一起取最优，会得到一个漂亮但做不到的结论。
+    """
+    d = ROOT / "models" / "t0_downday"
+    rows = _read_csv(d / "variants.csv")
+    if not rows:
+        return {"has_result": False}
+
+    # lookahead 这一列是 pandas 写出来的布尔值，落成字符串 "True"/"False"
+    # 而不是 0/1。用 _num() 解析它会全部返回 None，于是 1440 个实时可实现
+    # 的变体被整批误判成含未来函数 —— 代表值直接算不出来（页面显示 —），
+    # 而如果反过来判错方向，就会拿前视结果当可实现结果展示。
+    def _is_lookahead(v) -> bool:
+        t = str(v).strip().lower()
+        if t in ("true", "1", "yes"):
+            return True
+        if t in ("false", "0", "no", "", "none", "nan"):
+            return False
+        n = _num(v)
+        return bool(n) if n is not None else False
+
+    live, look = [], []
+    for r in rows:
+        (look if _is_lookahead(r.get("lookahead")) else live).append(r)
+
+    def _stats(rs):
+        if not rs:
+            return {}
+        best = [x for x in _col(rs, "t_annual") if x is not None]
+        return {
+            "n": len(rs),
+            "annual_median": _median(_col(rs, "annual_return")),
+            "t_annual_median": _median(_col(rs, "t_annual")),
+            "t_annual_best": max(best) if best else None,
+            "max_drawdown_median": _norm_dd(
+                _median(_col(rs, "max_drawdown"))),
+            "gross_edge_median": _median(_col(rs, "gross_edge")),
+            "n_t_positive": _count_pos(rs, "t_annual"),
+        }
+
+    lv = _stats(live)
+    return {
+        "has_result": True,
+        "source": str((d / "variants.csv").relative_to(ROOT)),
+        "kind": "experiment",
+        "equity": None,
+        # 代表值取**实时可实现**那批的中位数，不取全体最优
+        "metrics": {
+            "total_return": None,
+            "annual_return": lv.get("annual_median"),
+            "max_drawdown": lv.get("max_drawdown_median"),
+            "sharpe": None,
+        },
+        "alpha_beta": {
+            "t_annual": lv.get("t_annual_median"),
+            "buyhold_annual": _median(_col(rows, "buyhold_annual")),
+        },
+        "realtime": lv,
+        "lookahead": _stats(look),
+        "n_variants": len(rows),
+        "note": ("代表值是实时可实现变体（lookahead=0）的中位数。"
+                 "含未来函数的变体单列，只作上界参考。"),
+        "cost_drift": None,      # 该产物未记录 cost_model
+    }
+
+
+def _load_t0_market() -> dict:
+    """市场状态门控的对照实验：只在特定行情下做 T 是否更好。
+
+    判断门控有没有用不能看总年化 —— 门控减少交易次数，总年化会跟着
+    底仓 beta 走，看起来像「改善」。要看的是单笔质量。
+    """
+    d = ROOT / "models" / "t0_market"
+    rows = _read_csv(d / "gating_experiment.csv")
+    if not rows:
+        return {"has_result": False}
+
+    by_gate: dict[str, list] = {}
+    for r in rows:
+        by_gate.setdefault(str(r.get("gate") or "?"), []).append(r)
+
+    gates = []
+    for g, rs in sorted(by_gate.items()):
+        gates.append({
+            "gate": g, "n": len(rs),
+            "t_annual_median": _median(_col(rs, "t_annual")),
+            "annual_median": _median(_col(rs, "annual_return")),
+            "gross_edge_median": _median(_col(rs, "gross_edge")),
+            "n_trades_median": _median(_col(rs, "n_trades")),
+            "n_t_positive": _count_pos(rs, "t_annual"),
+        })
+
+    base = None
+    for g in gates:
+        if g["gate"] in ("none", "无", "", "baseline"):
+            base = g
+            break
+
+    return {
+        "has_result": True,
+        "source": str((d / "gating_experiment.csv").relative_to(ROOT)),
+        "kind": "experiment",
+        "equity": None,
+        "metrics": {
+            "total_return": None,
+            "annual_return": _median(_col(rows, "annual_return")),
+            "max_drawdown": _norm_dd(_median(_col(rows, "max_drawdown"))),
+            "sharpe": None,
+        },
+        "alpha_beta": {
+            "t_annual": _median(_col(rows, "t_annual")),
+            "buyhold_annual": _median(_col(rows, "buyhold_annual")),
+        },
+        "gates": gates,
+        "baseline": base,
+        "n_runs": len(rows),
+        "n_t_positive": _count_pos(rows, "t_annual"),
+        "note": ("门控是否有用要看单笔质量，不是总年化 —— 门控减少交易"
+                 "次数，总年化会跟着底仓 beta 走，看起来像改善。"),
+        "cost_drift": None,      # 该产物未记录 cost_model
+    }
+
+
+def _load_t0_allocation() -> dict:
+    """仓位与资金配置搜索：底仓多少、留多少现金。
+
+    这一维不改变 edge，只改变风险敞口。真正有信息量的是
+    buyhold_frontier（纯持有在各仓位下的风险收益），
+    以及做 T 能不能在同样回撤下胜过它。
+    """
+    d = ROOT / "models" / "allocation"
+    s = _read_json(d / "summary.json")
+    if not s:
+        return {"has_result": False}
+
+    st = s.get("stock") or {}
+    front = s.get("frontier") or []
+    t_rows = [f for f in front if f.get("kind") == "做T"]
+    best_t = None
+    if t_rows:
+        best_t = max(t_rows, key=lambda f: f.get("annual_return") or -9)
+
+    return {
+        "has_result": True,
+        "source": str((d / "summary.json").relative_to(ROOT)),
+        "symbol": s.get("symbol"),
+        "period": " ~ ".join(s.get("date_range") or []),
+        "n_days": s.get("n_days"),
+        "capital": s.get("capital"),
+        "equity": None,
+        # 这是一次 7776 组的**搜索**，不是一次回测 —— 没有「这一组」的
+        # 年化。拿最优组当代表值，会在列表卡片上显示成绿色的 +17.8%，
+        # 而那既是全域最大值、又含底仓 beta，和「做 T 无 alpha」的结论
+        # 正好相反。所以账户口径留空，代表值用做 T 的全域均值。
+        "metrics": {
+            "total_return": None,
+            "annual_return": None,
+            "max_drawdown": _norm_dd(st.get("max_drawdown")),
+            "sharpe": None,
+        },
+        "alpha_beta": {
+            "t_annual": s.get("t_annual_mean"),
+            "buyhold_annual": st.get("annual_return"),
+        },
+        # 最优组单独列出，标明它是上限而不是典型值
+        "best_t": best_t,
+        "stock": {
+            "annual_return": st.get("annual_return"),
+            "max_drawdown": _norm_dd(st.get("max_drawdown")),
+            "volatility": st.get("volatility"),
+        },
+        "buyhold_frontier": s.get("buyhold_frontier") or [],
+        "frontier": front,
+        "search": {
+            "n_combos": s.get("n_combos"),
+            "n_positive_t": s.get("n_positive_t"),
+            "pct_positive_t": s.get("pct_positive_t"),
+            "t_annual_mean": s.get("t_annual_mean"),
+            "t_wins": s.get("t_wins"),
+        },
+        "cost": s.get("cost_model", {}),
+        "cost_drift": _cost_drift(s.get("cost_model")),
+        "generated_at": s.get("generated_at"),
+    }
+
+
 # --------------------------------------------------------------- 注册表
 
 STRATEGIES: list[Strategy] = [
@@ -408,6 +818,7 @@ STRATEGIES: list[Strategy] = [
         inputs=["data/clean/1m/ 全市场分钟线"],
         risk=["单票日内止损", "组合回撤分档停止开仓", "尾盘强制平仓，不留隔夜"],
         code="strategies/intraday_gbm/strategy.py",
+        output_dir="models/intraday_gbm",
         backtest_task="backtest_intraday_gbm",
         live_task="predict_intraday",
         status="backtest_only",
@@ -429,6 +840,7 @@ STRATEGIES: list[Strategy] = [
         inputs=["单标的 1m 数据"],
         risk=["单笔止损", "最长持有时长", "尾盘强制平仓"],
         code="scripts/optimize_t0_600711.py",
+        output_dir="models/t0_single",
         backtest_task="",
         status="research",
         caveat="3600 组参数中仅 5 组做T为正（0.1%），样本内前 10 组样本外无一存活。"
@@ -450,6 +862,7 @@ STRATEGIES: list[Strategy] = [
         inputs=["单标的 1m 数据"],
         risk=["止盈止损", "最长持有时长", "尾盘强制平仓"],
         code="scripts/optimize_t0_divergence.py",
+        output_dir="models/t0_divergence",
         backtest_task="",
         status="research",
         caveat="7776 组参数中仅 1 组做T为正（0.01%），三类信号全部为负均值。"
@@ -472,6 +885,7 @@ STRATEGIES: list[Strategy] = [
         inputs=["920368 1m 数据"],
         risk=["单票止损", "尾盘平仓"],
         code="strategies/intraday_t_920368/strategy.py",
+        output_dir="strategies/intraday_t_920368/backtest",
         backtest_task="",
         status="backtest_only",
         loader=_load_intraday_920368,
@@ -489,6 +903,7 @@ STRATEGIES: list[Strategy] = [
         inputs=["日线行情", "因子数据"],
         risk=["回撤控制", "单票权重上限"],
         code="strategies/alstm_ppo_csi1000/",
+        output_dir="strategies/alstm_ppo_csi1000/backtest",
         dir="alstm_ppo_csi1000",
         backtest_task="train_ensemble",
         live_task="generate_signal",
@@ -511,6 +926,7 @@ STRATEGIES: list[Strategy] = [
         inputs=["data/clean/ 日线行情", "因子数据", "研报/新闻（精研层）"],
         risk=["回撤三档控制", "下单前置检查", "单票权重上限"],
         code="strategies/lgb_agents_ppo/",
+        output_dir="strategies/lgb_agents_ppo/backtest",
         backtest_task="",
         live_task="generate_signal",
         status="live_ready",
@@ -548,10 +964,226 @@ STRATEGIES: list[Strategy] = [
         status="backtest_only",
         loader=_load_report("qlib_ml"),
     ),
+    Strategy(
+        id="t0_constrained",
+        name="做 T · 回撤约束下的联合搜索",
+        category="研究",
+        summary="在「回撤不超过 15%」这条硬约束下，把底仓规模和策略参数"
+                "一起搜。结论是约束内做 T 不如什么都不做。",
+        how=[
+            "先算约束的物理上限：组合回撤 ≈ 标的自身回撤 × 底仓占比，"
+            "600711 自身最大回撤 48.62%，所以底仓超过 6.17 万就不可能"
+            "满足 15% —— 这不是调参数能解决的",
+            "底仓 7 档（2~10 万）× 3 类量价背离信号 × 参数网格 = 6048 组",
+            "每一档底仓另跑一条「纯持有不做 T」基准做同约束对照",
+            "账户口径与做 T 口径分开记：annual_return 含底仓 beta，"
+            "t_annual 才是做 T 单独的贡献",
+        ],
+        inputs=["data/clean/1m/600711 分钟线"],
+        risk=["回撤约束作为搜索的硬过滤，不满足的组合直接排除"],
+        code="scripts/optimize_t0_constrained.py",
+        output_dir="models/t0_constrained",
+        status="research",
+        caveat="否定结论：可行域 484 组里，做 T 年化为正 0 组、账户年化为正 "
+               "0 组。最好的一组账户年化仍是 -1.28%，而同约束下什么都不做"
+               "（4 万底仓纯持有）是 +2.87% —— 做 T 比不做差 4.15 个百分点。"
+               "另：这批数字是用旧成本模型跑的（印花税 0.001、佣金万 2.5），"
+               "偏悲观，但方向不会因重跑而反转。",
+        loader=_load_t0_constrained,
+    ),
+    Strategy(
+        id="t0_analysis",
+        name="做 T · 盈利来源归因",
+        category="研究",
+        summary="拆开看做 T 的钱到底从哪来：哪些天赚、赚的集中度、"
+                "门控有没有用、这只票跟大盘和行业的关系。",
+        how=[
+            "逐日拆解做 T 盈亏，找出盈利日与亏损日在特征上的差异，"
+            "用分布重叠度衡量区分能力 —— 重叠越高说明这个特征越没用",
+            "配对差异法做门控对照：同一组参数，加门控与不加门控跑两遍，"
+            "比的是同一批交易日，避免样本不同带来的假差异",
+            "关键指标是单笔盈亏比而非总收益：门控会减少交易次数，"
+            "总收益跟着底仓 beta 变动，容易看成「门控有效」",
+            "与上证指数、与申万小金属行业分别做回归，拆 beta 与 R²",
+        ],
+        inputs=["data/clean/1m/600711", "指数日线", "同行业成分股日线"],
+        code="scripts/analyze_t0_deep.py",
+        output_dir="models/t0_analysis",
+        status="research",
+        caveat="这是分析不是回测，没有净值曲线和年化指标。核心发现："
+               "241 个交易日里做 T 盈利只有 22 天，最赚的 7 天贡献了全部"
+               "盈利日收益的 58.6%；唯一有区分度的特征是「当日涨幅」，"
+               "而它是结果不是原因，事前无法知道。",
+        loader=_load_t0_analysis,
+    ),
+    Strategy(
+        id="t0_downday",
+        name="做 T · 下跌日反 T 假设检验",
+        category="研究",
+        summary="检验「只在下跌日做反 T」这条常见说法。"
+                "结论是实时可实现的版本无效，有效的版本用了未来函数。",
+        how=[
+            "把「今天是不是下跌日」拆成两种取法：用当日实际涨跌"
+            "（lookahead，未来函数，只作上界）与用开盘至今的涨跌"
+            "（lookahead=0，实时可实现）",
+            "两种取法各跑一遍完整参数网格，共 1728 个变体",
+            "只有 lookahead=0 那批能代表真实可执行的结果",
+        ],
+        inputs=["data/clean/1m/600711 分钟线"],
+        code="scripts/test_downday_reverse_t.py",
+        output_dir="models/t0_downday",
+        status="research",
+        caveat="假设被证伪：实时可实现（lookahead=0）的变体里，做 T 年化"
+               "中位数为负；只有引入未来函数的版本才转正。"
+               "含底仓的总年化看起来回升，那是底仓 beta，不是做 T 的功劳。",
+        loader=_load_t0_downday,
+    ),
+    Strategy(
+        id="t0_market",
+        name="做 T · 市场状态门控实验",
+        category="研究",
+        summary="只在特定市场状态下才做 T（大盘涨跌、宽度、波动率），"
+                "看能不能筛掉坏交易。结论是门控只减少次数，不提高质量。",
+        how=[
+            "三类门控条件：市场宽度下限、大盘当日涨幅下限、波动率 z 下限",
+            "每类多档阈值 × 全参数网格，共 4608 次模拟",
+            "判据是**单笔**盈亏质量而非总收益 —— 门控必然减少交易次数，"
+            "总收益会跟着底仓 beta 走，看总数会得出相反结论",
+        ],
+        inputs=["data/clean/1m/600711", "指数日线", "全市场日线（算宽度）"],
+        code="scripts/test_market_gating.py",
+        output_dir="models/t0_market",
+        status="research",
+        caveat="门控无效：所有档位的单笔平均亏损比值都大于 1，"
+               "即门控之后每笔反而亏得更多。表面上的「改善」全部来自"
+               "交易次数下降带来的底仓 beta 占比上升。",
+        loader=_load_t0_market,
+    ),
+    Strategy(
+        id="t0_allocation",
+        name="做 T · 仓位与资金配置搜索",
+        category="研究",
+        summary="底仓放多少、留多少现金。这一维不改变 edge，"
+                "只缩放风险敞口 —— 夏普在所有仓位上几乎是平的。",
+        how=[
+            "先画纯持有的风险收益前沿：仓位 10%~100% 各跑一遍，"
+            "得到「什么都不做」在各风险档位上的基准",
+            "再对每个回撤档位找做 T 的最优组合，看能否胜过同档的纯持有",
+            "7776 组参数 × 多档底仓；成本用修正后的模型"
+            "（万 0.854 + 最低 5 元 + 印花税万 5 + 过户费万 0.1）",
+        ],
+        inputs=["data/clean/1m/600711 分钟线"],
+        code="scripts/optimize_allocation.py",
+        output_dir="models/allocation",
+        status="research",
+        caveat="7776 组里做 T 年化为正只有 19 组（0.24%），全体均值 -14.07%。"
+               "有 4 组在某个回撤档位上胜过纯持有，但参数几乎相同，"
+               "在这个基数上更像噪声 —— 未做样本外验证前不应采信。"
+               "夏普在 10%~100% 仓位区间只有 0.20~0.47，且不随仓位改善，"
+               "说明仓位只在缩放风险，没有改善风险调整后收益。",
+        loader=_load_t0_allocation,
+    ),
 ]
 
 BY_ID = {s.id: s for s in STRATEGIES}
 CATEGORIES = ["日内", "日频", "组合", "研究"]
+
+
+
+# ----------------------------------------------------- 产物自动发现
+
+#: 只扫结果产物会落地的位置。全量扫 strategies/ 会把模型权重、
+#: 信号文件、运行状态一并报出来 —— 那些是运行时产物不是回测结果，
+#: 报了只会让人学会忽略这个区块，等于没有。
+_OUTPUT_ROOTS = ("models", "strategies/*/backtest", "strategies/*/results")
+
+#: 这些目录名不是结果产物
+_SKIP_DIRS = {"__pycache__", ".ipynb_checkpoints", "cache", "tmp", "logs",
+              "models", "signals", "state", "executions", "reconcile",
+              "checkpoints", "raw"}
+
+#: 算作「结果」的文件后缀
+_RESULT_SUFFIXES = {".json", ".csv", ".parquet", ".html"}
+
+
+def _registered_dirs() -> set[str]:
+    return {s.output_dir.replace("\\", "/").strip("/")
+            for s in STRATEGIES if s.output_dir}
+
+
+def unregistered_outputs() -> list[dict]:
+    """磁盘上有产物、但没有任何策略声明它的目录。
+
+    ## 为什么需要这个
+
+    STRATEGIES 是手写列表。跑完一个实验不补注册项，**不会有任何报错** ——
+    页面照常渲染，只是少一块。这样积压过 5 个目录（t0_constrained、
+    t0_market、t0_analysis、t0_downday、allocation）没人发现，
+    直到用户问「今天训练的怎么没同步到后台」。
+
+    ## 为什么只报缺口，不自动生成 loader
+
+    每个实验的字段语义都不一样：有的 max_drawdown 是负数有的是正数，
+    有的 annual_return 含底仓 beta 有的不含，有的 lookahead 列是未来函数。
+    自动猜会把亏损显示成盈利 —— **猜错比不显示更糟**。
+    所以这里只负责喊「这儿有东西没接」，接的时候人来读字段。
+    """
+    out = []
+    reg = _registered_dirs()
+    cands: list[Path] = []
+    for pat in _OUTPUT_ROOTS:
+        if "*" in pat:
+            cands.extend(d for d in ROOT.glob(pat) if d.is_dir())
+        else:
+            base = ROOT / pat
+            if base.is_dir():
+                cands.extend(d for d in base.iterdir() if d.is_dir())
+
+    for d in sorted(set(cands)):
+        if d.name in _SKIP_DIRS:
+            continue
+        files = [f for f in d.iterdir()
+                 if f.is_file() and f.suffix.lower() in _RESULT_SUFFIXES]
+        if not files:
+            continue
+        rel = d.relative_to(ROOT).as_posix()
+        # 已注册，或落在某个已注册目录之内/之上 —— 都不算缺口。
+        # 少了「之内」这一条，models/intraday_gbm/backtest 会被误报，
+        # 而它其实由父目录的 loader 读着。
+        if rel in reg:
+            continue
+        if any(rel.startswith(r + "/") or r.startswith(rel + "/")
+               for r in reg):
+            continue
+
+        newest = max(f.stat().st_mtime for f in files)
+        out.append({
+            "dir": rel,
+            "n_files": len(files),
+            "files": sorted(f.name for f in files)[:8],
+            "mtime": _dt.datetime.fromtimestamp(newest)
+                     .strftime("%Y-%m-%d %H:%M"),
+            "size_kb": round(
+                sum(f.stat().st_size for f in files) / 1024, 1),
+        })
+    out.sort(key=lambda x: x["mtime"], reverse=True)
+    return out
+
+
+def stale_cost_strategies() -> list[dict]:
+    """产物记录的成本模型与当前不一致的策略。
+
+    研究结果是快照，成本模型会改。把两套成本下的结论并排显示
+    而不加区分，等于拿不可比的数字互相比较。
+    """
+    out = []
+    for s in STRATEGIES:
+        r = s.result()
+        drift = r.get("cost_drift")
+        if drift:
+            out.append({"id": s.id, "name": s.name,
+                        "drift": drift, "source": r.get("source")})
+    return out
 
 
 def list_strategies(category: str = "") -> list[dict]:

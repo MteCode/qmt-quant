@@ -41,12 +41,16 @@
       {% if r.has_result and m %}
       <div class="mini">
         <div><span class="ml">年化</span>
-          <span class="mv" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0 else 'var(--down)' }}">
-            {{ '%+.1f'|format((m.annual_return or 0) * 100) }}%</span></div>
+          <span class="mv" style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0
+              else ('var(--down)' if m.annual_return is not none else 'var(--muted)') }}">
+            {% if m.annual_return is not none %}
+              {{ '%+.1f'|format(m.annual_return * 100) }}%
+            {% else %}&mdash;{% endif %}</span></div>
         <div><span class="ml">回撤</span>
-          <span class="mv">{{ '%.1f'|format((m.max_drawdown or 0) * 100) }}%</span></div>
+          <span class="mv">{% if m.max_drawdown is not none %}
+            {{ '%.1f'|format(m.max_drawdown * 100) }}%{% else %}&mdash;{% endif %}</span></div>
         <div><span class="ml">夏普</span>
-          <span class="mv">{{ '%.2f'|format(m.sharpe or 0) }}</span></div>
+          <span class="mv">{{ m.sharpe|num(2) }}</span></div>
       </div>
       {% else %}
       <div class="mini"><span class="tag t-mut">未回测</span></div>

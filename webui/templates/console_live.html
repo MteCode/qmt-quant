@@ -231,9 +231,9 @@
   <div class="row" style="gap:24px;font-size:13px">
     <span>回测年化 <b style="color:{{ 'var(--up)' if (m.annual_return or 0) > 0
       else 'var(--down)' }}">
-      {{ '%+.2f'|format((m.annual_return or 0) * 100) }}%</b></span>
-    <span>回测回撤 <b>{{ '%.2f'|format((m.max_drawdown or 0) * 100) }}%</b></span>
-    <span>回测夏普 <b>{{ '%.2f'|format(m.sharpe or 0) }}</b></span>
+      {{ m.annual_return|pct(sign=True) }}</b></span>
+    <span>回测回撤 <b>{{ m.max_drawdown|pct }}</b></span>
+    <span>回测夏普 <b>{{ m.sharpe|num(2) }}</b></span>
     <span style="color:var(--muted)">{{ r.period or '' }}</span>
   </div>
   <p class="sub" style="margin:10px 0 0">
