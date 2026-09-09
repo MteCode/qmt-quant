@@ -204,13 +204,32 @@ def _wait(job_id: str) -> None:
         _save_index(rows)
 
 
+def _signal_stop(pid: int) -> bool:
+    """请求进程优雅退出。
+
+    Windows 上 proc.terminate() 和 os.kill(pid, SIGTERM) 都是
+    TerminateProcess —— 直接杀死，信号处理器不触发。
+    进程用 CREATE_NEW_PROCESS_GROUP 启的，发 CTRL_BREAK_EVENT
+    才能走可捕获的退出路径（同 services.py 的做法）。
+    """
+    if os.name == "nt":
+        try:
+            os.kill(pid, signal.CTRL_BREAK_EVENT)
+            return True
+        except (OSError, AttributeError, ValueError):
+            return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        return True
+    except OSError:
+        return False
+
+
 def stop(job_id: str) -> bool:
     entry = _procs.get(job_id)
     if entry:
         proc, _ = entry
-        try:
-            proc.terminate()
-        except OSError:
+        if not _signal_stop(proc.pid):
             return False
     else:
         # 服务重启后 _procs 为空，只能按 PID 杀。但 PID 会被复用，
@@ -222,9 +241,7 @@ def stop(job_id: str) -> bool:
             logger.warning("PID %s 已不是任务 %s 的进程，拒绝终止",
                            row["pid"], job_id)
             return False
-        try:
-            os.kill(row["pid"], signal.SIGTERM)
-        except OSError:
+        if not _signal_stop(row["pid"]):
             return False
 
     with _lock:
