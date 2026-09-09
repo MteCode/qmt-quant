@@ -182,13 +182,27 @@ def analyze_gating() -> dict:
               / base.loc[common, "n_trades"].replace(0, np.nan))
         per = (s.loc[common, "t_annual"]
                / s.loc[common, "n_trades"].replace(0, np.nan))
-        per_ratio = per / base_per.loc[common].replace(0, np.nan)
+        bp = base_per.loc[common].replace(0, np.nan)
+        per_ratio = per / bp
+
+        # 比值有符号陷阱：两边都为负时「> 1」= 更差，但只要有一边翻正，
+        # 比值就变成负数，看起来「< 1」会被误读成改善。
+        # 当前数据里基准 575/576 为负，中位数不受影响；但数据一变就会
+        # 静默误读，所以同时给一个符号安全的差值，并数出翻转了多少对。
+        per_diff = per - bp
+        n_flip = int(((per > 0) != (bp > 0)).sum())
+
         rows.append({"gate": gname,
                      "delta_median": float(delta.median()),
                      "pct_improved": float((delta > 0).mean()),
                      "trade_ratio": float(tr.median()),
                      "per_trade": float(per.median()),
-                     "per_trade_ratio": float(per_ratio.median())})
+                     "per_trade_ratio": float(per_ratio.median()),
+                     # 负数 = 门控后单笔更差。与比值不同，这个指标
+                     # 在任何符号组合下的方向含义都一致。
+                     "per_trade_diff": float(per_diff.median()),
+                     "n_sign_flip": n_flip,
+                     "n_pairs": int(len(common))})
         print(f"  {gname:<18} {delta.median():>+12.2%} "
               f"{(delta > 0).mean():>9.1%} {tr.median():>8.2f}x "
               f"{per.median():>10.5f} {per_ratio.median():>10.2f}x")
@@ -197,6 +211,13 @@ def analyze_gating() -> dict:
     print(f"  「做T年化差异」为正只说明亏得少了，可能只是因为交易少了。")
     print(f"  要看**单笔亏损比** —— 接近 1.00x 说明每笔交易的质量没变，")
     print(f"  门控只是减少了交易次数；显著小于 1 才说明筛出了更好的交易。")
+
+    flips = sum(r.get("n_sign_flip", 0) for r in rows)
+    if flips:
+        print("")
+        print(f"  [!] {flips} 对样本的单笔盈亏符号在有/无门控间翻转。")
+        print(f"    这些对的「比值」是负数，不能按「< 1 = 改善」读 ——")
+        print(f"    请改看 per_trade_diff（负数 = 门控后更差，符号安全）。")
 
     if rows:
         best = min(rows, key=lambda r: r["per_trade_ratio"])
