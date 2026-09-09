@@ -190,6 +190,12 @@ def main() -> int:
 
     symbols = [normalize(s) for s in args.symbols] if args.symbols else None
 
+    from qmtquant.engine.backtest_engine import _load_st_checker
+    is_st = _load_st_checker()
+    if is_st is None:
+        print("  [!] 加载不到 ST 历史，信号里可能含 ST 标的 —— "
+              "它们会被实盘风控拒单并占掉 top-N 名额")
+
     def run_once():
         ts = datetime.now().strftime('%H:%M:%S')
         df = get_latest_features(store, symbols, features)
@@ -198,8 +204,33 @@ def main() -> int:
             return
 
         result = predict(model_data, df)
+
+        # ST 标的剔除 —— 实盘风控 forbid_st 会拒绝买入它们
+        # （见 RiskManager._do_check）。不在这里剔，它们会占掉 top-N
+        # 的名额，下游拿到一份「50 只信号、其中若干必被拒单」的清单，
+        # 而拒单发生在风控层，看起来像是策略选错了标的。
+        #
+        # 这里按**当前**状态判定，与实盘的时点一致
+        # （回测那边要按区间判，见 backtest_intraday_gbm 的说明）。
+        if is_st is not None and not result.empty:
+            now = datetime.now()
+            keep = []
+            for sym in result["symbol"]:
+                try:
+                    keep.append(not is_st(sym, now))
+                except Exception:               # noqa: BLE001
+                    keep.append(True)           # 判不出就放行，与风控一致
+            n_drop = len(keep) - sum(keep)
+            if n_drop:
+                result = result[keep]
+                print(f"  [{ts}] 剔除 ST 标的 {n_drop} 只")
+
         if args.top:
             result = result.head(args.top)
+
+        if result.empty:
+            print(f"  [{ts}] 过滤后无可用信号")
+            return
 
         path = save_predictions(result, Path(args.output))
 

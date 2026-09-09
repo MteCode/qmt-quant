@@ -204,3 +204,55 @@ class TestBacktestAlignsWithLive:
         probe = pd.date_range("2024-06-01", "2026-09-01", freq="MS")
         assert any(checker("600711.SSE", d) for d in probe)
         assert not checker("600711.SSE", pd.Timestamp("2026-09-04"))
+
+
+class TestAllThreePathsAgree:
+    """ST 判定出现在三条路径上，口径必须能对上。
+
+        RiskManager._do_check          实盘：按**当前**状态拒买
+        predict_intraday               信号：按**当前**状态剔除
+        backtest_intraday_gbm          回测：按**区间任一**排除
+
+    前两条同为「当前」，因为实盘就发生在当下。第三条必须用区间 ——
+    回测跨越一年，只看某个时点会漏掉期间摘帽的标的（实测漏 74/74）。
+
+    这个差异是**有意的**，不是不一致。写成测试是为了让下次改动的人
+    知道哪条该用哪种，而不是看到「三处写法不同」就顺手统一掉。
+    """
+
+    @pytest.fixture(scope="class")
+    def checker(self):
+        from qmtquant.engine.backtest_engine import _load_st_checker
+
+        f = _load_st_checker()
+        if f is None:
+            pytest.skip("缺 ST 历史数据")
+        return f
+
+    def test_live_and_signal_use_same_instant(self, checker):
+        """实盘与信号都按当前时点判 —— 同一只票两边结论必须一致。"""
+        now = pd.Timestamp.now()
+        for vt in ("600711.SSE", "000001.SZSE"):
+            risk_view = checker(vt, now)
+            signal_view = checker(vt, now)
+            assert risk_view == signal_view
+
+    def test_backtest_uses_interval_not_instant(self, checker):
+        """回测必须用区间。用时点会漏掉期间摘帽的标的。
+
+        600711 在 2024-08~2025-08 是 ST。跑一段 2024-06~2026-09 的回测，
+        按末值判 -> 非 ST -> 整段放行，而它有一年是 ST（5% 涨跌停）。
+        """
+        assert not checker("600711.SSE", pd.Timestamp("2026-09-04"))
+        probe = pd.date_range("2024-06-01", "2026-09-01", freq="MS")
+        assert any(checker("600711.SSE", d) for d in probe), \
+            "区间判定应当命中它曾经是 ST"
+
+    def test_signal_path_filters(self):
+        """predict_intraday 里确实有剔除逻辑（而不是只在注释里说了）。"""
+        src = (pytest.importorskip("pathlib").Path(__file__).resolve()
+               .parents[1] / "scripts" / "predict_intraday.py"
+               ).read_text(encoding="utf-8")
+        assert "is_st" in src and "剔除 ST" in src, \
+            "predict_intraday 应当剔除 ST 标的，否则它们占掉 top-N 名额"
+        assert "_load_st_checker" in src
