@@ -225,6 +225,91 @@ class BarValidator:
 PERIODIC_REPORT_TABLES = {"Balance", "Income", "CashFlow", "PershareIndex"}
 
 
+
+def check_staleness(latest: dict[str, object],
+                    max_lag_days: int = 3,
+                    min_cohort: int = 20,
+                    known_stopped: set[str] | None = None,
+                    ) -> list[Issue]:
+    """哪些标的的数据停更了。
+
+    ## 为什么这是跨标的检查而不是逐个标的检查
+
+    「数据是不是旧的」不能拿今天的日期比：
+
+    - 退市股停在 2017 年是**正确**的，不是数据问题
+    - 今天可能是周末或节假日，本来就没有新数据
+    - 如果所有标的都停在同一天，那天就是最后一个交易日，
+      按今天判会把整个市场都报成过期
+
+    所以基准取**全体标的里最新的那个日期** —— 只要还有标的在更新，
+    那个日期就是市场的当前状态。落后它超过 max_lag_days 个日历日的，
+    才是真的停更。
+
+    ## 为什么需要它
+
+    validator 原先检查 OHLC 逻辑、跳空、重复、单调性，唯独不检查新鲜度。
+    于是「下载脚本挂了三天」这件事没有任何东西会发现 ——
+    回测照跑，只是用的是三天前的世界。
+
+    :param latest: {vt_symbol: 最后一根 K 线的日期}，日期可以是
+                   str（20260904）、int 或 Timestamp
+    :param max_lag_days: 允许落后的日历日数。默认 3，覆盖周末
+    :param min_cohort: 少于这么多标的时不做判断 —— 样本太小时
+                       「最新日期」本身就不可信
+    :param known_stopped: 已知合法停更的标的（退市、长期停牌），不报
+    """
+    issues: list[Issue] = []
+    if len(latest) < min_cohort:
+        return issues
+
+    def _norm(v):
+        try:
+            return pd.Timestamp(str(v)[:10].replace("-", ""))
+        except (ValueError, TypeError):
+            return None
+
+    dates = {s: _norm(v) for s, v in latest.items()}
+    valid = {s: d for s, d in dates.items() if d is not None}
+    if len(valid) < min_cohort:
+        return issues
+
+    ref = max(valid.values())
+    skip = known_stopped or set()
+
+    stale = []
+    for s, d in valid.items():
+        if s in skip:
+            continue
+        lag = (ref - d).days
+        if lag > max_lag_days:
+            stale.append((s, d, lag))
+
+    if not stale:
+        return issues
+
+    stale.sort(key=lambda x: -x[2])
+    # 落后一年以上的几乎肯定是退市，单独归类 —— 和「昨天下载挂了」
+    # 混在一起报，会让人一眼看不出哪个要紧
+    fresh_break = [x for x in stale if x[2] <= 365]
+    long_gone = [x for x in stale if x[2] > 365]
+
+    if fresh_break:
+        issues.append(Issue(
+            "数据停更", Severity.ERROR, f"{len(fresh_break)} 只",
+            count=len(fresh_break),
+            detail=(f"基准 {ref.date()}；最久 {fresh_break[0][2]} 天。"
+                    f"样例: " + ", ".join(
+                        f"{s}({d.date()})" for s, d, _ in fresh_break[:5]))))
+    if long_gone:
+        issues.append(Issue(
+            "长期无数据（多为退市）", Severity.INFO, f"{len(long_gone)} 只",
+            count=len(long_gone),
+            detail=(f"基准 {ref.date()}；样例: " + ", ".join(
+                f"{s}({d.date()})" for s, d, _ in long_gone[:5]))))
+    return issues
+
+
 class FinancialValidator:
     """财务数据校验器"""
 

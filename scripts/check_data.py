@@ -23,6 +23,7 @@ from qmtquant.core.constants import Interval  # noqa: E402
 from qmtquant.datafeed.financial import DEFAULT_TABLES, FinancialStore  # noqa: E402
 from qmtquant.datafeed.validator import (  # noqa: E402
     BarValidator,
+    check_staleness,
     FinancialValidator,
     Severity,
     summarize,
@@ -44,11 +45,13 @@ def load_symbols(args, cfg, feed: XtDataFeed) -> list[str]:
 
 
 def check_bars(feed: XtDataFeed, symbols: list[str], intervals: list[Interval],
-               validator: BarValidator, verbose: bool) -> list:
+               validator: BarValidator, verbose: bool,
+               max_lag_days: int = 3) -> list:
     all_issues = []
     for interval in intervals:
         print(f"\n>>> 检查 {interval.value} 行情（{len(symbols)} 只）")
         checked = 0
+        latest: dict = {}
         for i, vt_symbol in enumerate(symbols, 1):
             if i % 50 == 0:
                 sys.stdout.write(f"\r  {i}/{len(symbols)}")
@@ -61,10 +64,21 @@ def check_bars(feed: XtDataFeed, symbols: list[str], intervals: list[Interval],
             df = feed._normalize_df(pd.read_parquet(path))
             issues = validator.validate(df, vt_symbol)
             all_issues += issues
+            if len(df):
+                latest[vt_symbol] = df.index[-1]
             if verbose:
                 for issue in issues:
                     print(f"\r  {issue}")
         sys.stdout.write(f"\r  已检查 {checked} 只，无数据 {len(symbols)-checked} 只\n")
+
+        # 新鲜度是**跨标的**判断，只能在这里做 —— 逐个标的看不出
+        # 「全市场都停在同一天」和「这一只掉队了」的区别。
+        # 没有这条检查，「下载脚本挂了三天」不会被任何东西发现：
+        # 回测照跑，只是用的是三天前的世界。
+        stale = check_staleness(latest, max_lag_days=max_lag_days)
+        for issue in stale:
+            print(f"  {issue}")
+        all_issues += stale
     return all_issues
 
 
@@ -100,6 +114,9 @@ def main() -> int:
     parser.add_argument("--verbose", "-v", action="store_true", help="逐条打印问题")
     parser.add_argument("--tolerance", type=float, default=1.5,
                         help="涨跌幅容忍倍数，超过 涨跌停×该值 判为异常")
+    parser.add_argument("--max-lag-days", type=int, default=3,
+                        help="允许落后全市场最新日期的日历日数"
+                             "（默认 3，覆盖周末）")
     parser.add_argument("--out", default=None, help="问题清单导出 CSV 路径")
     args = parser.parse_args()
 
@@ -120,7 +137,8 @@ def main() -> int:
           f"{', '.join(i.value for i in intervals)}")
     print("=" * 62)
 
-    issues = check_bars(feed, symbols, intervals, bar_validator, args.verbose)
+    issues = check_bars(feed, symbols, intervals, bar_validator,
+                        args.verbose, args.max_lag_days)
 
     if args.financial:
         store = FinancialStore(cfg.data.store_dir)
