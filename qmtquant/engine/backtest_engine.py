@@ -283,6 +283,13 @@ class BacktestEngine:
                 self._last_bar_stats[bar.vt_symbol] = (
                     bar.close_price, bar.turnover, bar.volume)
         self.history = dict(sorted(grouped.items()))
+        n_dates = len({dt.date() for dt in grouped})
+        if n_dates < len(grouped):
+            logger.warning(
+                "装载了日内级别数据（%d 个截面 / %d 个自然日）。"
+                "T+1 结算按截面触发，日内数据会导致当日买入立刻可卖 —— "
+                "此引擎仅支持日频回测",
+                len(grouped), n_dates)
         logger.info("已装载 %d 个时间截面，标的数 %d",
                     len(self.history), len({b.vt_symbol for b in bars}))
 

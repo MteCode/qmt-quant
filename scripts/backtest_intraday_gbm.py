@@ -50,6 +50,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+from qmtquant.engine.performance import TRADING_DAYS  # noqa: E402
 
 MODEL_DIR = ROOT / "models" / "intraday_gbm"
 OUT_DIR = MODEL_DIR / "backtest"
@@ -428,10 +429,10 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
     dd_series = (eq - running_max) / running_max
     max_dd = float(dd_series.min())
 
-    ann_factor = 244 / n_days if n_days > 0 else 0
+    ann_factor = TRADING_DAYS / n_days if n_days > 0 else 0
     ann_ret = (1 + total_ret) ** ann_factor - 1 if total_ret > -1 else -1
-    vol = float(rets.std() * np.sqrt(244)) if len(rets) > 1 else 0
-    sharpe = float(ann_ret / vol) if vol > 1e-9 else 0
+    vol = float(rets.std() * np.sqrt(TRADING_DAYS)) if len(rets) > 1 else 0
+    sharpe = float((ann_ret - 0.02) / vol) if vol > 1e-9 else 0
 
     # 月化收益（按实际交易日折算）
     monthly_ret = (1 + total_ret) ** (21 / n_days) - 1 if n_days > 0 else 0

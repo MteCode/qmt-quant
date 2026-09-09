@@ -2,7 +2,7 @@
 
 ## 两条路径
 
-做 T 年化 = 每日次数 x 每笔投入 x 净edge x 244 / 总资产
+做 T 年化 = 每日次数 x 每笔投入 x 净edge x TRADING_DAYS / 总资产
 其中 净edge = 毛edge - 往返成本
 
 要提高它只有三个杠杆：**做得更多、做得更准、成本更低**。
@@ -58,6 +58,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from qmtquant.core.costs import DEFAULT_COST, CostModel  # noqa: E402
+from qmtquant.engine.performance import TRADING_DAYS  # noqa: E402
 
 try:
     sys.stdout.reconfigure(errors="replace")
@@ -103,7 +104,7 @@ def cost_scenarios() -> list[dict]:
 
 
 def annual_from(net_edge: float, trades_per_day: float,
-                per_trade: float, init: float, days: int = 244) -> float:
+                per_trade: float, init: float, days: int = TRADING_DAYS) -> float:
     """由净 edge、频率、单笔金额反推年化。"""
     return net_edge * trades_per_day * per_trade * days / init
 

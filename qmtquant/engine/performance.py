@@ -71,7 +71,7 @@ def _to_daily(equity: pd.Series) -> pd.Series:
     """把任意频率的净值曲线折成日频（取每日最后一个观测）。
 
     日线回测下这是恒等变换；分钟回测下它把每根 Bar 一个点压成每天一个点，
-    使 TRADING_DAYS=252 的年化口径重新成立。
+    使 TRADING_DAYS=242 的年化口径重新成立。
     """
     idx = pd.DatetimeIndex(equity.index)
     daily = equity.groupby(idx.normalize()).last()

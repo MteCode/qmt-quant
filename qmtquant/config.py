@@ -156,10 +156,16 @@ class AppConfig:
 
 
 def _fill(cls, data: dict | None):
-    """用 dict 填充 dataclass，未知字段忽略，缺失字段用默认值"""
+    """用 dict 填充 dataclass，未知字段告警，缺失字段用默认值"""
     if not data:
         return cls()
     valid = {f.name for f in cls.__dataclass_fields__.values()}
+    unknown = set(data) - valid
+    if unknown:
+        import logging
+        logging.getLogger(__name__).warning(
+            "%s 中有无法识别的配置项 %s —— 拼写错误会导致静默使用默认值",
+            cls.__name__, sorted(unknown))
     return cls(**{k: v for k, v in data.items() if k in valid})
 
 

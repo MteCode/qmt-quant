@@ -51,6 +51,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+from qmtquant.engine.performance import TRADING_DAYS  # noqa: E402
 
 # 控制台是 GBK 时，数学减号、警告符号这类字符会直接抛
 # UnicodeEncodeError 让脚本崩在 print 上 —— 算了半小时的结果全丢。
@@ -445,10 +446,10 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     rets = np.diff(eq) / eq[:-1] if nd > 1 else np.array([0.0])
     rmax = np.maximum.accumulate(eq)
     mdd = float(((eq - rmax) / rmax).min())
-    af = 244 / nd
+    af = TRADING_DAYS / nd
     ann = (1 + total) ** af - 1 if total > -1 else -1
-    vol_ = float(rets.std() * np.sqrt(244)) if nd > 1 else 0.0
-    shp = float(ann / vol_) if vol_ > 1e-9 else 0.0
+    vol_ = float(rets.std() * np.sqrt(TRADING_DAYS)) if nd > 1 else 0.0
+    shp = float((ann - 0.02) / vol_) if vol_ > 1e-9 else 0.0
 
     # 纯持有基准必须和做 T 那一边用**同一套建仓口径**。
     #
@@ -606,8 +607,8 @@ def main() -> int:
           f"= 总资产 {init:,.0f} 元")
     print("=" * 76)
     print(f"  往返成本 {ROUND_TRIP:.3%}")
-    need_net = 1.0 / 244 * init / args.cash
-    print(f"  年化 100% 需要：每天净赚 {init/244:,.0f} 元 → "
+    need_net = 1.0 / TRADING_DAYS * init / args.cash
+    print(f"  年化 100% 需要：每天净赚 {init/TRADING_DAYS:,.0f} 元 → "
           f"每笔净 {need_net:.2%} → 毛 edge {need_net + ROUND_TRIP:.2%}")
     print("=" * 76)
 

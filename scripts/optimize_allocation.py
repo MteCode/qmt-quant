@@ -34,6 +34,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from qmtquant.engine.performance import TRADING_DAYS
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -78,12 +80,13 @@ def buyhold(d: pd.DataFrame, base_value: float, cash_value: float) -> dict:
     n = len(eq)
     rm = np.maximum.accumulate(eq)
     mdd = float(((eq - rm) / rm).min())
-    af = 244 / n
+    af = TRADING_DAYS / n
     ann = (1 + total) ** af - 1 if total > -1 else -1.0
     rets = np.diff(eq) / eq[:-1] if n > 1 else np.array([0.0])
-    vol = float(rets.std() * np.sqrt(244)) if n > 1 else 0.0
+    vol = float(rets.std() * np.sqrt(TRADING_DAYS)) if n > 1 else 0.0
     return {"total_return": float(total), "annual_return": float(ann),
-            "max_drawdown": mdd, "sharpe": float(ann / vol) if vol > 1e-9 else 0.0,
+            "max_drawdown": mdd,
+            "sharpe": float((ann - 0.02) / vol) if vol > 1e-9 else 0.0,
             "volatility": vol, "n_days": n}
 
 
@@ -131,9 +134,9 @@ def main() -> int:
     rm = np.maximum.accumulate(eq)
     stock_dd = float(((eq - rm) / rm).min())
     stock_ret = float(eq[-1] / eq[0] - 1)
-    stock_ann = (1 + stock_ret) ** (244 / n_days) - 1
+    stock_ann = (1 + stock_ret) ** (TRADING_DAYS / n_days) - 1
     drets = np.diff(eq) / eq[:-1]
-    stock_vol = float(drets.std() * np.sqrt(244))
+    stock_vol = float(drets.std() * np.sqrt(TRADING_DAYS))
 
     print(f"  {n_days} 交易日 {days[0].date()} ~ {days[-1].date()}")
     print(f"\n  标的自身：区间涨幅 {stock_ret:+.2%}（年化 {stock_ann:+.2%}），"

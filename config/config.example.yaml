@@ -30,7 +30,7 @@ data:
 cost:
   commission_rate: 0.0000854  # 佣金万 0.854（用户券商实际费率）
   commission_min: 5.0
-  stamp_tax_rate: 0.001     # 印花税千 1，仅卖出
+  stamp_tax_rate: 0.0005    # 印花税万 5，仅卖出（2023-08-28 起由千 1 减半）
   transfer_fee_rate: 0.00001
   slippage_tick: 1
 

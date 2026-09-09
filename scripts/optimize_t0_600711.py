@@ -45,6 +45,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+from qmtquant.engine.performance import TRADING_DAYS  # noqa: E402
 
 # 控制台是 GBK 时，数学减号、警告符号这类字符会直接抛
 # UnicodeEncodeError 让脚本崩在 print 上 —— 算了半小时的结果全丢。
@@ -424,10 +425,10 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     running_max = np.maximum.accumulate(eq)
     max_dd = float(((eq - running_max) / running_max).min())
 
-    ann_factor = 244 / n_days
+    ann_factor = TRADING_DAYS / n_days
     ann_ret = (1 + total_ret) ** ann_factor - 1 if total_ret > -1 else -1
-    vol = float(rets.std() * np.sqrt(244)) if len(rets) > 1 else 0.0
-    sharpe = float(ann_ret / vol) if vol > 1e-9 else 0.0
+    vol = float(rets.std() * np.sqrt(TRADING_DAYS)) if len(rets) > 1 else 0.0
+    sharpe = float((ann_ret - 0.02) / vol) if vol > 1e-9 else 0.0
 
     # 收益拆解：底仓 beta vs 做 T alpha
     buy_hold_shares = int(base_value / first_px / LOT) * LOT

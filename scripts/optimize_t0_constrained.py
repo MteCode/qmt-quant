@@ -35,6 +35,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from qmtquant.engine.performance import TRADING_DAYS
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -90,14 +92,14 @@ def buyhold_curve(d: pd.DataFrame, base_value: float,
     n = len(eq)
     rm = np.maximum.accumulate(eq)
     mdd = float(((eq - rm) / rm).min())
-    af = 244 / n
+    af = TRADING_DAYS / n
     ann = (1 + total) ** af - 1 if total > -1 else -1
     rets = np.diff(eq) / eq[:-1] if n > 1 else np.array([0.0])
-    vol = float(rets.std() * np.sqrt(244)) if n > 1 else 0.0
+    vol = float(rets.std() * np.sqrt(TRADING_DAYS)) if n > 1 else 0.0
     return {"total_return": round(total, 4),
             "annual_return": round(float(ann), 4),
             "max_drawdown": round(mdd, 4),
-            "sharpe": round(float(ann / vol) if vol > 1e-9 else 0.0, 3),
+            "sharpe": round(float((ann - 0.02) / vol) if vol > 1e-9 else 0.0, 3),
             "n_days": n}
 
 
