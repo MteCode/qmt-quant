@@ -1,54 +1,54 @@
 {
   "symbol": "600711.SSE",
-  "generated_at": "2026-09-08 17:46:47",
+  "generated_at": "2026-09-09 18:59:34",
   "winning_days": {
     "n_days": 241,
-    "win_days": 22,
-    "win_rate": 0.0912863070539419,
-    "total_t_pnl": 1453.4899999999993,
-    "top7_share_of_gains": 0.5856982973492347,
+    "win_days": 27,
+    "win_rate": 0.11203319502074689,
+    "total_t_pnl": 8165.539999999999,
+    "top7_share_of_gains": 0.5177515085730497,
     "features": [
       {
         "feature": "振幅",
-        "win_median": 0.05253228422296542,
-        "lose_median": 0.04487290816108309,
-        "overlap": 0.7290090665509654
+        "win_median": 0.05028187226149027,
+        "lose_median": 0.045456513131443096,
+        "overlap": 0.8189587428658428
       },
       {
         "feature": "日涨幅",
-        "win_median": -0.027523244831683835,
-        "lose_median": 0.003281850610591386,
-        "overlap": 0.11546286753460941
+        "win_median": -0.022898693891856503,
+        "lose_median": 0.002846423327433345,
+        "overlap": 0.3625707270983519
       },
       {
         "feature": "成交量",
-        "win_median": 1109938.5,
-        "lose_median": 1282571.0,
-        "overlap": 0.8463587282630279
+        "win_median": 1103770.0,
+        "lose_median": 1282824.5,
+        "overlap": 0.8290437707484458
       },
       {
         "feature": "分钟波动",
-        "win_median": 0.0018381125153110747,
-        "lose_median": 0.0018888716450465627,
-        "overlap": 0.8821065927821218
+        "win_median": 0.001756237261479923,
+        "lose_median": 0.0018945157056357948,
+        "overlap": 0.7762679636794741
       },
       {
         "feature": "mkt_day_ret",
-        "win_median": 0.000729972030967474,
-        "lose_median": 0.005316064693033695,
-        "overlap": 0.3867567482730652
+        "win_median": 0.003787785768508911,
+        "lose_median": 0.005292345769703388,
+        "overlap": 0.49741273937593977
       },
       {
         "feature": "mkt_breadth",
-        "win_median": 0.319694459438324,
-        "lose_median": 0.31495553255081177,
-        "overlap": 0.9088424754413146
+        "win_median": 0.32191815972328186,
+        "lose_median": 0.31483274698257446,
+        "overlap": 0.883859692125856
       },
       {
         "feature": "mkt_vol_z",
-        "win_median": -0.588075578212738,
-        "lose_median": -0.5717448592185974,
-        "overlap": 0.5921624081471636
+        "win_median": -0.5859388709068298,
+        "lose_median": -0.572072446346283,
+        "overlap": 0.7509953240372349
       }
     ]
   },
@@ -56,59 +56,80 @@
     "paired": [
       {
         "gate": "宽度≥0.30",
-        "delta_median": 0.019049999999999984,
-        "pct_improved": 0.6684027777777778,
-        "trade_ratio": 0.882051282051282,
-        "per_trade": -0.0009241965896048532,
-        "per_trade_ratio": 1.0755029090758597
+        "delta_median": 0.012400000000000008,
+        "pct_improved": 0.625,
+        "trade_ratio": 0.870250500805857,
+        "per_trade": -0.0006227887426900584,
+        "per_trade_ratio": 1.0889955671389433,
+        "per_trade_diff": -4.94438322797657e-05,
+        "n_sign_flip": 8,
+        "n_pairs": 576
       },
       {
         "gate": "宽度≥0.40",
-        "delta_median": 0.07595,
-        "pct_improved": 0.9027777777777778,
-        "trade_ratio": 0.6264779524273195,
-        "per_trade": -0.0009533176100628932,
-        "per_trade_ratio": 1.0811769952253427
+        "delta_median": 0.06165000000000001,
+        "pct_improved": 0.8402777777777778,
+        "trade_ratio": 0.6125078566939032,
+        "per_trade": -0.0006229380707762557,
+        "per_trade_ratio": 1.0677466405682106,
+        "per_trade_diff": -3.0025155025155078e-05,
+        "n_sign_flip": 19,
+        "n_pairs": 576
       },
       {
         "gate": "大盘≥0",
-        "delta_median": 0.0693,
-        "pct_improved": 0.9982638888888888,
-        "trade_ratio": 0.7098445595854922,
-        "per_trade": -0.0008702901379130887,
-        "per_trade_ratio": 1.026334929493125
+        "delta_median": 0.0514,
+        "pct_improved": 0.9670138888888888,
+        "trade_ratio": 0.6813795622659888,
+        "per_trade": -0.0005854519892563371,
+        "per_trade_ratio": 1.0193242406702194,
+        "per_trade_diff": -1.0244298940603844e-05,
+        "n_sign_flip": 6,
+        "n_pairs": 576
       },
       {
         "gate": "大盘≥-0.5%",
-        "delta_median": 0.025300000000000003,
-        "pct_improved": 0.8923611111111112,
-        "trade_ratio": 0.8939576487769259,
-        "per_trade": -0.0009497243509540194,
-        "per_trade_ratio": 1.0081935232149826
+        "delta_median": 0.017049999999999996,
+        "pct_improved": 0.7795138888888888,
+        "trade_ratio": 0.883423696443087,
+        "per_trade": -0.0006077906089610209,
+        "per_trade_ratio": 1.026764038972674,
+        "per_trade_diff": -1.4599672053098786e-05,
+        "n_sign_flip": 0,
+        "n_pairs": 576
       },
       {
         "gate": "量能≥-0.8",
-        "delta_median": 0.016600000000000004,
-        "pct_improved": 0.6927083333333334,
-        "trade_ratio": 0.9103520857252201,
-        "per_trade": -0.0009623861901098775,
-        "per_trade_ratio": 1.0273786296057932
+        "delta_median": 0.014450000000000005,
+        "pct_improved": 0.6111111111111112,
+        "trade_ratio": 0.905940594059406,
+        "per_trade": -0.0005947368421052631,
+        "per_trade_ratio": 1.0143577206180638,
+        "per_trade_diff": -4.389966582678658e-06,
+        "n_sign_flip": 8,
+        "n_pairs": 576
       },
       {
         "gate": "量能≥-0.3",
-        "delta_median": 0.1567,
-        "pct_improved": 0.9878472222222222,
-        "trade_ratio": 0.3367088607594937,
-        "per_trade": -0.001127227215980025,
-        "per_trade_ratio": 1.1746844226152435
+        "delta_median": 0.10475000000000001,
+        "pct_improved": 0.921875,
+        "trade_ratio": 0.32,
+        "per_trade": -0.0007914534763771405,
+        "per_trade_ratio": 1.249601892623489,
+        "per_trade_diff": -0.00014913700293146164,
+        "n_sign_flip": 14,
+        "n_pairs": 576
       },
       {
         "gate": "宽度0.30+大盘≥0",
-        "delta_median": 0.09255,
-        "pct_improved": 0.9826388888888888,
-        "trade_ratio": 0.6187845303867403,
-        "per_trade": -0.0009904066985645934,
-        "per_trade_ratio": 1.0704799914461753
+        "delta_median": 0.0688,
+        "pct_improved": 0.9201388888888888,
+        "trade_ratio": 0.5862169730914404,
+        "per_trade": -0.000630270830996972,
+        "per_trade_ratio": 1.0759700425974221,
+        "per_trade_diff": -3.742274681522103e-05,
+        "n_sign_flip": 11,
+        "n_pairs": 576
       }
     ]
   },

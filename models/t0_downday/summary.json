@@ -1,0 +1,147 @@
+{
+  "generated_at": "2026-09-09 18:16:25",
+  "symbol": "600711.SSE",
+  "base_value": 100000.0,
+  "cash_value": 100000.0,
+  "date_range": [
+    "2025-09-08",
+    "2026-09-04"
+  ],
+  "n_days": 241,
+  "buyhold_annual": 0.1415,
+  "by_variant": [
+    {
+      "variant": "原策略（双向、无门控）",
+      "lookahead": false,
+      "n": 288,
+      "median": -0.19469999999999998,
+      "best": 0.0413,
+      "pct_pos": 0.006944444444444444,
+      "win_rate": 0.47095,
+      "median_trades": 240.5,
+      "per_trade": -0.0006584141040326607
+    },
+    {
+      "variant": "只反T、无门控",
+      "lookahead": false,
+      "n": 288,
+      "median": -0.1456,
+      "best": 0.0321,
+      "pct_pos": 0.013888888888888888,
+      "win_rate": 0.4684,
+      "median_trades": 200.5,
+      "per_trade": -0.0006519689961245155
+    },
+    {
+      "variant": "只反T + 日内跌0.5%",
+      "lookahead": false,
+      "n": 288,
+      "median": -0.06665,
+      "best": 0.0249,
+      "pct_pos": 0.03125,
+      "win_rate": 0.45,
+      "median_trades": 91.0,
+      "per_trade": -0.0007537433155080215
+    },
+    {
+      "variant": "只反T + 日内跌1%",
+      "lookahead": false,
+      "n": 288,
+      "median": -0.05405,
+      "best": 0.0339,
+      "pct_pos": 0.06597222222222222,
+      "win_rate": 0.4706,
+      "median_trades": 69.5,
+      "per_trade": -0.0007016361950185479
+    },
+    {
+      "variant": "只反T + 日内跌2%",
+      "lookahead": false,
+      "n": 288,
+      "median": -0.031700000000000006,
+      "best": 0.0551,
+      "pct_pos": 0.1423611111111111,
+      "win_rate": 0.4344,
+      "median_trades": 37.0,
+      "per_trade": -0.0008493589743589743
+    },
+    {
+      "variant": "[前视]只反T + 下跌日",
+      "lookahead": true,
+      "n": 288,
+      "median": 0.02035,
+      "best": 0.2791,
+      "pct_pos": 0.6840277777777778,
+      "win_rate": 0.5862,
+      "median_trades": 95.0,
+      "per_trade": 0.00022076923076923076
+    }
+  ],
+  "paired_vs_reverse_only": [
+    {
+      "variant": "只反T + 日内跌0.5%",
+      "lookahead": false,
+      "delta_median": 0.029100000000000008,
+      "pct_improved": 0.8576388888888888,
+      "trade_ratio": 0.504858099108637,
+      "per_trade_ratio": 1.296160610382488
+    },
+    {
+      "variant": "只反T + 日内跌1%",
+      "lookahead": false,
+      "delta_median": 0.06044999999999999,
+      "pct_improved": 1.0,
+      "trade_ratio": 0.37862028695362027,
+      "per_trade_ratio": 1.1291040969846173
+    },
+    {
+      "variant": "只反T + 日内跌2%",
+      "lookahead": false,
+      "delta_median": 0.09209999999999999,
+      "pct_improved": 1.0,
+      "trade_ratio": 0.21009466216082687,
+      "per_trade_ratio": 1.3268321513002364
+    },
+    {
+      "variant": "[前视]只反T + 下跌日",
+      "lookahead": true,
+      "delta_median": 0.16770000000000002,
+      "pct_improved": 1.0,
+      "trade_ratio": 0.5047226320010296,
+      "per_trade_ratio": -0.34871649886888634
+    }
+  ],
+  "best_realizable": {
+    "variant": "只反T + 日内跌2%",
+    "lookahead": false,
+    "param_id": "corr|0.3|2.0|0.015|0.012|1|60",
+    "signal": "corr",
+    "annual_return": 0.1968,
+    "t_annual": 0.0551,
+    "max_drawdown": -0.2933,
+    "sharpe": 0.618,
+    "n_trades": 16,
+    "win_rate": 0.75,
+    "coverage": 0.0664,
+    "gross_edge": 0.007054,
+    "net_edge": 0.005363,
+    "buyhold_annual": 0.1415
+  },
+  "best_lookahead_ceiling": {
+    "variant": "[前视]只反T + 下跌日",
+    "lookahead": true,
+    "param_id": "pulse|0.003|1.0|0.015|0.012|1|60",
+    "signal": "pulse",
+    "annual_return": 0.4211,
+    "t_annual": 0.2791,
+    "max_drawdown": -0.2524,
+    "sharpe": 1.39,
+    "n_trades": 105,
+    "win_rate": 0.6667,
+    "coverage": 0.4357,
+    "gross_edge": 0.005515,
+    "net_edge": 0.003825,
+    "buyhold_annual": 0.1415
+  },
+  "n_simulations": 1728
+}

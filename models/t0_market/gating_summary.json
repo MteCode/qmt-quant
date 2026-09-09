@@ -1,0 +1,168 @@
+{
+  "generated_at": "2026-09-09 18:59:33",
+  "symbol": "600711.SSE",
+  "base_value": 100000.0,
+  "cash_value": 100000.0,
+  "total_capital": 200000.0,
+  "date_range": [
+    "2025-09-08",
+    "2026-09-04"
+  ],
+  "n_days": 241,
+  "market_coverage": 1.0,
+  "design": "对照实验：同一组策略参数，只改门控，看配对差异",
+  "n_param_sets": 576,
+  "n_gates": 8,
+  "n_simulations": 4608,
+  "buyhold_annual": 0.1415,
+  "by_gate": [
+    {
+      "gate": "无门控",
+      "n": 576,
+      "median": -0.18275,
+      "mean": -0.1724300347222222,
+      "best": 0.0413,
+      "pct_pos": 0.003472222222222222,
+      "median_trades": 242.5
+    },
+    {
+      "gate": "宽度≥0.30",
+      "n": 576,
+      "median": -0.17035,
+      "mean": -0.1593015625,
+      "best": 0.0314,
+      "pct_pos": 0.017361111111111112,
+      "median_trades": 203.0
+    },
+    {
+      "gate": "宽度≥0.40",
+      "n": 576,
+      "median": -0.1193,
+      "mean": -0.11395434027777779,
+      "best": 0.0401,
+      "pct_pos": 0.036458333333333336,
+      "median_trades": 145.0
+    },
+    {
+      "gate": "大盘≥0",
+      "n": 576,
+      "median": -0.1231,
+      "mean": -0.11957760416666667,
+      "best": 0.0438,
+      "pct_pos": 0.013888888888888888,
+      "median_trades": 169.0
+    },
+    {
+      "gate": "大盘≥-0.5%",
+      "n": 576,
+      "median": -0.15875,
+      "mean": -0.15640642361111112,
+      "best": 0.032,
+      "pct_pos": 0.003472222222222222,
+      "median_trades": 210.0
+    },
+    {
+      "gate": "量能≥-0.8",
+      "n": 576,
+      "median": -0.1608,
+      "mean": -0.1594513888888889,
+      "best": 0.0725,
+      "pct_pos": 0.017361111111111112,
+      "median_trades": 230.0
+    },
+    {
+      "gate": "量能≥-0.3",
+      "n": 576,
+      "median": -0.060149999999999995,
+      "mean": -0.07569513888888887,
+      "best": 0.0209,
+      "pct_pos": 0.024305555555555556,
+      "median_trades": 90.0
+    },
+    {
+      "gate": "宽度0.30+大盘≥0",
+      "n": 576,
+      "median": -0.1051,
+      "mean": -0.10627465277777778,
+      "best": 0.0151,
+      "pct_pos": 0.022569444444444444,
+      "median_trades": 132.0
+    }
+  ],
+  "paired_delta": [
+    {
+      "gate": "宽度≥0.30",
+      "n_pairs": 576,
+      "delta_median": 0.012400000000000008,
+      "delta_mean": 0.013128472222222222,
+      "pct_improved": 0.625,
+      "trade_ratio_median": 0.870250500805857
+    },
+    {
+      "gate": "宽度≥0.40",
+      "n_pairs": 576,
+      "delta_median": 0.06165000000000001,
+      "delta_mean": 0.05847569444444445,
+      "pct_improved": 0.8402777777777778,
+      "trade_ratio_median": 0.6125078566939032
+    },
+    {
+      "gate": "大盘≥0",
+      "n_pairs": 576,
+      "delta_median": 0.0514,
+      "delta_mean": 0.05285243055555556,
+      "pct_improved": 0.9670138888888888,
+      "trade_ratio_median": 0.6813795622659888
+    },
+    {
+      "gate": "大盘≥-0.5%",
+      "n_pairs": 576,
+      "delta_median": 0.017049999999999996,
+      "delta_mean": 0.016023611111111113,
+      "pct_improved": 0.7795138888888888,
+      "trade_ratio_median": 0.883423696443087
+    },
+    {
+      "gate": "量能≥-0.8",
+      "n_pairs": 576,
+      "delta_median": 0.014450000000000005,
+      "delta_mean": 0.012978645833333333,
+      "pct_improved": 0.6111111111111112,
+      "trade_ratio_median": 0.905940594059406
+    },
+    {
+      "gate": "量能≥-0.3",
+      "n_pairs": 576,
+      "delta_median": 0.10475000000000001,
+      "delta_mean": 0.09673489583333333,
+      "pct_improved": 0.921875,
+      "trade_ratio_median": 0.32
+    },
+    {
+      "gate": "宽度0.30+大盘≥0",
+      "n_pairs": 576,
+      "delta_median": 0.0688,
+      "delta_mean": 0.06615538194444445,
+      "pct_improved": 0.9201388888888888,
+      "trade_ratio_median": 0.5862169730914404
+    }
+  ],
+  "verdict": "市场门控有效 —— 配对差异中位数显著为正，且多数参数组都变好",
+  "best_overall": {
+    "signal": "corr",
+    "gate": "量能≥-0.8",
+    "annual_return": 0.2141,
+    "t_annual": 0.0725,
+    "max_drawdown": -0.3016,
+    "sharpe": 0.679,
+    "n_trades": 50,
+    "gross_edge": 0.004047,
+    "net_edge": 0.002356,
+    "vs_buyhold": 0.07260000000000003
+  },
+  "overall_positive_t": 80,
+  "overall_pct_positive": 0.0174,
+  "cost_model": {
+    "round_trip": 0.0016908000000000001
+  }
+}

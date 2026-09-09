@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-09 15:40:26",
+  "generated_at": "2026-09-09 18:31:19",
   "symbol": "600711.SSE",
   "total_capital": 200000.0,
   "max_drawdown_limit": 0.15,
@@ -14,74 +14,74 @@
   "n_satisfying": 685,
   "buyhold_by_base": [
     {
-      "total_return": 0.0142,
-      "annual_return": 0.0144,
-      "max_drawdown": -0.0801,
-      "sharpe": 0.204,
+      "total_return": 0.0254,
+      "annual_return": 0.0257,
+      "max_drawdown": -0.0793,
+      "sharpe": 0.37,
       "n_days": 241,
       "base_value": 20000,
       "base_pct": 0.1
     },
     {
-      "total_return": 0.0213,
-      "annual_return": 0.0215,
-      "max_drawdown": -0.116,
-      "sharpe": 0.207,
+      "total_return": 0.0381,
+      "annual_return": 0.0386,
+      "max_drawdown": -0.1143,
+      "sharpe": 0.377,
       "n_days": 241,
       "base_value": 30000,
       "base_pct": 0.15
     },
     {
-      "total_return": 0.0284,
-      "annual_return": 0.0287,
-      "max_drawdown": -0.1495,
-      "sharpe": 0.21,
+      "total_return": 0.0508,
+      "annual_return": 0.0514,
+      "max_drawdown": -0.1466,
+      "sharpe": 0.385,
       "n_days": 241,
       "base_value": 40000,
       "base_pct": 0.2
     },
     {
-      "total_return": 0.0355,
-      "annual_return": 0.0359,
-      "max_drawdown": -0.1808,
-      "sharpe": 0.213,
+      "total_return": 0.0635,
+      "annual_return": 0.0643,
+      "max_drawdown": -0.1766,
+      "sharpe": 0.392,
       "n_days": 241,
       "base_value": 50000,
       "base_pct": 0.25
     },
     {
-      "total_return": 0.0425,
-      "annual_return": 0.0431,
-      "max_drawdown": -0.2101,
-      "sharpe": 0.216,
+      "total_return": 0.0762,
+      "annual_return": 0.0772,
+      "max_drawdown": -0.2045,
+      "sharpe": 0.399,
       "n_days": 241,
       "base_value": 60000,
       "base_pct": 0.3
     },
     {
-      "total_return": 0.1138,
-      "annual_return": 0.1153,
-      "max_drawdown": -0.2777,
-      "sharpe": 0.417,
+      "total_return": 0.1143,
+      "annual_return": 0.1158,
+      "max_drawdown": -0.2776,
+      "sharpe": 0.419,
       "n_days": 241,
       "base_value": 80000,
       "base_pct": 0.4
     },
     {
-      "total_return": 0.128,
-      "annual_return": 0.1297,
-      "max_drawdown": -0.3216,
-      "sharpe": 0.392,
+      "total_return": 0.1397,
+      "annual_return": 0.1415,
+      "max_drawdown": -0.319,
+      "sharpe": 0.432,
       "n_days": 241,
       "base_value": 100000,
       "base_pct": 0.5
     }
   ],
   "best_buyhold_under_constraint": {
-    "total_return": 0.0284,
-    "annual_return": 0.0287,
-    "max_drawdown": -0.1495,
-    "sharpe": 0.21,
+    "total_return": 0.0508,
+    "annual_return": 0.0514,
+    "max_drawdown": -0.1466,
+    "sharpe": 0.385,
     "n_days": 241,
     "base_value": 40000,
     "base_pct": 0.2
@@ -111,7 +111,7 @@
     "avg_trade_amount": 50054.23,
     "effective_round_trip": 0.00172,
     "n_unclosed": 0.0,
-    "buyhold_annual": 0.0287,
+    "buyhold_annual": 0.0514,
     "date_range": [
       "2025-09-08",
       "2026-09-04"
@@ -128,7 +128,7 @@
     "hold_max": 60.0,
     "reverse": 0.0
   },
-  "t_vs_buyhold": 0.0106,
+  "t_vs_buyhold": -0.0121,
   "n_positive_t": 7,
   "pct_positive_t": 0.0012,
   "t_annual_mean": -0.1335
