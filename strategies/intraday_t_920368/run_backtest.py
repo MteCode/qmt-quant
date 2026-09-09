@@ -10,6 +10,10 @@ from qmtquant.core.constants import Direction, Exchange
 from qmtquant.core.objects import TradeData
 from qmtquant.engine.performance import calculate_stats
 from qmtquant.report.html_report import BacktestReport
+
+from qmtquant.core.costs import DEFAULT_COST
+
+COST = DEFAULT_COST
 try:
     from .train_model import DATA, FEATURES, OUT, make_features
 except ImportError:
@@ -28,14 +32,33 @@ class Sim:
     t_pnl: float = 0.0
     halted: bool = False
 
+def _fee(amount: float, is_sell: bool) -> float:
+    """费用（佣金含 5 元下限 + 印花税 + 过户费），**不含滑点** ——
+    本文件的滑点已经加在价格上了。"""
+    return COST.fee(amount, is_sell)
+
+
 def run(df, model, initial=200000.0, base_value=100000.0, t_value=100000.0):
     days = pd.Index(df.index.normalize()).unique()
     test_days = days[-242:] if len(days) > 242 else days
     test = df[df.index.normalize().isin(test_days)].copy()
     first = float(test.iloc[0].close)
     base, t = int(base_value / first / 100) * 100, int(t_value / first / 100) * 100
-    sim = Sim(initial - (base + t) * first, base, t, t, initial, first)
-    commission_rate, stamp_rate, slippage = 0.0003, 0.001, 0.0005
+    # 建仓也要计费。原先直接 initial - (base+t)*first 扣现金，
+    # 既不收佣金也不吃滑点 —— 相当于凭空省掉一笔开仓成本。
+    _entry_px = first * (1 + COST.slippage_rate)
+    _entry_amt = _entry_px * (base + t)
+    sim = Sim(initial - _entry_amt - _fee(_entry_amt, False),
+              base, t, t, initial, first)
+    # 成本取唯一事实源。此前这里写死 0.0003（万3），是用户实际费率
+    # 万0.854 的 3.5 倍；印花税 0.001 是 2023-08-28 减半前的旧值；
+    # 且全文件没有一处施加券商的 5 元最低佣金。
+    #
+    # 注意：本文件的滑点已经加在**价格**上（sell_px = px * (1 - slippage)），
+    # 所以费用要用 COST.fee()（不含滑点）而不是 COST.cost()，
+    # 否则滑点会被算两遍。
+    slippage = COST.slippage_rate
+
     features = make_features(df).reindex(test.index).fillna(0)
     test = test.assign(prob_up=model.predict_proba(features[FEATURES])[:, 1])
     trades, equity_rows, pending_sell = [], [], None
@@ -47,7 +70,7 @@ def run(df, model, initial=200000.0, base_value=100000.0, t_value=100000.0):
         if dd <= -0.12 and not sim.halted:
             for label, vol in (("底仓风险退出", sim.base_shares), ("T仓风险退出", sim.t_shares)):
                 if vol:
-                    sell_px = px * (1 - slippage); fee = sell_px * vol * (commission_rate + stamp_rate)
+                    sell_px = px * (1 - slippage); fee = _fee(sell_px * vol, True)
                     sim.cash += sell_px * vol - fee
                     trades.append((dt, "卖出", sell_px, vol, fee, label, 0.0, sim.t_cost))
             sim.base_shares = sim.t_shares = sim.t_sellable = 0; sim.halted = True
@@ -57,13 +80,13 @@ def run(df, model, initial=200000.0, base_value=100000.0, t_value=100000.0):
         # 只有高于VWAP且模型转弱才卖；只有低于卖价且模型转强才买，拒绝机械亏损T。
         if (not sim.halted and tod == 615 and sim.t_sellable > 0
                 and px >= vwap * 1.0005 and row.prob_up < 0.54):
-            vol = sim.t_sellable; sell_px = px * (1 - slippage); fee = sell_px * vol * (commission_rate + stamp_rate)
+            vol = sim.t_sellable; sell_px = px * (1 - slippage); fee = _fee(sell_px * vol, True)
             sim.cash += sell_px * vol - fee; sim.t_shares -= vol; sim.t_sellable = 0
             pending_sell = (sell_px, vol, fee)
             trades.append((dt, "卖出", sell_px, vol, fee, "VWAP上方+模型转弱，T先卖", 0.0, sim.t_cost))
         if not sim.halted and tod == 870 and pending_sell is not None:
             sell_px, vol, sell_fee = pending_sell; buy_px = px * (1 + slippage)
-            fee = buy_px * vol * commission_rate; sim.cash -= buy_px * vol + fee; sim.t_shares += vol
+            fee = _fee(buy_px * vol, False); sim.cash -= buy_px * vol + fee; sim.t_shares += vol
             pnl = (sell_px - buy_px) * vol - sell_fee - fee; sim.t_pnl += pnl
             sim.t_cost = max(0.0, sim.t_cost - pnl / max(base + t, 1))
             reason = ("低于卖出价0.15%+模型转强，T完成" if buy_px <= sell_px * (1 - 0.0015) and row.prob_up > 0.46

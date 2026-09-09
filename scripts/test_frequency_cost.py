@@ -20,15 +20,28 @@
 
 ## 成本这条路
 
-当前往返成本 0.25%（佣金双边 0.05% + 印花税 0.10% + 滑点双边 0.10%）。
-可以谈的部分：
-- 佣金：万 2.5 -> 万 1，双边省 0.03%
-- 滑点：万 5 -> 万 2，双边省 0.06%
-- 印花税 0.10%：**法定，不可谈**
+费率一律从 qmtquant.core.costs 取，本文件不写死任何数字。
+此前这里写的是万 2.5，而用户实际是万 0.854，且印花税用的是
+2023-08-28 减半前的 0.10% —— 整张情景表的结论都建立在错的基准上。
 
-所以成本下限约 0.16%，降幅 36%。而净 edge = 毛 - 成本，
-毛 edge 0.266% 时净 edge 从 0.016% 涨到 0.106% —— **6.6 倍**。
-成本是这里最大的杠杆，这一点必须量化给出。
+还能谈的：
+- 佣金：从万 0.854 往下，空间很小。经手费 + 证管费 + 过户费的地板
+  就有万 0.64，剩下能谈的只有万 0.2 左右
+- **免5（取消最低佣金）**：对做 T 价值最大。做 T 的单笔几乎全在
+  5.85 万以下，1 万元的单子实际佣金率是万 5，名义值的 5.9 倍
+- 滑点：万 5 -> 万 2 属于执行优化，不是谈判
+- 印花税 0.05%：法定，不可谈
+
+## 但成本不是这里的瓶颈
+
+净 edge = 毛 edge - 成本。降成本只动减号右边，而**左边的毛 edge
+中位数约 0.00%**（22000+ 组参数搜索、样本外 0/20 存活）。
+把成本降到零也救不了一个为零的毛 edge。
+
+这个文件早期版本写过「毛 edge 0.266% 时净 edge 涨 6.6 倍，
+成本是最大的杠杆」—— 0.266% 是几千组配置里的**最大值**不是代表值，
+拿它推导会得出「成本是主要瓶颈」这个错误结论。
+
 """
 import argparse
 import importlib.util
@@ -43,6 +56,8 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from qmtquant.core.costs import DEFAULT_COST, CostModel  # noqa: E402
 
 try:
     sys.stdout.reconfigure(errors="replace")
@@ -61,18 +76,29 @@ def _engine():
 
 
 def cost_scenarios() -> list[dict]:
-    """成本情景。印花税是法定的，不能假设它降。"""
+    """成本情景，以当前实际条款为基准往下谈。
+
+    基准不再写死 —— 从 DEFAULT_COST 取，改一处费率这里跟着变。
+    此前这里写的是万2.5，而用户实际是万0.854，整张表的结论都偏了。
+
+    印花税是法定的（2023-08-28 起 0.05%），任何情景下都不能假设它降。
+    真正还能谈的只剩两样：佣金里超出规费地板的那一点点，以及**免5** ——
+    后者对做 T 的价值远大于前者，因为做 T 的单笔几乎全在 5.85 万以下。
+    """
+    c = DEFAULT_COST.commission_rate
+    s = DEFAULT_COST.slippage_rate
+    m = DEFAULT_COST.commission_min
     return [
-        {"name": "当前（佣金万2.5+滑点万5）",
-         "commission": 0.00025, "slippage": 0.0005},
-        {"name": "佣金谈到万1",
-         "commission": 0.0001, "slippage": 0.0005},
+        {"name": f"当前（佣金万{c*10000:.3g}+最低{m:.0f}元+滑点万{s*10000:.0f}）",
+         "commission": c, "slippage": s, "min_comm": m},
+        {"name": "谈到免5（最低佣金取消）",
+         "commission": c, "slippage": s, "min_comm": 0.0},
         {"name": "滑点压到万2",
-         "commission": 0.00025, "slippage": 0.0002},
-        {"name": "两者都优化",
-         "commission": 0.0001, "slippage": 0.0002},
+         "commission": c, "slippage": 0.0002, "min_comm": m},
+        {"name": "免5 + 滑点万2",
+         "commission": c, "slippage": 0.0002, "min_comm": 0.0},
         {"name": "[不可实现]零佣金零滑点",
-         "commission": 0.0, "slippage": 0.0},
+         "commission": 0.0, "slippage": 0.0, "min_comm": 0.0},
     ]
 
 
@@ -102,7 +128,7 @@ def main() -> int:
     m = _engine()
     em, xm = _tm(args.entry_time), _tm(args.exit_time)
     init = args.base + args.cash
-    STAMP = 0.001
+    STAMP = DEFAULT_COST.stamp_tax_rate   # 0.0005，2023-08-28 起
 
     print("=" * 80)
     print(f"  频率与成本双维实验 —— {args.symbol}.{args.exchange}")
@@ -213,13 +239,27 @@ def main() -> int:
           f"最好 {ge_best:.4%}")
     print(f"  （印花税 {STAMP:.2%} 是法定的，任何情景下都不能省）")
 
+    per_trade = args.cash / 4
+    _thr = DEFAULT_COST.min_commission_threshold()
+    print("")
+    print(f"  单笔按 {per_trade:,.0f} 元估算"
+          f"（最低佣金临界 {_thr:,.0f} 元，低于它实际费率高于名义）")
     print(f"\n  {'成本情景':<24} {'往返成本':>10} "
           f"{'净edge(中位)':>13} {'净edge(最好)':>13} {'年化@4次/日':>13}")
     print("  " + "-" * 78)
-    per_trade = args.cash / 4
     cost_rows = []
+    # 往返成本按**实际单笔金额**算，不用名义费率 —— 最低佣金是分段函数，
+    # 名义费率等于假装每笔都大到不触发下限。做 T 的单笔几乎全在下限区。
     for c in cost_scenarios():
-        rt = 2 * c["commission"] + STAMP + 2 * c["slippage"]
+        model = CostModel(
+            commission_rate=c["commission"],
+            commission_min=c.get("min_comm", DEFAULT_COST.commission_min),
+            stamp_tax_rate=STAMP,
+            transfer_fee_rate=DEFAULT_COST.transfer_fee_rate,
+            slippage_rate=c["slippage"])
+        rt = model.round_trip_rate(per_trade)
+        c["effective_round_trip"] = rt
+        c["nominal_round_trip"] = model.round_trip_rate_nominal()
         ne_med = ge_med - rt
         ne_best = ge_best - rt
         ann = annual_from(ne_best, 4, per_trade, init, n_days)

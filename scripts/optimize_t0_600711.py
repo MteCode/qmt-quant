@@ -44,6 +44,8 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+
 # 控制台是 GBK 时，数学减号、警告符号这类字符会直接抛
 # UnicodeEncodeError 让脚本崩在 print 上 —— 算了半小时的结果全丢。
 # 降级为替换字符，宁可显示成 ? 也不能因为一个字符丢掉整轮结果。
@@ -57,9 +59,25 @@ except (AttributeError, ValueError):
 OUT_DIR = ROOT / "models" / "t0_single"
 
 # 交易成本
-COMMISSION = 0.00025     # 佣金万 2.5（双边）
-STAMP_TAX = 0.001        # 印花税千 1（仅卖出）
-SLIPPAGE = 0.0005        # 滑点万 5
+#: 成本走 qmtquant.core.costs 这一个事实源。此前本文件自己定义
+#: COMMISSION/STAMP_TAX/SLIPPAGE，与另外 7 个文件各写各的，
+#: 出现过佣金三个版本、印花税全部用 2023-08-28 减半前的旧值、
+#: 过户费全体漏算，且**没有一处施加券商的 5 元最低佣金**。
+#:
+#: 原先的写法是 `金额 * (1 ± 费率)` —— 这个乘法式结构上就表达不了
+#: 一个固定下限，所以最低佣金不是"忘了加"，是加不进去。
+#: 改成 `金额 ± _fee(金额, 是否卖出)`。
+COST = DEFAULT_COST
+COMMISSION = COST.commission_rate
+STAMP_TAX = COST.stamp_tax_rate
+SLIPPAGE = COST.slippage_rate
+MIN_COMMISSION = COST.commission_min
+
+
+def _fee(amount: float, is_sell: bool) -> float:
+    """单笔费用 + 滑点。含 5 元最低佣金 —— 单笔低于 58,548 元就触发，
+    而做 T 的单笔几乎全在这条线以下。"""
+    return COST.cost(amount, is_sell)
 
 LOT = 100                # A 股一手 100 股
 
@@ -198,10 +216,8 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                         # 已买入，需卖出等量底仓平掉
                         sh = open_leg["shares"]
                         if base_shares >= sh:
-                            proceeds = px * sh * (
-                                1 - COMMISSION - STAMP_TAX - SLIPPAGE)
-                            cost = open_leg["price"] * sh * (
-                                1 + COMMISSION + SLIPPAGE)
+                            proceeds = px * sh - _fee(px * sh, True)
+                            cost = open_leg["price"] * sh + _fee(open_leg["price"] * sh, False)
                             base_shares -= sh
                             locked_shares += sh
                             cash += proceeds
@@ -221,10 +237,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                     else:
                         # 已卖出底仓，需买回
                         sh = open_leg["shares"]
-                        cost = px * sh * (1 + COMMISSION + SLIPPAGE)
+                        cost = px * sh + _fee(px * sh, False)
                         if cash >= cost:
-                            proceeds = open_leg["price"] * sh * (
-                                1 - COMMISSION - STAMP_TAX - SLIPPAGE)
+                            proceeds = open_leg["price"] * sh - _fee(open_leg["price"] * sh, True)
                             cash -= cost
                             locked_shares += sh
                             pnl = proceeds - cost
@@ -262,9 +277,8 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                     if hit_stop or hit_target:
                         sh = open_leg["shares"]
                         if base_shares >= sh:
-                            proceeds = px * sh * (
-                                1 - COMMISSION - STAMP_TAX - SLIPPAGE)
-                            cost = entry_px * sh * (1 + COMMISSION + SLIPPAGE)
+                            proceeds = px * sh - _fee(px * sh, True)
+                            cost = entry_px * sh + _fee(entry_px * sh, False)
                             base_shares -= sh
                             locked_shares += sh
                             cash += proceeds
@@ -291,10 +305,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                             not use_range_filter or pos < 0.4))
                     if hit_stop or hit_target:
                         sh = open_leg["shares"]
-                        cost = px * sh * (1 + COMMISSION + SLIPPAGE)
+                        cost = px * sh + _fee(px * sh, False)
                         if cash >= cost:
-                            proceeds = entry_px * sh * (
-                                1 - COMMISSION - STAMP_TAX - SLIPPAGE)
+                            proceeds = entry_px * sh - _fee(entry_px * sh, True)
                             cash -= cost
                             locked_shares += sh
                             pnl = proceeds - cost
@@ -336,7 +349,7 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
 
             # 正T：先买入（用现金），后从底仓卖出
             if buy_sig:
-                cost = px * sh * (1 + COMMISSION + SLIPPAGE)
+                cost = px * sh + _fee(px * sh, False)
                 if cash >= cost:
                     cash -= cost
                     open_leg = {"side": "buy", "price": px,
@@ -344,8 +357,7 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
             # 反T：先卖底仓，后买回
             elif sell_sig:
                 if base_shares >= sh:
-                    proceeds = px * sh * (
-                        1 - COMMISSION - STAMP_TAX - SLIPPAGE)
+                    proceeds = px * sh - _fee(px * sh, True)
                     base_shares -= sh
                     cash += proceeds
                     open_leg = {"side": "sell", "price": px,

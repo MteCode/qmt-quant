@@ -49,13 +49,30 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+
 MODEL_DIR = ROOT / "models" / "intraday_gbm"
 OUT_DIR = MODEL_DIR / "backtest"
 
-# 交易成本：券商佣金万 2.5（双边）+ 印花税千 1（卖出）+ 滑点万 5
-COMMISSION = 0.00025
-STAMP_TAX = 0.001
-SLIPPAGE = 0.0005
+#: 成本走 qmtquant.core.costs 这一个事实源。此前本文件自己定义
+#: COMMISSION/STAMP_TAX/SLIPPAGE，与另外 7 个文件各写各的，
+#: 出现过佣金三个版本、印花税全部用 2023-08-28 减半前的旧值、
+#: 过户费全体漏算，且**没有一处施加券商的 5 元最低佣金**。
+#:
+#: 原先的写法是 `金额 * (1 ± 费率)` —— 这个乘法式结构上就表达不了
+#: 一个固定下限，所以最低佣金不是"忘了加"，是加不进去。
+#: 改成 `金额 ± _fee(金额, 是否卖出)`。
+COST = DEFAULT_COST
+COMMISSION = COST.commission_rate
+STAMP_TAX = COST.stamp_tax_rate
+SLIPPAGE = COST.slippage_rate
+MIN_COMMISSION = COST.commission_min
+
+
+def _fee(amount: float, is_sell: bool) -> float:
+    """单笔费用 + 滑点。含 5 元最低佣金 —— 单笔低于 58,548 元就触发，
+    而做 T 的单笔几乎全在这条线以下。"""
+    return COST.cost(amount, is_sell)
 
 MODES = ["t_plus_0", "mean_reversion", "momentum"]
 
@@ -239,10 +256,8 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                         should_exit, reason = True, "回归到位"
 
                 if should_exit:
-                    proceeds = price * pos["vol"] * (
-                        1 - COMMISSION - STAMP_TAX - SLIPPAGE)
-                    cost = pos["entry"] * pos["vol"] * (
-                        1 + COMMISSION + SLIPPAGE)
+                    proceeds = price * pos["vol"] - _fee(price * pos["vol"], True)
+                    cost = pos["entry"] * pos["vol"] + _fee(pos["entry"] * pos["vol"], False)
                     cash += proceeds
                     trades.append({
                         "day": str(pd.Timestamp(day).date()),
@@ -294,7 +309,7 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                 vol = int(per_size / price / 100) * 100
                 if vol < 100:
                     continue
-                cost = price * vol * (1 + COMMISSION + SLIPPAGE)
+                cost = price * vol + _fee(price * vol, False)
                 if cost > cash:
                     continue
                 cash -= cost
@@ -311,9 +326,8 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                     price = float(r["close"])
                 else:
                     price = pos["entry"]
-                proceeds = price * pos["vol"] * (
-                    1 - COMMISSION - STAMP_TAX - SLIPPAGE)
-                cost = pos["entry"] * pos["vol"] * (1 + COMMISSION + SLIPPAGE)
+                proceeds = price * pos["vol"] - _fee(price * pos["vol"], True)
+                cost = pos["entry"] * pos["vol"] + _fee(pos["entry"] * pos["vol"], False)
                 cash += proceeds
                 trades.append({
                     "day": str(pd.Timestamp(day).date()),
