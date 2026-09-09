@@ -73,6 +73,31 @@ def test_成交量取增量而非累计():
     assert done.volume == pytest.approx(800), "应为增量 5800-5000"
 
 
+def test_跨bar成交量不重复计入():
+    """曾经 _last_volume 只在跨分钟时更新，导致新 bar 的第一个 tick
+    用上一根 bar 起始处的基准计算增量 —— 把上一根 bar 的量整体重复计入。
+    例如累计量 5000→5800→6200，bar1 应为 800，bar2 应为 400，
+    而旧代码给 bar2 的是 6200-5000=1200。"""
+    agg = BarAggregator()
+    t0 = datetime(2026, 9, 8, 10, 0, 0)
+    t1 = t0 + timedelta(minutes=1)
+    t2 = t1 + timedelta(minutes=1)
+    # bar1: 两个 tick，累计量从 5000 到 5800
+    agg.update(_tick("000001", t0, 10.0, vol=5000))
+    agg.update(_tick("000001", t0.replace(second=30), 10.0, vol=5800))
+    # bar2 第一个 tick: 累计量到 6200 → 触发 bar1 收口
+    bar1 = agg.update(_tick("000001", t1, 10.0, vol=6200))
+    assert bar1 is not None
+    assert bar1.volume == pytest.approx(800), "bar1 应为 5800-5000=800"
+    # bar2 再来一个 tick: 累计量到 6500
+    agg.update(_tick("000001", t1.replace(second=30), 10.0, vol=6500))
+    # bar3 触发 bar2 收口
+    bar2 = agg.update(_tick("000001", t2, 10.0, vol=7000))
+    assert bar2 is not None
+    assert bar2.volume == pytest.approx(700), \
+        f"bar2 应为 6500-5800=700，实际 {bar2.volume}（若为 1500 则是重复计入了 bar1 的量）"
+
+
 def test_多标的互不干扰():
     agg = BarAggregator()
     base = datetime(2026, 9, 8, 10, 0, 0)

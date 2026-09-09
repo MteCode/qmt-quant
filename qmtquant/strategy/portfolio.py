@@ -125,12 +125,24 @@ class PortfolioStrategy(StrategyBase):
             self.buy(vt_symbol, bar.close_price * (1 + self.price_buffer), volume)
 
     def _estimate_total_value(self, bars: dict[str, BarData]) -> float:
-        """现金 + 持仓市值。持仓无当日行情时按成本价估。"""
+        """现金 + 持仓市值。
+
+        持仓没有当日行情（停牌、数据缺失）的标的无法估价，
+        会导致总资产被低估 → 每只目标的买入金额偏小。
+        """
         value = self.get_cash()
+        missing = []
         for vt_symbol, volume in self.pos.items():
             if volume <= 0:
                 continue
             bar = bars.get(vt_symbol)
             if bar is not None:
                 value += volume * bar.close_price
+            else:
+                missing.append(vt_symbol)
+        if missing:
+            logger.warning(
+                "[%s] %d 只持仓无当日行情，总资产估值偏低: %s",
+                self.strategy_name if hasattr(self, 'strategy_name') else '?',
+                len(missing), missing[:5])
         return value

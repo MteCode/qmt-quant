@@ -87,13 +87,16 @@ class BarAggregator:
         # tick 里的 volume 是当日累计，bar 要的是本根增量。
         # 首个 tick 拿不到基准，记下当前值、本根成交量记 0 —— 这样
         # 只是第一根 bar 的量偏小，比用累计值当增量（会大出几个数量级）安全。
+        #
+        # 每个 tick 都累加增量并更新基准。之前只在跨分钟时更新基准，
+        # 导致新 bar 的第一个 tick 用的还是上一根 bar 的起始基准，
+        # 新 bar 的 volume 会把上一根 bar 的量整体重复计入。
         vol, tov = tick.volume or 0, tick.turnover or 0
         if vt in self._last_volume:
-            cur.volume = max(0.0, vol - self._last_volume[vt])
-            cur.turnover = max(0.0, tov - self._last_turnover[vt])
-        if finished is not None or vt not in self._last_volume:
-            self._last_volume[vt] = vol
-            self._last_turnover[vt] = tov
+            cur.volume += max(0.0, vol - self._last_volume[vt])
+            cur.turnover += max(0.0, tov - self._last_turnover[vt])
+        self._last_volume[vt] = vol
+        self._last_turnover[vt] = tov
 
         return finished
 
