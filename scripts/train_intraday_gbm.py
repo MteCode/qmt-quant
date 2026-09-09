@@ -97,7 +97,10 @@ def collect_data(clean_dir: Path, max_symbols: int, min_bars: int,
 
     import gc
     # 每个标的：计算特征→转 float32→只保留 features+symbol+label 列
-    keep_cols = list(feature_cols or []) + ["close"]
+    # 保留 symbol：标签要靠它识别跨标的边界（见 train() 里的屏蔽逻辑）。
+    # 存成 category，270M 行下只多几十 MB，而没有它就只能漏掉那部分
+    # 垃圾标签 —— 量小，但没有理由留着。
+    keep_cols = list(feature_cols or []) + ["close", "symbol"]
 
     def _process_batch(batch):
         # 逐个：转 float32 + 只保留需要的列（在 concat 前处理省内存）
@@ -108,6 +111,8 @@ def collect_data(clean_dir: Path, max_symbols: int, min_bars: int,
             for c in sub.columns:
                 if sub[c].dtype == np.float64:
                     sub[c] = sub[c].astype(np.float32)
+            if "symbol" in sub.columns:
+                sub["symbol"] = sub["symbol"].astype("category")
             processed.append(sub)
         return pd.concat(processed, axis=0)
 
@@ -161,6 +166,50 @@ def collect_data(clean_dir: Path, max_symbols: int, min_bars: int,
     return df
 
 
+def make_labels(close: np.ndarray, day_codes: np.ndarray,
+                sym_codes: np.ndarray | None, horizon: int,
+                threshold: float) -> tuple:
+    """算标签，并屏蔽跨日/跨标的的越界取值。
+
+    抽成独立函数是为了能测 —— train() 要 GB 级数据和一个模型才能跑，
+    边界情况在那个粒度上覆盖不到，而边界正是这里唯一会出错的地方。
+
+    ## 屏蔽什么
+
+    df 是全市场拼成的长表，按标的分块（concat 不排序），块内按时间。
+    所以 close[i + horizon] 有两种取错：
+
+    1. **跨标的**：每只最后 horizon 行取到下一只股票的价格。占比 0.004%，
+       但标的间价格量级差很多，算出的「收益率」是几百倍的异常值，
+       不是噪声。
+
+    2. **跨日**：每日最后 horizon 根取到次日价格，「未来收益」跨越隔夜
+       跳空。horizon=15 时占 6.20%（241 根/日）。而策略是尾盘强平不留
+       隔夜的 —— 这些样本教模型去学一段它永远不可能交易的收益，
+       且系统性地集中在尾盘，正是该平仓的时候。
+
+    :returns: (y, has_label, n_dropped)
+    """
+    n = len(close)
+    fut = np.empty(n, dtype=np.float64)
+    fut[:] = np.nan
+    fut[:-horizon] = close[horizon:] / close[:-horizon] - 1
+
+    same_day = np.zeros(n, dtype=bool)
+    same_day[:-horizon] = day_codes[horizon:] == day_codes[:-horizon]
+
+    if sym_codes is None:
+        same_sym = np.ones(n, dtype=bool)
+    else:
+        same_sym = np.zeros(n, dtype=bool)
+        same_sym[:-horizon] = sym_codes[horizon:] == sym_codes[:-horizon]
+
+    labelled = ~np.isnan(fut)
+    has_label = labelled & same_day & same_sym
+    y = (fut > threshold).astype(np.int8)
+    return y, has_label, int(labelled.sum() - has_label.sum())
+
+
 def train(df: pd.DataFrame, features: list[str],
           horizon: int, threshold: float,
           params: dict) -> dict:
@@ -168,14 +217,19 @@ def train(df: pd.DataFrame, features: list[str],
     from lightgbm import LGBMClassifier
     from sklearn.metrics import accuracy_score, roc_auc_score
 
-    # 标签：未来 horizon bar 收益率是否超过阈值
+    # 标签与边界屏蔽见 make_labels()（抽出来是为了能单独测边界）
     close = df["close"].values.astype(np.float64)
-    future_ret = np.empty(len(close), dtype=np.float64)
-    future_ret[:] = np.nan
-    future_ret[:-horizon] = close[horizon:] / close[:-horizon] - 1
-    y_all = (future_ret > threshold).astype(np.int8)
-    has_label = ~np.isnan(future_ret)
-    del close, future_ret
+    day_codes = pd.factorize(df.index.normalize())[0]
+    sym_codes = (pd.factorize(df["symbol"].values)[0]
+                 if "symbol" in df.columns else None)
+    if sym_codes is None:
+        print("  [!] 无 symbol 列，跨标的边界无法屏蔽（约 0.004% 的行）")
+
+    y_all, has_label, n_drop = make_labels(
+        close, day_codes, sym_codes, horizon, threshold)
+    print(f"  标签：屏蔽跨日/跨标的越界 {n_drop:,} 行 "
+          f"（{n_drop / max(1, len(close)):.2%}）")
+    del close, day_codes, sym_codes
 
     # 按日期分割：前 70% 的天数做训练
     day_vals = df.index.normalize()
