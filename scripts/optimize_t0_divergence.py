@@ -450,9 +450,20 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     vol_ = float(rets.std() * np.sqrt(244)) if nd > 1 else 0.0
     shp = float(ann / vol_) if vol_ > 1e-9 else 0.0
 
+    # 纯持有基准必须和做 T 那一边用**同一套建仓口径**。
+    #
+    # 我修零头时只改了模拟路径（cash = cash_value + 零头），漏了这里，
+    # 于是做 T 那边白拿一笔现金而基准没有。底仓 4 万时零头 4,488 元
+    # = 总资金的 2.24%，直接把 t_vs_buyhold 从 -4.15% "翻正"到 +1.06%，
+    # 看起来像做 T 突然有了价值。而同一份结果里 t_annual 始终是 -1.21%
+    # —— 做 T 亏钱却让账户跑赢基准，这个自相矛盾本该立刻提示我。
+    #
+    # 口径不一致的对照组比没有对照组更危险：它给出一个具体的、
+    # 方向错误的数字。
     bh_sh = int(base_value / first_px / LOT) * LOT
+    bh_residual = base_value - bh_sh * first_px
     lpx = float(dl["close"].iloc[-1])
-    bh = (cash_value + bh_sh * lpx) / init - 1
+    bh = (cash_value + bh_residual + bh_sh * lpx) / init - 1
     bh_ann = (1 + bh) ** af - 1 if bh > -1 else -1
     t_ret = t_pnl / init
 

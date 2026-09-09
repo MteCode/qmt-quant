@@ -130,3 +130,51 @@ class TestSimulateConservation:
         bh = alloc.buyhold(bars, base, cash)
         assert r["max_drawdown"] == pytest.approx(
             bh["max_drawdown"], abs=1e-4)
+
+
+class TestInternalBenchmarkConsistency:
+    """simulate() 自己算的纯持有基准，必须和它模拟的那条路径同口径。
+
+    这条是补一个我自己制造的洞：修零头时只改了模拟路径
+    （cash = cash_value + 零头），漏了 simulate() 内部的 buyhold_annual。
+    做 T 那边白拿一笔现金而基准没有 —— 底仓 4 万时零头 4,488 元
+    = 总资金的 2.24%，把 t_vs_buyhold 从 -4.15% "翻正"到 +1.06%，
+    看起来像做 T 突然有了价值。
+
+    同一份结果里 t_annual 一直是 -1.21%：做 T 亏钱却让账户跑赢基准，
+    这个自相矛盾本该立刻提示我。
+
+    上一组测试没抓到，因为它比的是 simulate().total_return 与**外部**
+    buyhold()，而不是 simulate() 内部那个 buyhold_annual 字段。
+    口径不一致的对照组比没有对照组更危险：它给出一个具体的、
+    方向错误的数字。
+    """
+
+    @pytest.mark.parametrize("base,cash", BASE_CASH)
+    def test_internal_benchmark_matches_external(self, engine, alloc, bars,
+                                                 base, cash):
+        r = engine.simulate(bars, base, cash, "corr", 0.999, 99.0,
+                            0.006, 0.012, 1, 575, 890, 30, False)
+        if "error" in r:
+            pytest.skip(r["error"])
+        bh = alloc.buyhold(bars, base, cash)
+        assert r["buyhold_annual"] == pytest.approx(
+            bh["annual_return"], abs=1e-4), (
+            f"simulate 内部基准 {r['buyhold_annual']:.4%} 与外部 buyhold "
+            f"{bh['annual_return']:.4%} 不一致 —— 两边建仓口径不同")
+
+    @pytest.mark.parametrize("base,cash", BASE_CASH)
+    def test_zero_trade_run_equals_its_own_benchmark(self, engine, bars,
+                                                     base, cash):
+        """不做任何交易时，账户年化必须等于自己算的纯持有基准。
+
+        这是最直接的自洽检查：一笔都没做，怎么可能跑赢或跑输纯持有。
+        """
+        r = engine.simulate(bars, base, cash, "corr", 0.999, 99.0,
+                            0.006, 0.012, 1, 575, 890, 30, False)
+        if "error" in r or r["n_trades"]:
+            pytest.skip("需要零交易的对照")
+        assert r["annual_return"] == pytest.approx(
+            r["buyhold_annual"], abs=1e-4), (
+            f"零交易时账户年化 {r['annual_return']:.4%} != 内部基准 "
+            f"{r['buyhold_annual']:.4%}")
