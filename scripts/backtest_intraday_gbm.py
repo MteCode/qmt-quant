@@ -93,6 +93,7 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
     返回列：datetime(index), symbol, close, prob_up, day_ret, vol_z,
              vwap_gap, day (日期)
     """
+    from qmtquant.datafeed.adjust import adj_factor, real_price
     from qmtquant.features.intraday import (INTRADAY_FEATURES,
                                             compute_features_for_symbol)
 
@@ -124,6 +125,7 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
     MAX_PRICE = 500.0
     keep = ["close", "day_ret", "vol_z_30", "vwap_gap"]
     chunks, batch = [], []
+    factors: dict[str, float | None] = {}
     skipped = n_ok = 0
     t0 = time.time()
 
@@ -132,7 +134,12 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
         if feat is None or len(feat) < min_bars:
             skipped += 1
             continue
-        if feat["close"].iloc[-1] > MAX_PRICE:
+        # 与训练一致：按**真实价**判 1 手 > 5 万，不是后复权价。
+        # 后复权因子 1.6~280 不等，按 close 过滤会误排便宜的老蓝筹。
+        px = real_price(feat)
+        if px is None:
+            px = float(feat["close"].iloc[-1])
+        if px > MAX_PRICE:
             skipped += 1
             continue
 
@@ -154,6 +161,9 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
                 sub[c] = sub[c].astype(np.float32)
         sub["prob_up"] = prob
         sub["symbol"] = vt
+        # 复权因子：整手取整要作用在真实股数上（见 datafeed/adjust.py）。
+        # 取不到就记 None，下游退回按后复权价取整并计数。
+        factors[vt] = adj_factor(feat)
         batch.append(sub)
         n_ok += 1
 
@@ -172,9 +182,13 @@ def collect_scored(clean_dir: Path, model_data: dict, max_symbols: int,
     del chunks
     df["day"] = df.index.normalize()
     df.sort_index(inplace=True)
+    n_nf = sum(1 for v in factors.values() if v is None)
     print(f"  完成：{n_ok} 只标的，{len(df):,} 条打分，跳过 {skipped} 只，"
           f"耗时 {time.time()-t0:.0f}s")
-    return df
+    if n_nf:
+        print(f"  [!] {n_nf} 只反推不出复权因子，整手取整退回按后复权价 —— "
+              f"这些标的可能被算成不足一手而跳过")
+    return df, factors
 
 
 def _time_of_day(idx: pd.DatetimeIndex) -> pd.Series:
@@ -185,7 +199,8 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
              max_positions: int, prob_buy: float, prob_sell: float,
              max_intraday_loss: float, entry_min: int, exit_min: int,
              vol_z_threshold: float, vwap_deviation: float,
-             max_drawdown_stop: float) -> dict:
+             max_drawdown_stop: float,
+             factors: dict | None = None) -> dict:
     """按 mode 跑一遍日内回测。
 
     逐日推进：每天在时间窗内按分钟遍历，选股/开仓/止损/尾盘平仓。
@@ -305,9 +320,15 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                 price = float(row["close"])
                 if price <= 0:
                     continue
-                # A 股 100 股一手
-                vol = int(per_size / price / 100) * 100
-                if vol < 100:
+                # A 股 100 股一手 —— 一手是 100 **真实**股。
+                # price 是后复权价，直接按它取整，高因子的标的会被算成
+                # 不足一手而静默跳过（实测 2 万/票时剔除 10.3%）。
+                # 按真实股数取整，再换算回后复权口径，这样
+                # price * vol 仍然是正确的金额。
+                f = (factors or {}).get(sym) or 1.0
+                real_vol = int(per_size / price * f / 100) * 100
+                vol = real_vol / f
+                if real_vol < 100:
                     continue
                 cost = price * vol + _fee(price * vol, False)
                 if cost > cash:
@@ -474,7 +495,7 @@ def main() -> int:
     print(f"  模型: horizon={model_data.get('horizon')} "
           f"threshold={model_data.get('threshold')}")
 
-    df = collect_scored(
+    df, factors = collect_scored(
         store / "clean" if (store / "clean" / "1m").exists() else store,
         model_data, args.max_symbols, args.min_bars, args.start, args.end)
 
@@ -489,7 +510,7 @@ def main() -> int:
             df, mode, args.capital, args.max_positions,
             args.prob_buy, args.prob_sell, args.max_intraday_loss,
             _tomin(args.entry_time), _tomin(args.exit_time),
-            args.vol_z, args.vwap_dev, args.max_drawdown_stop)
+            args.vol_z, args.vwap_dev, args.max_drawdown_stop, factors=factors)
 
         if "error" in r:
             print(f"  {r['error']}")

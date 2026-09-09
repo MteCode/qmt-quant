@@ -53,6 +53,7 @@ def collect_data(clean_dir: Path, max_symbols: int, min_bars: int,
                  exchanges: list[str] | None = None,
                  feature_cols: list[str] | None = None) -> pd.DataFrame:
     """从清洗层收集全市场 1m 数据并计算特征。"""
+    from qmtquant.datafeed.adjust import real_price  # noqa: E402
     from qmtquant.features.intraday import compute_features_for_symbol
 
     src = clean_dir / "1m"
@@ -110,15 +111,30 @@ def collect_data(clean_dir: Path, max_symbols: int, min_bars: int,
             processed.append(sub)
         return pd.concat(processed, axis=0)
 
-    MAX_PRICE = 500.0  # 1 手 > 5 万的过滤掉
+    MAX_PRICE = 500.0  # 真实价 > 500 即 1 手 > 5 万
+    #: 反推不出真实价、只能按后复权价过滤的标的数。
+    #: 不为零说明这批标的的过滤仍可能误判。
+    n_no_factor = 0
 
     for i, (path, vt) in enumerate(files, 1):
         feat = compute_features_for_symbol(path, vt)
         if feat is None or len(feat) < min_bars:
             skipped += 1
             continue
-        # 过滤高股价：最新收盘价 > 500 元（1 手 > 5 万）
-        if "close" in feat.columns and feat["close"].iloc[-1] > MAX_PRICE:
+        # 过滤高股价：1 手 > 5 万，即**真实价** > 500 元。
+        #
+        # 原先写的是 `feat["close"].iloc[-1] > MAX_PRICE`，而 close 是
+        # **后复权价**。复权因子从 1.6 到 280 不等，于是这条过滤把
+        # 海尔智家（21 元）、新和成（26 元）、北方稀土（40 元）这些
+        # 便宜的老蓝筹排除了 —— 它们只是分红送转多、因子高。
+        # 实测 500 只里误排 11 只，而真正该排的只有 1 只。
+        #
+        # 模型因此从一开始就没见过这批标的。
+        px = real_price(feat)
+        if px is None:
+            px = float(feat["close"].iloc[-1])   # 退化：仍按后复权价
+            n_no_factor += 1
+        if px > MAX_PRICE:
             skipped += 1
             continue
         batch.append(feat)
