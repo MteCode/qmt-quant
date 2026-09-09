@@ -296,8 +296,14 @@ class BacktestEngine:
                     self._reject(req, "限价高于开盘价，未成交")
                     continue
 
-            # 成交价 = 开盘价 + 滑点（买入向上、卖出向下）
-            slip = self.cost.slippage_tick * 0.01
+            # 成交价 = 开盘价 + 滑点（买入向上、卖出向下）。
+            #
+            # 用**相对**滑点而非绝对 tick：本地行情是后复权价，
+            # 复权因子从 1.6 到 104 不等，把 0.01 元加到后复权价上，
+            # 对平安银行只滑了真实价的百分之一个 tick，
+            # 且低估倍数因股而异 —— 不同标的的回测成本互相不可比。
+            # 相对值施加在后复权价和真实价上效果相同，绕开了这个问题。
+            slip = bar.open_price * self.cost.slippage_rate
             price = bar.open_price + (slip if req.direction == Direction.LONG else -slip)
             price = max(min(price, limit_up), limit_down)
             self._fill(req, price)
