@@ -180,6 +180,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
         t_shares = LOT
 
     t_pnl_total = 0.0        # 纯做 T 收益（不含底仓涨跌）
+    #: 尾盘没能平掉的腿数。不为零说明底仓或现金不足以支撑设定的单笔股数，
+    #: 回测的持仓路径与设想不符，必须暴露出来而不是静默丢弃。
+    n_unclosed = 0
     trades = []
     daily = []
 
@@ -210,8 +213,19 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
             t = ts_a[k]
 
             # ---------- 尾盘强制平掉未完成的腿 ----------
+            #
+            # 这里原先无论平没平掉都执行 `open_leg = None`，两条路径都会
+            # 静默丢状态，且方向相反（与 optimize_t0_divergence 是同一个
+            # bug，那边已修）：
+            #   正T 买进的股票只活在 open_leg 里，从未计入 base_shares 或
+            #        locked_shares。丢弃 = 整笔市值凭空消失，**低估**权益。
+            #   反T 卖出的底仓已经出账，买不回来就是永久减仓。丢弃 =
+            #        持仓一天天漂没，且不记为亏损。
+            # base_shares 在一天内会被反T 开腿压低，所以
+            # max_trades > 1 时这两条路径真的会触发。
             if tmin >= exit_min:
                 if open_leg is not None:
+                    closed = False
                     if open_leg["side"] == "buy":
                         # 已买入，需卖出等量底仓平掉
                         sh = open_leg["shares"]
@@ -234,6 +248,7 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                                     px / open_leg["price"] - 1, 5),
                                 "reason": "尾盘平仓"})
                             day_trades += 1
+                            closed = True
                     else:
                         # 已卖出底仓，需买回
                         sh = open_leg["shares"]
@@ -255,6 +270,14 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
                                     open_leg["price"] / px - 1, 5),
                                 "reason": "尾盘买回"})
                             day_trades += 1
+                            closed = True
+
+                    if not closed:
+                        if open_leg["side"] == "buy":
+                            # 买进的股票是真实存在的，只是当天卖不掉。
+                            # 归入 locked_shares，隔夜并入底仓，不记 T 盈亏。
+                            locked_shares += sh
+                        n_unclosed += 1
                     open_leg = None
                 continue
 
@@ -426,6 +449,7 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
         "trades_per_day": round(len(tdf) / n_days, 2),
         "win_rate": round(win_rate, 4),
         "t_pnl": round(t_pnl_total, 2),
+        "n_unclosed": n_unclosed,
         "t_return": round(t_ret, 4),
         "t_annual": round(float((1 + t_ret) ** ann_factor - 1), 4)
         if t_ret > -1 else -1,
