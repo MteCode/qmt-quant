@@ -72,8 +72,17 @@ backtest:
   interval: 1d
   benchmark: "000300.SSE"
 
+# 告警：把 ERROR 及以上的日志推到群机器人。
+# 覆盖的是真出事的场景 —— 网关断开、报单被拒、行情停推、重连达上限
+# 进入只读、对账查不到资金。这些事常发生在无人值守时段。
+#
+# 只在实盘入口生效（run_live.py）。下载与训练脚本不推 ——
+# 那时人就在跟前，推了反而会淹掉真正要紧的告警。
+#
+# 同一条消息 5 分钟内只发一次，每分钟最多 10 条（重连循环会连续刷同
+# 一条 error，不限流会触发 webhook 频控，之后真正重要的反而发不出去）。
 notify:
-  enabled: false
+  enabled: false            # 外发有副作用，默认关；填了 webhook 也要显式打开
   channel: wecom            # wecom / dingtalk
   webhook: ""               # 机器人 webhook，属于 secret，勿提交
 

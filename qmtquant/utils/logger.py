@@ -13,8 +13,14 @@ _FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 TRADE_LOGGER_NAME = "qmtquant.trade"
 
 
-def setup_logging(log_dir: str | Path, level: str = "INFO") -> None:
-    """配置根日志与交易日志，按日切分保留 90 天"""
+def setup_logging(log_dir: str | Path, level: str = "INFO",
+                  cfg=None) -> None:
+    """配置根日志与交易日志，按日切分保留 90 天。
+
+    传入 cfg 时按 cfg.notify 挂告警通道（默认关闭，见 utils/notify.py）。
+    只有实盘/长期运行的入口需要传 —— 下载与训练脚本出错时人就在跟前，
+    往群里推一条没有意义，反而会把真正要紧的告警淹掉。
+    """
     log_dir = Path(log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -43,6 +49,11 @@ def setup_logging(log_dir: str | Path, level: str = "INFO") -> None:
     trade_logger.addHandler(trade_handler)
     # 交易日志同时进主日志，方便实时观察
     trade_logger.propagate = True
+
+    if cfg is not None:
+        # 放在最后：前面的 handlers.clear() 会把它清掉
+        from .notify import attach_notifier
+        attach_notifier(cfg)
 
 
 def get_trade_logger() -> logging.Logger:

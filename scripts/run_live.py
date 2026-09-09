@@ -113,7 +113,7 @@ def main() -> int:
     args = parser.parse_args()
 
     cfg = get_config()
-    setup_logging(LOG_DIR, cfg.log_level)
+    setup_logging(LOG_DIR, cfg.log_level, cfg)
 
     gateway_name = args.gateway or cfg.gateway.name
     if gateway_name == "miniqmt" and not cfg.gateway.account_id:
