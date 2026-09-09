@@ -60,7 +60,17 @@ def buyhold(d: pd.DataFrame, base_value: float, cash_value: float) -> dict:
     last_idx = np.r_[np.where(day[:-1] != day[1:])[0], len(px) - 1]
     closes = px[last_idx]
     shares = int(base_value / px[0] / 100) * 100
-    eq = cash_value + shares * closes
+    # 整手取整剩下的零头是**现金**，不是消失了。
+    # 原先写 `eq = cash_value + shares * closes`，把它直接删掉 ——
+    # 零头占比随仓位变化：20 万底仓时 2.34%，2 万底仓时 11.22%，
+    # 而这个脚本研究的正是仓位这一维，等于给小仓位额外扣了一笔钱，
+    # 把前沿的形状压歪了。
+    #
+    # 不收建仓费用：底仓是用户已有的持仓（成本价 10.8），
+    # 不是现在拿现金去买的。做 T 组与纯持有组从同一个持仓出发，
+    # 建仓成本在两边都不发生。
+    residual = base_value - shares * px[0]
+    eq = cash_value + residual + shares * closes
     init = base_value + cash_value
     if init <= 0:
         return {}

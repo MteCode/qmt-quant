@@ -233,7 +233,11 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     base_shares = int(base_value / first_px / LOT) * LOT
     if base_shares < LOT:
         return {"error": "底仓资金不足一手"}
-    cash = cash_value
+    # 整手取整剩下的零头是现金。原先直接 `cash = cash_value` 把它吞了，
+    # 而零头占底仓的比例随仓位变化（20 万时 2.34%，2 万时 11.22%），
+    # 于是小底仓配置被额外扣掉一笔钱。做 T 组和纯持有组必须用同一套
+    # 口径，否则两者的比较本身就是错的。
+    cash = cash_value + (base_value - base_shares * first_px)
     locked = 0
     # 单次做 T 的股数，受两边同时约束：
     #   - 现金：正T 要先买入，买不起就开不了仓

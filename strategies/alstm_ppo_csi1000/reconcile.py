@@ -46,19 +46,88 @@ RECON_DIR = paths.STRATEGY_DIR / "reconcile"
 
 
 def load_intent(date: str) -> list:
-    """读当日的下单意图。"""
+    """读当日的下单意图。
+
+    ## 这个函数曾经永远返回空
+
+    它原先 glob 的是 `*{date}*.json`，而 paper_trade.py 写的是
+    `executions/exec_{date}.csv`（见 paths.execution_file）。格式对不上，
+    glob 恒不匹配，函数恒返回 []。
+
+    而 intent 在对账里只有一个用途：算 `missing` ——
+    「我下了单，但券商侧查无此单」。这是对账里最重要的一条安全检查，
+    委托丢了却没人知道是实盘最坏的失败模式之一。它一直是死的，
+    而且表现为「一切正常」：missing 永远是空列表。
+
+    第二处不匹配：CSV 里是 `vt_symbol`（688403.SSE），
+    而 reconcile() 里比对的是 `xt_code`（688403.SH）。
+    就算格式改对了，字段名也对不上，missing 仍然恒空。
+
+    ## 只对账真正发出去的单
+
+    执行记录里包含预览模式的行（mode=预览 / result=已预览），
+    那些委托从未提交给券商，拿它们算 missing 会得到一堆假异常，
+    很快就会让人学会忽略这个字段 —— 和恒空一样没用。
+
+    ## 读不出来要吵
+
+    目录里有文件却一行都解析不出，说明格式又变了。这时静默返回 []
+    会让对账继续报「一切正常」，正是原来那个 bug 的形态。
+    所以这里显式抛错，宁可对账跑不完，也不要一个永远通过的对账。
+    """
+    import csv
+
+    from qmtquant.utils.symbol import to_xt_symbol
+
     d = paths.STRATEGY_DIR / "executions"
     if not d.exists():
         return []
-    out = []
-    for p in sorted(d.glob(f"*{date}*.json")):
-        try:
-            data = json.loads(p.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        orders = data.get("orders") or data.get("sent") or []
-        for o in orders:
-            out.append({**o, "_file": p.name})
+
+    files = sorted(d.glob(f"*{date}*.csv")) + sorted(d.glob(f"*{date}*.json"))
+    if not files:
+        return []
+
+    out, unparsed = [], []
+    for p in files:
+        rows = []
+        if p.suffix == ".json":
+            # 旧格式，保留兼容：曾经写过 {"orders": [...]} 的快照
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                rows = data.get("orders") or data.get("sent") or []
+            except (OSError, ValueError):
+                unparsed.append(p.name)
+                continue
+        else:
+            try:
+                with p.open(encoding="utf-8-sig", newline="") as f:
+                    rows = list(csv.DictReader(f))
+            except (OSError, csv.Error):
+                unparsed.append(p.name)
+                continue
+
+        for o in rows:
+            # 预览模式的委托从未提交给券商，不该参与对账
+            mode = str(o.get("mode", "")).strip()
+            result = str(o.get("result", "")).strip()
+            if mode == "预览" or result == "已预览":
+                continue
+
+            vt = o.get("vt_symbol") or o.get("symbol") or ""
+            xt = o.get("xt_code") or ""
+            if not xt and vt:
+                try:
+                    xt = to_xt_symbol(vt)
+                except (KeyError, ValueError):
+                    xt = ""
+            out.append({**o, "vt_symbol": vt, "xt_code": xt,
+                        "_file": p.name})
+
+    if unparsed and not out:
+        raise RuntimeError(
+            f"executions/ 下有 {len(unparsed)} 个文件但一行都解析不出："
+            f"{', '.join(unparsed)}。对账的 missing 检查会因此恒空 —— "
+            f"那正是「委托丢了没人知道」的样子，所以这里直接失败。")
     return out
 
 
