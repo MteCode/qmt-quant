@@ -4,7 +4,7 @@
 所有下单请求必须经过 `check()`，返回 (是否放行, 拒绝原因)。
 """
 import logging
-from datetime import date
+from datetime import date, datetime
 
 from ..config import RiskConfig
 from ..core.constants import Direction, RejectReason
@@ -20,9 +20,27 @@ trade_logger = get_trade_logger()
 class RiskManager:
     """下单前置风控 + 全局急停"""
 
-    def __init__(self, config: RiskConfig, event_engine: EventEngine | None = None) -> None:
+    def __init__(self, config: RiskConfig, event_engine: EventEngine | None = None,
+                 is_st=None) -> None:
         self.config = config
         self.event_engine = event_engine
+        #: ST 判定器 (vt_symbol, datetime) -> bool。
+        #:
+        #: config.forbid_st 此前是**死配置**：yaml 里写着 true、
+        #: RiskConfig 里定义了、测试里引用了，但 _do_check 从来没读过它。
+        #: 于是「实盘不碰 ST 股」这个保护根本不存在，而配置让人以为存在。
+        #: 与 NotifyConfig 是同一种病，但这个更危险 —— 它是风控。
+        #:
+        #: 取不到判定器时按「非 ST」放行，并在启动时告警：
+        #: 静默放行等于把保护关掉而不告诉任何人。
+        self._is_st = is_st
+        if config.forbid_st and is_st is None:
+            from ..engine.backtest_engine import _load_st_checker
+            self._is_st = _load_st_checker()
+            if self._is_st is None:
+                logger.warning(
+                    "forbid_st=true 但加载不到 ST 历史数据，"
+                    "ST 标的将不会被拦截 —— 请先跑 scripts/download_st_history.py")
 
         # 回撤控制：覆盖「连续阴跌」盲区 —— 每天亏 1% 连亏 20 天累计 18%，
         # 却一次都不会触及 3% 的日亏线
@@ -233,6 +251,17 @@ class RiskManager:
         # --- 黑名单
         if req.vt_symbol in cfg.blacklist and is_buy:
             return RejectReason.BLACKLIST
+
+        # --- ST 标的禁止买入（卖出始终放行，否则持有的 ST 股清不掉）
+        if is_buy and cfg.forbid_st and self._is_st is not None:
+            try:
+                if self._is_st(req.vt_symbol, datetime.now()):
+                    return RejectReason.ST_FORBIDDEN
+            except Exception:                        # noqa: BLE001
+                # 判定失败按放行处理，但要留痕 —— 静默放行会让
+                # 「ST 拦截生效中」和「拦截器一直在抛异常」长得一样
+                logger.warning("ST 判定失败，放行 %s", req.vt_symbol,
+                               exc_info=True)
 
         # --- 当日额度
         if self._order_count >= cfg.max_order_count_per_day:
