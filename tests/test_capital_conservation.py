@@ -178,3 +178,62 @@ class TestInternalBenchmarkConsistency:
             r["buyhold_annual"], abs=1e-4), (
             f"零交易时账户年化 {r['annual_return']:.4%} != 内部基准 "
             f"{r['buyhold_annual']:.4%}")
+
+
+@pytest.fixture(scope="module")
+def single():
+    return _load("t0single", "scripts/optimize_t0_600711.py")
+
+
+@pytest.fixture(scope="module")
+def single_bars(single):
+    """600711 脚本有自己的 prep()，产出的列与 divergence 不同 ——
+    用错 prep 会在 simulate 里 KeyError，而不是给出错误的数。"""
+    p = ROOT / "data" / "clean" / "1m" / "SSE" / "600711.parquet"
+    if not p.exists():
+        pytest.skip("缺 600711 分钟数据")
+    return single.prep(single.load_bars("600711", "SSE", None, None))
+
+
+class TestSingleStockScriptConsistency:
+    """optimize_t0_600711 是独立实现的模拟器，同样要自洽。
+
+    它原先两边**都**吞零头，所以 excess_vs_buyhold 无偏，
+    只是绝对收益整体偏低 —— 比 divergence 那个错轻，但会让
+    t0_single 与 t0_divergence 在管理台上并排显示时不可比。
+    """
+
+    @pytest.mark.parametrize("base,cash", BASE_CASH[1:])
+    def test_zero_trade_equals_benchmark(self, single, single_bars,
+                                         base, cash):
+        """一笔都没做时，账户收益必须等于它自己的纯持有对照组。"""
+        r = single.simulate(single_bars, base, cash, 0.99, 0.99, 1, 0.012,
+                            575, 890, False, 0.006, False)
+        if "error" in r:
+            pytest.skip(r["error"])
+        assert r["n_trades"] == 0, "阈值 0.99 不应产生交易"
+        assert r["total_return"] == pytest.approx(
+            r["buyhold_return"], abs=1e-6), (
+            f"零交易时账户 {r['total_return']:.4%} != 基准 "
+            f"{r['buyhold_return']:.4%} —— 两边建仓口径不一致")
+        assert r["excess_vs_buyhold"] == pytest.approx(0.0, abs=1e-6)
+
+    @pytest.mark.parametrize("base,cash", BASE_CASH[1:])
+    def test_two_engines_agree_on_buyhold(self, single, single_bars,
+                                          engine, bars, base, cash):
+        """两个独立实现的模拟器，纯持有收益应当一致。
+
+        纯持有只取决于价格和底仓规模，与各自的信号逻辑无关 ——
+        不一致就说明其中一个的建仓口径不对。而它们的结果会在管理台上
+        并排显示，读的人不会知道两栏用的是不同算法。
+        """
+        a = single.simulate(single_bars, base, cash, 0.99, 0.99, 1, 0.012,
+                            575, 890, False, 0.006, False)
+        b = engine.simulate(bars, base, cash, "corr", 0.999, 99.0,
+                            0.006, 0.012, 1, 575, 890, 30, False)
+        if "error" in a or "error" in b:
+            pytest.skip("数据不足")
+        assert a["buyhold_annual"] == pytest.approx(
+            b["buyhold_annual"], abs=1e-4), (
+            f"600711 算的纯持有年化 {a['buyhold_annual']:.4%}，"
+            f"divergence 算的 {b['buyhold_annual']:.4%}")

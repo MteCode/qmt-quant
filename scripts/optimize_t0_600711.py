@@ -171,7 +171,13 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     base_shares = int(base_value / first_px / LOT) * LOT
     if base_shares < LOT:
         return {"error": "底仓资金不足一手"}
-    cash = cash_value
+    # 整手取整剩下的零头是现金，不是消失了。零头占底仓的比例随仓位变化
+    # （20 万时 2.34%，2 万时 11.22%）。这里与下面的纯持有对照组必须
+    # 用同一套口径 —— 只改一边会让「做T vs 纯持有」的差异里混进
+    # 建仓方式的差异，而那正是这个脚本要下的结论。
+    # （optimize_t0_divergence 里就出过这个错：我只改了模拟路径没改基准，
+    #   把 t_vs_buyhold 从 -4.15% 「翻正」到 +1.06%。）
+    cash = cash_value + (base_value - base_shares * first_px)
     locked_shares = 0
 
     # 每次做 T 的股数：用现金能买的量，分 max_trades 份
@@ -430,7 +436,9 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     t_ret = t_pnl_total / init_equity
     base_ret = base_pnl / init_equity
     # 纯持有底仓（不做T）的对照组
-    bh_equity = cash_value + buy_hold_shares * last_px
+    # 对照组同样保留零头，与上面的建仓口径一致
+    bh_residual = base_value - buy_hold_shares * first_px
+    bh_equity = cash_value + bh_residual + buy_hold_shares * last_px
     bh_ret = bh_equity / init_equity - 1
     bh_ann = (1 + bh_ret) ** ann_factor - 1 if bh_ret > -1 else -1
 
