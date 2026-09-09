@@ -74,7 +74,17 @@ def buyhold_curve(d: pd.DataFrame, base_value: float,
     last_idx = np.r_[np.where(day[:-1] != day[1:])[0], len(px) - 1]
     closes = px[last_idx]
     shares = int(base_value / px[0] / 100) * 100
-    eq = cash_value + shares * closes
+    # 整手取整剩下的零头是现金，不是消失了。必须与做 T 那一边同口径 ——
+    # 这是同一个错误的**第三个实例**（optimize_t0_divergence 的模拟路径、
+    # 它的内部基准、这里各写了一遍纯持有）。前两处修好之后，
+    # t_vs_buyhold 仍然是 +1.06%，就是被这一处顶着。
+    #
+    # 一份结果里同时有 buyhold_annual=5.14%（来自 simulate 的内部基准，
+    # 已含零头）和 best_buyhold_under_constraint=2.87%（来自这里，不含），
+    # 两个都是「底仓 4 万纯持有」—— 差 2.27pp 正是零头。
+    # 同一个量在同一份 JSON 里有两个值，本身就是口径不一致的信号。
+    residual = base_value - shares * px[0]
+    eq = cash_value + residual + shares * closes
     init = base_value + cash_value
     total = eq[-1] / init - 1
     n = len(eq)

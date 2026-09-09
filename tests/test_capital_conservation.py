@@ -44,6 +44,11 @@ def engine():
 
 
 @pytest.fixture(scope="module")
+def constrained():
+    return _load("t0con", "scripts/optimize_t0_constrained.py")
+
+
+@pytest.fixture(scope="module")
 def alloc():
     return _load("alloc", "scripts/optimize_allocation.py")
 
@@ -237,3 +242,41 @@ class TestSingleStockScriptConsistency:
             b["buyhold_annual"], abs=1e-4), (
             f"600711 算的纯持有年化 {a['buyhold_annual']:.4%}，"
             f"divergence 算的 {b['buyhold_annual']:.4%}")
+
+
+class TestAllBuyholdImplementationsAgree:
+    """纯持有被**四个**地方各实现了一遍：
+
+        optimize_t0_divergence.simulate()   内部基准
+        optimize_t0_600711.simulate()       内部基准
+        optimize_t0_constrained.buyhold_curve()
+        optimize_allocation.buyhold()
+
+    同一件事写四遍，就会有四种口径。实际发生的：修零头时改了两处，
+    以为修完了；`t_vs_buyhold` 仍然 +1.06%，被第三处顶着 ——
+    而那份 JSON 里同时躺着 buyhold_annual=5.14% 和
+    best_buyhold_under_constraint=2.87%，两个都号称是「底仓 4 万纯持有」。
+
+    **同一个量在同一份结果里有两个值，本身就是口径不一致的信号。**
+    这条测试就是把那个信号变成一条会红的断言。
+    """
+
+    @pytest.mark.parametrize("base,cash", BASE_CASH[1:])
+    def test_three_engines_same_buyhold(self, engine, constrained, alloc,
+                                        bars, base, cash):
+        r = engine.simulate(bars, base, cash, "corr", 0.999, 99.0,
+                            0.006, 0.012, 1, 575, 890, 30, False)
+        if "error" in r:
+            pytest.skip(r["error"])
+        c = constrained.buyhold_curve(bars, base, cash)
+        a = alloc.buyhold(bars, base, cash)
+
+        vals = {
+            "divergence.simulate": r["buyhold_annual"],
+            "constrained.buyhold_curve": c["annual_return"],
+            "allocation.buyhold": a["annual_return"],
+        }
+        lo, hi = min(vals.values()), max(vals.values())
+        assert hi - lo < 1e-4, (
+            "同一个「纯持有年化」在不同实现里不一致: "
+            + "; ".join(f"{k}={v:.4%}" for k, v in vals.items()))
