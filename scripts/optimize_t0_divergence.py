@@ -506,6 +506,82 @@ def simulate(d: pd.DataFrame, base_value: float, cash_value: float,
     }
 
 
+
+def rolling_walkforward(d, combos, base, cash, em, xm,
+                        n_folds: int = 5, train_ratio: float = 0.6):
+    """滚动 walk-forward：多个不重叠的样本外区间，各自独立选参。
+
+    ## 为什么要替换原来的做法
+
+    原实现是**单次 50/50 切分**：前半段跑全部参数、按样本内排序取前 10、
+    在同一个后半段上各测一次，然后报「0/10 存活」。
+
+    那个数字看起来像 10 次独立检验，其实是 **10 组参数 × 1 个样本外区间**。
+    而且取出来的前 10 组往往是同一个参数区域的邻域点
+    （实测 t0_single 的 10 组里 momentum/max_trades/sell_gap 完全相同，
+    只在另外 3 个参数上微调）—— 它们一起失败本来就该预期，
+    不构成 10 个独立证据。
+
+    ## 这里怎么做
+
+    把时间切成 n_folds 段，每段内部再按 train_ratio 分训练/检验：
+
+        |--训练--|-检验-|--训练--|-检验-|--训练--|-检验-|...
+
+    每一折**独立**选出样本内最优的那一组参数，再在紧随其后的检验段上跑。
+    折与折之间的检验区间不重叠，所以「几折为正」才是几次独立观测。
+
+    每折只取样本内第 1 名，不取前 10 —— 取前 10 会把同一区域的邻域点
+    重复计数，让分母虚高。
+    """
+    days = pd.DatetimeIndex(d["day"].unique()).sort_values()
+    n = len(days)
+    if n < n_folds * 10:
+        return []
+
+    seg = n // n_folds
+    folds = []
+    for k in range(n_folds):
+        lo = k * seg
+        hi = (k + 1) * seg if k < n_folds - 1 else n
+        cut = lo + int((hi - lo) * train_ratio)
+        if cut <= lo or cut >= hi:
+            continue
+
+        tr_days = set(days[lo:cut])
+        te_days = set(days[cut:hi])
+        d_tr = d[d["day"].isin(tr_days)]
+        d_te = d[d["day"].isin(te_days)]
+
+        best = None
+        for sig, thr, vt, tp, sl, mt, hd, rv in combos:
+            r = simulate(d_tr, base, cash, sig, thr, vt, tp, sl, mt,
+                         em, xm, hd, rv)
+            if "error" in r or r["n_trades"] == 0:
+                continue
+            if best is None or r["t_annual"] > best[0]:
+                best = (r["t_annual"], sig, thr, vt, tp, sl, mt, hd, rv)
+        if best is None:
+            continue
+
+        tin, sig, thr, vt, tp, sl, mt, hd, rv = best
+        ro = simulate(d_te, base, cash, sig, thr, vt, tp, sl, mt,
+                      em, xm, hd, rv)
+        folds.append({
+            "fold": k + 1,
+            "train": f"{days[lo].date()}~{days[cut-1].date()}",
+            "test": f"{days[cut].date()}~{days[hi-1].date()}",
+            "n_train_days": cut - lo,
+            "n_test_days": hi - cut,
+            "in_sample_t_annual": round(float(tin), 4),
+            "out_sample_t_annual": round(float(ro.get("t_annual", 0.0)), 4),
+            "out_sample_trades": int(ro.get("n_trades", 0)),
+            "signal": sig, "thr": thr, "vol_thr": vt,
+            "take_profit": tp, "stop_loss": sl,
+            "max_trades": mt, "hold_max": hd, "reverse": rv,
+        })
+    return folds
+
 def main() -> int:
     p = argparse.ArgumentParser(description="量价背离日内做 T 优化")
     p.add_argument("--symbol", default="600711")
