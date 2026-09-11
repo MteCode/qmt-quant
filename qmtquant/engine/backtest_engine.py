@@ -152,14 +152,25 @@ class BacktestEngine:
         if self._raw_dir is not None:
             code, _, ex = vt_symbol.rpartition(".")
             p = self._raw_dir / ex / f"{code}.parquet"
-            if p.exists():
+            a = self._last_adj_close.get(vt_symbol)
+            d = self._last_adj_date.get(vt_symbol)
+            if p.exists() and a and a > 0 and d:
                 try:
                     import pandas as pd
-                    raw = pd.read_parquet(p, columns=["close"])
+                    raw = pd.read_parquet(p, columns=["close"]).sort_index()
                     if not raw.empty:
-                        r = float(raw["close"].iloc[-1])
-                        a = self._last_adj_close.get(vt_symbol)
-                        if r > 0 and a and a > 0:
+                        # 取**与后复权末根同日**的不复权价，不能取 .iloc[-1]：
+                        # 不复权文件常比 data/1d/ 新（今天仍在下，后复权滞后
+                        # 一两天），直接取末根会跨日相除；两日之间若跨了除权日，
+                        # 因子就错，而且错得无声。索引为 'YYYYMMDD' 字符串，
+                        # searchsorted 取「不晚于 d 的最近一根」。
+                        # 该日若停牌（close=0）则继续往前找 —— 停牌日的 0 价
+                        # 会让相除得 0，进而被当作异常因子丢弃。
+                        pos = raw.index.searchsorted(d, side="right") - 1
+                        while pos >= 0 and float(raw["close"].iloc[pos]) <= 0:
+                            pos -= 1
+                        if pos >= 0:
+                            r = float(raw["close"].iloc[pos])
                             factor = a / r
                 except (OSError, ValueError, KeyError):
                     factor = None
@@ -249,12 +260,23 @@ class BacktestEngine:
             self._raw_dir = _raw if _raw.exists() else None
         except Exception:
             self._raw_dir = None
+        if self._raw_dir is None:
+            # 以前这里静默退回，回测照跑、只是少了一批蓝筹 ——
+            # 与「一切正常」长得一样。必须让缺失本身可见。
+            logger.warning(
+                "无 data/1d_raw（不复权价）—— 复权因子只能从成交额/成交量反推，"
+                "而成交量单位判定是统计判据、非决定性。低因子/高因子标的的"
+                "整手取整可能被静默剔出标的池或算错股数。补数据："
+                "python scripts/download_adj_factor.py --sector 中证1000")
         self._factor_cache: dict[str, float | None] = {}
         #: 历史 ST 判定器。有则按当日状态用 5% 涨跌停，
         #: 无则退回按板块判定 —— 会高估 ST 标的的可成交性
         self._is_st = _load_st_checker()
         #: 各标的最后一根 Bar 的后复权收盘价，算因子用
         self._last_adj_close: dict[str, float] = {}
+        #: 与之配套的日期（'YYYYMMDD'）。不复权文件比 data/1d/ 新时，
+        #: 必须按日期对齐取值，否则跨日相除会算错因子（见 _adj_factor）
+        self._last_adj_date: dict[str, str] = {}
         #: {vt_symbol: (后复权收盘价, 成交额, 成交量)}，反推真实价用
         self._last_bar_stats: dict[str, tuple[float, float, float]] = {}
         #: 复权因子取不到、退回按后复权价取整的标的数。
@@ -279,6 +301,7 @@ class BacktestEngine:
             # 记末根收盘价，与不复权价相除得到复权因子（见 _adj_factor）
             if bar.close_price > 0:
                 self._last_adj_close[bar.vt_symbol] = bar.close_price
+                self._last_adj_date[bar.vt_symbol] = bar.datetime.strftime("%Y%m%d")
                 # 成交额与成交量用于反推真实价（见 _adj_factor 路径 2）
                 self._last_bar_stats[bar.vt_symbol] = (
                     bar.close_price, bar.turnover, bar.volume)

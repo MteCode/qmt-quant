@@ -237,3 +237,44 @@ class TestRiskExitLotRounding:
             f = e._adj_factor("601398.SSE") or 1.0
             real = o.volume * f
             assert real >= 100 - 1e-6 or abs(real - 50.0 * f) < 1e-6
+
+
+class TestRawPricePathAlignsByDate:
+    """路径1（data/1d_raw）必须取与后复权末根**同日**的不复权价。
+
+    不复权文件常比 data/1d/ 新（今天仍在更新，后复权滞后一两天）。
+    原先直接取 raw.iloc[-1]，与后复权末根不是同一天 —— 两道之间若跨了
+    除权日，相除得到的因子就是错的，而且错得无声。
+
+    这是 verify() 全量扫末根日期才暴露出来的：实测下载当日，
+    600519 不复权到 20260911、后复权到 20260904。
+    """
+
+    def _engine_with_raw(self, tmp_path, raw_closes: dict[str, float]):
+        e = _engine(REAL * 6)          # 末根为 2026-09-04
+        (tmp_path / "SSE").mkdir()
+        s = pd.Series(raw_closes, dtype=float)
+        s.index = pd.Index(list(s.index))      # 'YYYYMMDD' 字符串，与真实数据一致
+        s.sort_index().to_frame("close").to_parquet(tmp_path / "SSE" / "600519.parquet")
+        e._raw_dir = tmp_path
+        e._factor_cache.clear()
+        return e
+
+    def test_uses_same_day_row_not_last_row(self, tmp_path):
+        """末根是不对齐的 20260911，必须仍取 20260904 那根。"""
+        e = self._engine_with_raw(tmp_path, {
+            "20260904": 1300.00,       # 与后复权末根同日 —— 应取这根
+            "20260911": 1340.00,       # 更新的、不对齐的一根 —— 不能取
+        })
+        f = e._adj_factor("600519.SSE")
+        assert f == pytest.approx(8288.98 / 1300.00, rel=1e-6), (
+            "取错日期了：8288.98/1300=6.376，误取 20260911 则得 6.186")
+
+    def test_no_aligned_row_does_not_cross_dates(self, tmp_path):
+        """不复权全在末根之后 —— 宁可退回路径2，也不跨日相除。"""
+        e = self._engine_with_raw(tmp_path, {"20260911": 1340.00})
+        f = e._adj_factor("600519.SSE")
+        # 退回路径2 = turnover/volume 反推的真实价 1326.10
+        assert f == pytest.approx(8288.98 / 1326.10, rel=1e-3)
+        assert f != pytest.approx(8288.98 / 1340.00, rel=1e-3)
+
