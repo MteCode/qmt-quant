@@ -55,6 +55,8 @@ def in_trading_hours(now: datetime | None = None) -> bool:
 # 状态持久化走共用模块 —— paper_trade.py 也读写同一份，
 # 两边各持一份实现会漂移出「监控说只平不开、下单脚本照样开新仓」的分裂
 from risk_state import load_state, save_state  # noqa: E402
+# 减仓数量计算与回测共用一份实现，避免两边漂移（见 qmtquant/risk/drawdown_exec.py）
+from qmtquant.risk.drawdown_exec import plan_reduction, should_act  # noqa: E402
 
 
 # ---------------------------------------------------------------- 账户查询
@@ -96,27 +98,26 @@ def sell_to_target(trader, account, positions, keep_ratio: float,
     sent = 0
     blocked = 0
     for p in positions:
-        target_vol = int(p["volume"] * keep_ratio)
-        # 卖出数量向下取整到 100 股；清仓时允许卖零股
-        raw_sell = p["volume"] - target_vol
-        if keep_ratio <= 0:
-            sell_vol = p["available"]
-        else:
-            sell_vol = min((raw_sell // 100) * 100, p["available"])
-
+        # 数量计算与回测共用同一份实现（qmtquant/risk/drawdown_exec.py）。
+        # 实盘持有本就是真实股数，factor 取默认 1.0。
+        sell_vol = plan_reduction(p["volume"], p["available"], keep_ratio,
+                                  lot_size=100)
         if sell_vol <= 0:
-            if p["available"] <= 0 and raw_sell > 0:
+            # 区分「T+1 冻结卖不掉」与「本就无需卖」，只对前者计数告警
+            needs = (p["volume"] > 0 and keep_ratio < 1.0
+                     and p["volume"] - p["volume"] * keep_ratio > 0)
+            if p["available"] <= 0 and needs:
                 blocked += 1
-                print(f"      {p['code']:>12s}  需卖 {raw_sell:>6d} 股，"
-                      f"但可卖 0（T+1 冻结）")
+                print(f"      {p['code']:>12s}  需减仓，但可卖 0（T+1 冻结）")
             continue
 
+        sell_vol = int(sell_vol)
         print(f"      {p['code']:>12s}  卖出 {sell_vol:>6d} / 持有 {p['volume']:>6d}")
         sent += 1
         if not dry_run:
             trader.order_stock(
                 account, p["code"], 24,      # STOCK_SELL
-                int(sell_vol), 5, 0,         # price_type=5 最优五档, price=0
+                sell_vol, 5, 0,              # price_type=5 最优五档, price=0
                 strategy_name="RISK_MONITOR",
                 order_remark=f"risk_{action}",
             )
@@ -255,8 +256,8 @@ def main() -> int:
                 print(f"\n  [{now:%H:%M:%S}] !! 当日亏损 {day_pnl:.2%} "
                       f"触及 {r.daily_loss_limit_ratio:.0%}，进入只平不开")
 
-            # --- 档位动作：档位升高时执行一次
-            if level > acted_level:
+            # --- 档位动作：档位升高时执行一次（上升沿判定与回测共用）
+            if should_act(level, acted_level):
                 print(f"\n  [{now:%H:%M:%S}] !! 回撤档位升至【{level.label}】"
                       f"（回撤 {controller.drawdown:.2%}）")
                 if level == DrawdownLevel.FLAT and positions:

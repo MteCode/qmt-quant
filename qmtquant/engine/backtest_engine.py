@@ -19,6 +19,7 @@ from ..core.constants import (Direction, OrderType, ST_PRICE_LIMIT,
 from ..core.objects import BarData, OrderData, OrderRequest, TradeData
 from ..gateway.sim_gateway import calc_cost
 from ..risk.drawdown import DrawdownController, DrawdownLevel
+from ..risk.drawdown_exec import plan_reduction, should_act
 from ..strategy.base import StrategyBase
 from ..utils.symbol import normalize, split_vt_symbol
 from .performance import PerformanceStats, calculate_stats
@@ -530,7 +531,7 @@ class BacktestEngine:
         # （正常应为 610 笔、49.66%），全是被反复切割出来的微亏平仓。
         #
         # 「削减到该比例」是一次性动作，不是每根 Bar 的目标。
-        if level <= self._last_enforced_level:
+        if not should_act(level, self._last_enforced_level):
             self._last_enforced_level = level   # 档位下降时同步，允许再次触发
             return
         self._last_enforced_level = level
@@ -540,34 +541,14 @@ class BacktestEngine:
             return
 
         for vt_symbol, pos in list(self.positions.items()):
-            volume = pos["volume"]
-            if volume <= 0:
-                continue
-            # T+1：当日买入的部分卖不掉，只能减 available 那部分
-            sellable = min(pos.get("available", volume), volume)
-            if sellable <= 0:
-                continue
-
-            target = volume * ratio
-            excess = volume - target
-            if excess <= 0:
-                continue
-            sell_volume = min(excess, sellable)
-
-            # 整手取整。正常下单路径做了这件事，这条强平路径原先没做 ——
-            # 会发出 137 股这种委托，实盘会被券商拒掉，回测却照单成交，
-            # 于是回测里的「减仓能力」强于实际。
-            #
-            # A 股的规则是：部分卖出须为 100 的整数倍，但**清空整个可卖
-            # 持仓**时零股可以一次性卖掉。所以只在不是清仓时取整。
-            #
-            # 与买入路径同样，整手约束作用在真实股数上，要按复权因子换算
-            # （见 _adj_factor）。
-            if sell_volume < sellable:
-                factor = self._adj_factor(vt_symbol) or 1.0
-                real = sell_volume * factor
-                real = int(real // self.lot_size) * self.lot_size
-                sell_volume = real / factor
+            # 数量计算与实盘共用同一份实现（risk/drawdown_exec.py）。两边原先
+            # 各写一遍并已跑偏：回测会发出 451 股这种零股**部分**委托，实盘
+            # 必被券商拒单，而回测照单成交 —— 回测里的「减仓能力」强于实际。
+            # 整手约束作用在真实股数上，按复权因子换算回后复权口径。
+            sell_volume = plan_reduction(
+                pos["volume"], pos.get("available", pos["volume"]), ratio,
+                lot_size=self.lot_size,
+                factor=self._adj_factor(vt_symbol) or 1.0)
             if sell_volume <= 0:
                 continue
 
