@@ -151,6 +151,12 @@ class TushareClient:
                     raise TushareError(
                         f"{api} 调用被拒（很可能是积分不足）：{msg}") from e
                 delay = self.cfg.retry_base_delay * (2 ** (attempt - 1))
+                # 频率超限要等**一整个限流窗口**，指数退避的 2/4 秒远不够。
+                # 本地限流 calls_per_minute 默认 200，与官方该接口上限同值，
+                # 网络抖动就会触发；3 次重试总等待不足 10 秒必然失败。
+                # 实测 margin_detail 逐日下载即因此中断。
+                if "频率" in msg or "每分钟" in msg or "访问频次" in msg:
+                    delay = max(delay, 61.0)
                 logger.warning("%s 第 %d/%d 次失败：%s，%.1fs 后重试",
                                api, attempt, self.cfg.max_retry, msg, delay)
                 if attempt < self.cfg.max_retry:

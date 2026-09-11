@@ -158,26 +158,29 @@ def download_margin(client: TushareClient, out_dir: Path,
                     start: str, end: str) -> None:
     """融资融券余额。
 
-    接口 margin_detail：个股融资融券每日明细
+    接口 margin_detail：个股融资融券每日明细，**只接受单日 trade_date**。
+
+    原先按自然月查（freq="MS"）且无分页，而 tushare 单次返回上限约 6000 行，
+    于是每月只有头 2-7 天存活 —— 落盘 768000 = 128 个月 × 6000 行，
+    实际只覆盖 524 个交易日（应约 2500）。因子因此被判为数据完整度不达标而
+    剔除。改为**逐交易日**拉取，对照 download_dragon 的正确写法。
     """
     print("\n--- 融资融券 ---")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("  下载个股融资融券明细...")
-    frames = []
-    dates = pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="MS")
+    from qmtquant.datafeed.tushare_feed import TushareFeed
+    feed = TushareFeed(client=client)
+    trade_days = feed.trade_dates(start, end)
+    print(f"  逐日拉取 {len(trade_days)} 个交易日...")
 
-    for i, m in enumerate(dates, 1):
-        m_end = (m + pd.offsets.MonthEnd(0)).strftime("%Y%m%d")
-        m_start = m.strftime("%Y%m%d")
-        d = client.query("margin_detail", start_date=m_start,
-                         end_date=m_end)
+    frames = []
+    for i, td in enumerate(trade_days, 1):
+        d = client.query("margin_detail", trade_date=td.strftime("%Y%m%d"))
         if not d.empty:
             frames.append(d)
-        if i % 12 == 0:
-            sys.stdout.write(f"\r  已拉取 {i}/{len(dates)} 个月")
+        if i % 100 == 0:
+            sys.stdout.write(f"\r  已拉取 {i}/{len(trade_days)} 日")
             sys.stdout.flush()
-
     sys.stdout.write("\n")
 
     if frames:
@@ -188,7 +191,8 @@ def download_margin(client: TushareClient, out_dir: Path,
         mg = mg.sort_values("trade_date").reset_index(drop=True)
         path = out_dir / "margin_detail.parquet"
         mg.to_parquet(path)
-        print(f"  融资融券明细 {len(mg)} 条")
+        print(f"  融资融券明细 {len(mg)} 条，"
+              f"覆盖 {mg.trade_date.nunique()} 个交易日")
         print(f"  -> {path}")
     else:
         print("  无数据")
