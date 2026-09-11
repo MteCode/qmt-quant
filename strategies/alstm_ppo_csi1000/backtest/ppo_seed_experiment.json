@@ -1,0 +1,101 @@
+{
+  "generated_at": "2026-09-11T17:34:04",
+  "config": {
+    "market": "csi1000",
+    "capital": 500000,
+    "test": [
+      "2022-01-01",
+      "2026-08-27"
+    ],
+    "hold_k": 30,
+    "rebal_period": 20,
+    "scores": "D:\\qmt\\qmt\\strategies\\alstm_ppo_csi1000\\models\\alstm_scores.parquet",
+    "device": "cpu"
+  },
+  "runs": [
+    {
+      "seed": 0,
+      "model": "ppo_model_s0.zip",
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "annual_vol": 0.0,
+      "sharpe": 0.0,
+      "max_drawdown": 0.0,
+      "mean_exposure": 0.0,
+      "exposure_std": 0.0,
+      "final_value": 500000.0,
+      "n_days": 1107,
+      "eval_sec": 1.0
+    },
+    {
+      "seed": 1,
+      "model": "ppo_model_s1.zip",
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "annual_vol": 0.0,
+      "sharpe": 0.0,
+      "max_drawdown": 0.0,
+      "mean_exposure": 0.0,
+      "exposure_std": 0.0,
+      "final_value": 500000.0,
+      "n_days": 1107,
+      "eval_sec": 1.0
+    },
+    {
+      "seed": 2,
+      "model": "ppo_model_s2.zip",
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "annual_vol": 0.0,
+      "sharpe": 0.0,
+      "max_drawdown": 0.0,
+      "mean_exposure": 0.0,
+      "exposure_std": 0.0,
+      "final_value": 500000.0,
+      "n_days": 1107,
+      "eval_sec": 1.0
+    },
+    {
+      "seed": 3,
+      "model": "ppo_model_s3.zip",
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "annual_vol": 0.0,
+      "sharpe": 0.0,
+      "max_drawdown": 0.0,
+      "mean_exposure": 0.0,
+      "exposure_std": 0.0,
+      "final_value": 500000.0,
+      "n_days": 1107,
+      "eval_sec": 1.0
+    },
+    {
+      "seed": 4,
+      "model": "ppo_model_s4.zip",
+      "total_return": 0.0,
+      "annual_return": 0.0,
+      "annual_vol": 0.0,
+      "sharpe": 0.0,
+      "max_drawdown": 0.0,
+      "mean_exposure": 0.0,
+      "exposure_std": 0.0,
+      "final_value": 500000.0,
+      "n_days": 1107,
+      "eval_sec": 1.0
+    },
+    {
+      "seed": 42,
+      "model": "ppo_model_s42.zip",
+      "total_return": 0.5177672499999999,
+      "annual_return": 0.09963855662316368,
+      "annual_vol": 0.10887415459332413,
+      "sharpe": 0.9151718054238122,
+      "max_drawdown": 0.1766810990630904,
+      "mean_exposure": 0.3649090161545382,
+      "exposure_std": 0.04706292788977899,
+      "final_value": 758883.625,
+      "n_days": 1107,
+      "eval_sec": 1.0
+    }
+  ]
+}

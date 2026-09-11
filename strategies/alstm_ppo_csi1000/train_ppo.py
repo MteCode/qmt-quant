@@ -297,6 +297,50 @@ def build_env(close_df, feat_df, label_df, start, end, scores=None, **kwargs):
     )
 
 
+def evaluate_ppo(model, env) -> dict:
+    """在环境上确定性推理 PPO 策略，返回指标与曲线。
+
+    从 main() 抽出来供多种子实验脚本（ppo_seed_experiment.py）复用 ——
+    把评估循环复制一份出去，迟早两处会漂移（回撤减仓逻辑就踩过这个坑）。
+    """
+    obs, _ = env.reset()
+    daily_returns: list[float] = []
+    exposures: list[float] = []
+    while True:
+        action, _ = model.predict(obs, deterministic=True)
+        obs, reward, terminated, truncated, info = env.step(action)
+        daily_returns.append(info["daily_return"])
+        exposures.append(info["exposure"])
+        if terminated or truncated:
+            break
+
+    asset_curve = np.array(env.asset_memory)
+    daily_ret = np.array(daily_returns)
+    exp_arr = np.array(exposures)
+    total_return = asset_curve[-1] / asset_curve[0] - 1
+    n_years = len(daily_ret) / 252
+    annual_return = (1 + total_return) ** (1 / n_years) - 1 if n_years > 0 else 0.0
+    annual_vol = np.std(daily_ret) * np.sqrt(252) if len(daily_ret) > 1 else 0.0
+    sharpe = annual_return / annual_vol if annual_vol > 0 else 0.0
+    peak = np.maximum.accumulate(asset_curve)
+    max_dd = float(np.max((peak - asset_curve) / peak)) if len(asset_curve) else 0.0
+
+    return {
+        "total_return": float(total_return),
+        "annual_return": float(annual_return),
+        "annual_vol": float(annual_vol),
+        "sharpe": float(sharpe),
+        "max_drawdown": max_dd,
+        "mean_exposure": float(exp_arr.mean()) if len(exp_arr) else 0.0,
+        "exposure_std": float(exp_arr.std()) if len(exp_arr) else 0.0,
+        "final_value": float(asset_curve[-1]),
+        "n_days": int(len(daily_ret)),
+        "daily_returns": daily_ret,
+        "exposures": exp_arr,
+        "asset_curve": asset_curve,
+    }
+
+
 def main():
     p = argparse.ArgumentParser(description="RL PPO 择时")
     p.add_argument("--market", default="csi1000")
@@ -412,31 +456,16 @@ def main():
     )
     print(f"测试日数: {len(test_env.dates)}")
 
-    obs, _ = test_env.reset()
-    daily_returns = []
-    exposures = []
-
-    while True:
-        action, _ = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = test_env.step(action)
-        daily_returns.append(info["daily_return"])
-        exposures.append(info["exposure"])
-        if terminated or truncated:
-            break
-
-    # 结果统计
-    asset_curve = np.array(test_env.asset_memory)
-    daily_ret = np.array(daily_returns)
-    exp_arr = np.array(exposures)
-    total_return = asset_curve[-1] / asset_curve[0] - 1
-    n_years = len(daily_ret) / 252
-    annual_return = (1 + total_return) ** (1 / n_years) - 1 if n_years > 0 else 0
-    annual_vol = np.std(daily_ret) * np.sqrt(252) if len(daily_ret) > 1 else 0
-    sharpe = annual_return / annual_vol if annual_vol > 0 else 0
-
-    peak = np.maximum.accumulate(asset_curve)
-    drawdowns = (peak - asset_curve) / peak
-    max_dd = np.max(drawdowns)
+    # 结果统计（评估循环已抽成 evaluate_ppo，供多种子实验复用）
+    metrics = evaluate_ppo(model, test_env)
+    asset_curve = metrics["asset_curve"]
+    daily_ret = metrics["daily_returns"]
+    exp_arr = metrics["exposures"]
+    total_return = metrics["total_return"]
+    annual_return = metrics["annual_return"]
+    annual_vol = metrics["annual_vol"]
+    sharpe = metrics["sharpe"]
+    max_dd = metrics["max_drawdown"]
 
     print(f"\n{'='*46}")
     print(f"回测区间      : {TEST[0]} ~ {TEST[1]} ({len(daily_ret)} 交易日)")
@@ -445,7 +474,7 @@ def main():
     print(f"总收益率      : {total_return:+.2%}")
     print(f"年化收益率    : {annual_return:+.2%}")
     print(f"最大回撤      : {max_dd:.2%}   "
-          f"{'✓' if max_dd <= 0.2 else '✗'} "
+          f"{'[OK]' if max_dd <= 0.2 else '[X]'} "
           f"{'达标' if max_dd <= 0.2 else '超过上限 20%'}")
     print(f"年化波动率    : {annual_vol:.2%}")
     print(f"Sharpe        : {sharpe:.3f}")
@@ -474,7 +503,7 @@ def main():
     out_model = (paths.PPO_MODEL.with_name(
         f"ppo_model{args.tag}.zip") if args.tag else paths.PPO_MODEL)
     model.save(str(out_model.with_suffix("")))
-    print(f"\n模型已保存: {paths.PPO_MODEL}")
+    print(f"\n模型已保存: {out_model}")
     print(f"回测明细: {out.resolve()}")
     print(f"\n总耗时 {(time.time() - t0) / 60:.1f} 分钟")
 

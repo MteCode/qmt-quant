@@ -36,6 +36,14 @@ ALSTM_META = MODELS_DIR / "alstm_meta.json"
 #: PPO 择时模型权重（LFS 跟踪）
 PPO_MODEL = MODELS_DIR / "ppo_model.zip"
 
+
+def ppo_seed_model(seed: int):
+    """多种子实验的 PPO 权重。由 train_ppo.py --seed N --tag _sN 产出。
+
+    PPO 自身随机性从未被度量过，单次 Sharpe 可能只是分布右尾的一次抽样。
+    """
+    return MODELS_DIR / f"ppo_model_s{seed}.zip"
+
 #: 集成模型目录。单个种子的结果方差过大（8 种子实测 Sharpe -0.491 ~ +0.532，
 #: 中位数 -0.027），集成用多个种子的截面排名平均消掉这层随机性
 ENSEMBLE_DIR = MODELS_DIR / "ensemble"
