@@ -193,6 +193,8 @@
   socket.on('connect', function() {
     wsDot.className = 'ws-dot on';
     wsText.textContent = '已连接';
+    socket.emit('get_positions');
+    socket.emit('get_orders');
   });
   socket.on('disconnect', function() {
     wsDot.className = 'ws-dot off';
@@ -260,6 +262,14 @@
 
   // ---- 持仓 ----
   var posMap = {};
+  socket.on('positions', function(arr) {
+    posMap = {};
+    (arr || []).forEach(function(d) {
+      var sym = d.vt_symbol || (d.symbol + '.' + (d.exchange||''));
+      if ((d.volume||0) > 0) posMap[sym] = d;
+    });
+    renderPositions();
+  });
   socket.on('ePosition', function(d) {
     var sym = d.vt_symbol || (d.symbol + '.' + (d.exchange||''));
     if ((d.volume||0) <= 0) delete posMap[sym]; else posMap[sym] = d;
@@ -284,6 +294,13 @@
 
   // ---- 委托 ----
   var orderMap = {};
+  socket.on('orders', function(arr) {
+    orderMap = {};
+    (arr || []).forEach(function(d) {
+      if (d.vt_orderid) orderMap[d.vt_orderid] = d;
+    });
+    renderOrders();
+  });
   socket.on('eOrder', function(d) {
     if (!d.vt_orderid) return;
     orderMap[d.vt_orderid] = d;

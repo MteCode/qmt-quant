@@ -63,8 +63,14 @@ _SKIP_BROADCAST = {EVENT_TIMER}
 
 # ------------------------------------------------------------------ 序列化
 
+_EXTRA_PROPS = {"available", "vt_symbol", "vt_orderid", "vt_tradeid", "vt_accountid"}
+
+
 def serialize_event(obj: Any) -> dict | None:
-    """将事件数据转为 JSON-safe dict。Enum→字符串，datetime→ISO。"""
+    """将事件数据转为 JSON-safe dict。Enum→字符串，datetime→ISO。
+
+    dataclass 的 @property 不在 fields() 里，需要额外导出。
+    """
     if obj is None:
         return None
     if isinstance(obj, dict):
@@ -74,6 +80,9 @@ def serialize_event(obj: Any) -> dict | None:
         for f in fields(obj):
             v = getattr(obj, f.name)
             out[f.name] = _convert(v)
+        for prop in _EXTRA_PROPS:
+            if hasattr(obj, prop) and prop not in out:
+                out[prop] = _convert(getattr(obj, prop))
         return out
     return {"value": _convert(obj)}
 

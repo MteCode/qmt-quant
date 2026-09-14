@@ -600,10 +600,20 @@ class LiveEngine:
         self.gateway.query_account()
         self.gateway.query_position()
 
-        # 查询是异步回调，等事件处理完再打印，否则账户还是 None
+        # 查询是异步回调，等事件处理完再打印。
+        # query_stock_asset 在连接刚建立时可能返回全零数据，
+        # 所以不仅等 account 非 None，还要等 balance > 0（重试一次）。
         deadline = time.time() + 5
         while self.account is None and time.time() < deadline:
             time.sleep(0.1)
+        if self.account and self.account.balance <= 0:
+            time.sleep(1)
+            self.gateway.query_account()
+            retry_end = time.time() + 3
+            while time.time() < retry_end:
+                if self.account and self.account.balance > 0:
+                    break
+                time.sleep(0.1)
 
         if self.account:
             logger.info("账户 %s | 总资产 %.2f | 可用 %.2f | 市值 %.2f",
