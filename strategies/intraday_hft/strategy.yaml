@@ -1,0 +1,10 @@
+id: intraday_hft
+name: 日内高频剥头皮
+category: 日内
+frequency: 日内
+description: >-
+  Tick 级别 VWAP 回归 + 动量突破，自带模拟 tick 生成器。
+  价格低于 VWAP 阈值时买入（均值回归），高于阈值或止损/超时时卖出。
+  适用于 SIM 模拟盘演示和日内高频策略框架验证。
+backtest_task: null
+live_task: null

@@ -118,6 +118,24 @@ strategies:
   #     price_buffer: 0.03          # 限价单相对现价的缓冲
   #     min_order_value: 5000       # 低于此金额不下单，避免碎单
 
+  # --- 日内高频剥头皮（SIM 模拟盘演示） ---
+  # 自带 tick 模拟器，启动即自动生成行情并交易，无需外部数据源。
+  # 仅适用于 SIM 网关，不要在实盘开。
+  # - name: IntradayHFT
+  #   class: strategies.intraday_hft.strategy.IntradayHftStrategy
+  #   vt_symbols:
+  #     - "600519.SSE"
+  #     - "000858.SZSE"
+  #   setting:
+  #     vwap_window: 200
+  #     entry_threshold: 0.003
+  #     exit_threshold: 0.002
+  #     stop_loss: 0.005
+  #     lot_size: 100
+  #     max_hold_seconds: 300
+  #     max_daily_trades: 50
+  #     sim_tick_interval: 0.5
+
   # --- 全市场日内 GBM 选股 ---
   # strategies/intraday_gbm/strategy.py 本就是 StrategyBase 子类，
   # 只是一直没登记在此，所以从未真正跑起来过。
