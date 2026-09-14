@@ -7,43 +7,53 @@
 <script src="/plotly.js"></script>
 <style>
 :root{
-  --bg:#f6f7f9; --card:#fff; --ink:#1c2333; --muted:#7b8494;
+  --bg:#f0f2f5; --card:#fff; --ink:#1c2333; --muted:#7b8494;
   --line:#e5e8ee; --accent:#2c7be5; --up:#e04b4b; --down:#2e9e5b;
   --warn:#d98324; --radius:10px;
+  --sidebar-w:220px; --sidebar-bg:#1b2132; --sidebar-ink:#c5cdd8;
+  --sidebar-on:rgba(44,123,229,.22); --sidebar-hover:rgba(255,255,255,.06);
 }
 @media (prefers-color-scheme:dark){
-  :root{ --bg:#12151c; --card:#1a1f29; --ink:#e6e9ef; --muted:#8a94a6;
-         --line:#272d3a; }
+  :root{ --bg:#0e1117; --card:#171c28; --ink:#e6e9ef; --muted:#8a94a6;
+         --line:#272d3a; --sidebar-bg:#12151e; }
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
-  font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  display:flex;min-height:100vh}
 a{color:var(--accent);text-decoration:none}
 a:hover{text-decoration:underline}
 
-header{background:var(--card);border-bottom:1px solid var(--line);
-  position:sticky;top:0;z-index:10}
-.nav{max-width:1180px;margin:0 auto;padding:0 20px;display:flex;
-  align-items:center;gap:4px;height:54px}
-.brand{font-weight:600;font-size:15px;margin-right:20px;white-space:nowrap}
-.nav a{padding:7px 13px;border-radius:7px;color:var(--muted);font-weight:500}
-.nav a:hover{background:var(--bg);text-decoration:none}
-.nav a.on{background:var(--accent);color:#fff}
-.nav .sp{margin-left:auto;color:var(--muted);font-size:12px}
-.more{position:relative}
-.more-m{display:none;position:absolute;top:calc(100% + 6px);left:0;
-  background:var(--card);border:1px solid var(--line);border-radius:8px;
-  padding:5px;min-width:158px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:20}
-.more:hover .more-m{display:block}
-.more-m a{display:block;padding:6px 11px;border-radius:5px;font-size:13px}
+/* ---- 左侧导航栏 ---- */
+.sidebar{width:var(--sidebar-w);background:var(--sidebar-bg);color:var(--sidebar-ink);
+  position:fixed;top:0;left:0;bottom:0;z-index:20;display:flex;flex-direction:column;
+  overflow-y:auto;overflow-x:hidden;
+  border-right:1px solid rgba(255,255,255,.06)}
+.sidebar .brand{padding:20px 18px 16px;font-weight:700;font-size:16px;
+  color:#fff;letter-spacing:.3px;border-bottom:1px solid rgba(255,255,255,.08)}
+.sidebar .brand span{opacity:.5;font-weight:400;font-size:11px;margin-left:6px}
+.sidebar .nav-group{padding:12px 10px 6px}
+.sidebar .nav-label{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;
+  color:rgba(255,255,255,.3);padding:4px 10px;margin-bottom:2px;font-weight:600}
+.sidebar a{display:flex;align-items:center;gap:9px;padding:8px 14px;
+  border-radius:8px;color:var(--sidebar-ink);font-size:13px;
+  font-weight:500;transition:background .15s}
+.sidebar a:hover{background:var(--sidebar-hover);text-decoration:none}
+.sidebar a.on{background:var(--sidebar-on);color:#fff}
+.sidebar a .ico{width:18px;text-align:center;font-size:15px;opacity:.75}
+.sidebar .clock{margin-top:auto;padding:14px 18px;font-size:12px;
+  color:rgba(255,255,255,.3);border-top:1px solid rgba(255,255,255,.06)}
 
-main{max-width:1180px;margin:0 auto;padding:22px 20px 60px}
-h1{font-size:19px;margin:0 0 4px}
-h2{font-size:15px;margin:26px 0 12px;font-weight:600}
-.sub{color:var(--muted);font-size:13px;margin-bottom:18px}
+/* ---- 主内容区 ---- */
+.main-wrap{margin-left:var(--sidebar-w);flex:1;min-width:0}
+main{max-width:1240px;margin:0 auto;padding:26px 28px 60px}
+h1{font-size:20px;margin:0 0 4px;font-weight:700}
+h2{font-size:15px;margin:28px 0 12px;font-weight:600}
+.sub{color:var(--muted);font-size:13px;margin-bottom:20px}
 
 .card{background:var(--card);border:1px solid var(--line);
-  border-radius:var(--radius);padding:16px;margin-bottom:14px}
+  border-radius:var(--radius);padding:18px;margin-bottom:14px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04)}
 .grid{display:grid;gap:14px}
 .g2{grid-template-columns:repeat(2,1fr)}
 .g3{grid-template-columns:repeat(3,1fr)}
@@ -51,19 +61,22 @@ h2{font-size:15px;margin:26px 0 12px;font-weight:600}
 @media(max-width:900px){.g2,.g3,.g4{grid-template-columns:1fr}}
 
 .kpi{background:var(--card);border:1px solid var(--line);
-  border-radius:var(--radius);padding:14px 16px}
-.kpi .l{color:var(--muted);font-size:12px}
-.kpi .v{font-size:23px;font-weight:600;margin:3px 0;
+  border-radius:var(--radius);padding:16px 18px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04)}
+.kpi .l{color:var(--muted);font-size:12px;font-weight:500}
+.kpi .v{font-size:24px;font-weight:700;margin:4px 0;
   font-variant-numeric:tabular-nums}
 .kpi .s{color:var(--muted);font-size:11.5px}
 .kpi.bad .v{color:var(--up)}
 .kpi.good .v{color:var(--down)}
 
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
-th{color:var(--muted);font-weight:500;font-size:12px}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500;font-size:12px;
+  text-transform:uppercase;letter-spacing:.3px}
 td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
 tbody tr:last-child td{border-bottom:none}
+tbody tr:hover{background:rgba(44,123,229,.03)}
 
 .tag{display:inline-block;padding:2px 8px;border-radius:20px;
   font-size:11.5px;font-weight:500}
@@ -73,69 +86,106 @@ tbody tr:last-child td{border-bottom:none}
 .t-mut{background:var(--bg);color:var(--muted)}
 .t-warn{background:rgba(217,131,36,.15);color:var(--warn)}
 
-button,.btn{font:inherit;padding:7px 15px;border-radius:7px;
+button,.btn{font:inherit;padding:7px 16px;border-radius:8px;
   border:1px solid var(--line);background:var(--card);color:var(--ink);
-  cursor:pointer;font-weight:500}
+  cursor:pointer;font-weight:500;transition:all .15s}
 button:hover{border-color:var(--accent);color:var(--accent)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-button.primary:hover{opacity:.9;color:#fff}
+button.primary:hover{opacity:.88;color:#fff}
 button.danger{background:var(--up);border-color:var(--up);color:#fff}
-button.danger:hover{opacity:.9;color:#fff}
-button:disabled{opacity:.45;cursor:not-allowed}
-input,select{font:inherit;padding:6px 9px;border:1px solid var(--line);
-  border-radius:6px;background:var(--bg);color:var(--ink);width:100%}
+button.danger:hover{opacity:.88;color:#fff}
+button:disabled{opacity:.4;cursor:not-allowed}
+input,select{font:inherit;padding:7px 10px;border:1px solid var(--line);
+  border-radius:7px;background:var(--bg);color:var(--ink);width:100%}
 
-pre.log{background:#0f1319;color:#c9d3e0;padding:14px;border-radius:8px;
+pre.log{background:#0c0f15;color:#c9d3e0;padding:16px;border-radius:10px;
   overflow:auto;max-height:560px;font:12px/1.55 "Cascadia Mono",Consolas,monospace;
-  white-space:pre-wrap;word-break:break-all;margin:0}
-.empty{color:var(--muted);text-align:center;padding:34px 16px;font-size:13px}
-.note{border-left:3px solid var(--warn);padding:9px 13px;
-  background:rgba(217,131,36,.07);border-radius:0 7px 7px 0;
+  white-space:pre-wrap;word-break:break-all;margin:0;
+  box-shadow:inset 0 1px 4px rgba(0,0,0,.2)}
+.empty{color:var(--muted);text-align:center;padding:36px 16px;font-size:13px}
+.note{border-left:3px solid var(--warn);padding:10px 14px;
+  background:rgba(217,131,36,.07);border-radius:0 8px 8px 0;
   font-size:12.5px;color:var(--muted);margin-bottom:14px}
 .note b{color:var(--ink)}
 .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+
+@media(max-width:768px){
+  .sidebar{width:56px}
+  .sidebar .brand span,.sidebar a span:not(.ico),.sidebar .nav-label,
+  .sidebar .clock{display:none}
+  .sidebar .brand{padding:16px 12px;font-size:14px;text-align:center}
+  .sidebar a{padding:10px;justify-content:center}
+  .main-wrap{margin-left:56px}
+}
 </style>
 </head>
 <body>
-<header><nav class="nav">
-  <span class="brand">量化管理台</span>
+<aside class="sidebar">
+  <div class="brand">QMT Quant<span>v2</span></div>
   {% set p = request.path %}
-  <a href="/console"    class="{{ 'on' if p.startswith('/console') }}">交易台</a>
-  <a href="/"           class="{{ 'on' if p=='/' }}">总览</a>
-  <a href="/strategies" class="{{ 'on' if p.startswith('/strategies') }}">策略中心</a>
-  <a href="/services"  class="{{ 'on' if p=='/services' }}">服务</a>
-  <a href="/trading"    class="{{ 'on' if p=='/trading' }}">交易台</a>
-  <a href="/live"       class="{{ 'on' if p=='/live' }}">实盘监控</a>
-  <a href="/data"       class="{{ 'on' if p=='/data' }}">数据核对</a>
-  <a href="/tasks"      class="{{ 'on' if p=='/tasks' }}">运行任务</a>
-  <a href="/schedule"   class="{{ 'on' if p=='/schedule' }}">定时任务</a>
-  <a href="/jobs"       class="{{ 'on' if p.startswith('/jobs') }}">运行记录</a>
-  <span class="more">
-    <a href="#" onclick="return false" class="more-t">更多 ▾</a>
-    <span class="more-m">
-      <a href="/backtests">历史成绩单</a>
-      <a href="/experiments">实验结果</a>
-      <a href="/selection">信号明细</a>
-      <a href="/intraday-gbm">日内选股（旧）</a>
-      <a href="/t0-single">单票做T（旧）</a>
-      <a href="/intraday-t-920368">920368做T</a>
-    </span>
-  </span>
-  <span class="sp" id="clock"></span>
-</nav></header>
+
+  <div class="nav-group">
+    <div class="nav-label">实时</div>
+    <a href="/dashboard" class="{{ 'on' if p=='/dashboard' }}">
+      <span class="ico">&#9678;</span><span>仪表盘</span></a>
+    <a href="/console" class="{{ 'on' if p.startswith('/console') }}">
+      <span class="ico">&#9881;</span><span>交易台</span></a>
+    <a href="/live" class="{{ 'on' if p=='/live' }}">
+      <span class="ico">&#9889;</span><span>实盘监控</span></a>
+    <a href="/trading" class="{{ 'on' if p=='/trading' }}">
+      <span class="ico">&#9733;</span><span>成交归因</span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">研究</div>
+    <a href="/" class="{{ 'on' if p=='/' }}">
+      <span class="ico">&#9635;</span><span>总览</span></a>
+    <a href="/strategies" class="{{ 'on' if p.startswith('/strategies') }}">
+      <span class="ico">&#9776;</span><span>策略中心</span></a>
+    <a href="/backtests" class="{{ 'on' if p=='/backtests' }}">
+      <span class="ico">&#9655;</span><span>成绩单</span></a>
+    <a href="/experiments" class="{{ 'on' if p=='/experiments' }}">
+      <span class="ico">&#9883;</span><span>实验结果</span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">运维</div>
+    <a href="/services" class="{{ 'on' if p=='/services' }}">
+      <span class="ico">&#9654;</span><span>服务</span></a>
+    <a href="/tasks" class="{{ 'on' if p=='/tasks' }}">
+      <span class="ico">&#9744;</span><span>运行任务</span></a>
+    <a href="/schedule" class="{{ 'on' if p=='/schedule' }}">
+      <span class="ico">&#9202;</span><span>定时任务</span></a>
+    <a href="/jobs" class="{{ 'on' if p.startswith('/jobs') }}">
+      <span class="ico">&#9776;</span><span>运行记录</span></a>
+  </div>
+
+  <div class="nav-group">
+    <div class="nav-label">数据</div>
+    <a href="/data" class="{{ 'on' if p=='/data' }}">
+      <span class="ico">&#9783;</span><span>数据核对</span></a>
+    <a href="/selection" class="{{ 'on' if p=='/selection' }}">
+      <span class="ico">&#9733;</span><span>信号明细</span></a>
+  </div>
+
+  <div class="clock" id="clock"></div>
+</aside>
+
+<div class="main-wrap">
 <main>{% block body %}{% endblock %}</main>
+</div>
+
 <script>
-// 包在 IIFE 里，不往全局丢名字。此前这里裸声明 const el，
-// 任何页面脚本再声明同名变量就会抛
-// 「Identifier 'el' has already been declared」，
-// 而且是**整块脚本失效**，表现为页面上所有按钮都没反应 ——
-// 排查时很难联想到是被布局模板的时钟脚本撞掉的。
 (function () {
   const clock = document.getElementById('clock');
   if (!clock) return;
-  setInterval(() => {
-    clock.textContent = new Date().toLocaleTimeString('zh-CN');
-  }, 1000);
+  function tick() {
+    const now = new Date();
+    clock.textContent = now.toLocaleDateString('zh-CN', {month:'short', day:'numeric'})
+      + ' ' + now.toLocaleTimeString('zh-CN');
+  }
+  tick();
+  setInterval(tick, 1000);
 })();
 </script>
 {% block script %}{% endblock %}

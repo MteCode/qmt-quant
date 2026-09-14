@@ -1,0 +1,422 @@
+{% extends "base.html" %}
+{% block title %}实时仪表盘 · 量化管理台{% endblock %}
+{% block body %}
+<style>
+  .dash-header{display:flex;justify-content:space-between;align-items:flex-end;
+    margin-bottom:22px;flex-wrap:wrap;gap:12px}
+  .ws-badge{font-size:12px;display:inline-flex;align-items:center;gap:5px}
+  .ws-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .ws-dot.on{background:#2e9e5b;box-shadow:0 0 6px rgba(46,158,91,.5)}
+  .ws-dot.off{background:#e04b4b}
+
+  .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+  @media(max-width:1000px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+  .kpi{position:relative;overflow:hidden}
+  .kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;
+    background:var(--accent);border-radius:10px 10px 0 0;opacity:.5}
+  .kpi.good::before{background:var(--down)}
+  .kpi.bad::before{background:var(--up)}
+  .kpi.warn::before{background:var(--warn)}
+
+  .ctrl-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:14px 18px;background:var(--card);border:1px solid var(--line);
+    border-radius:var(--radius);margin-bottom:20px;
+    box-shadow:0 1px 3px rgba(0,0,0,.04)}
+  .ctrl-bar select{width:auto;min-width:140px}
+  .ctrl-sep{width:1px;height:28px;background:var(--line);margin:0 4px}
+
+  .section{margin-bottom:28px}
+  .section-head{display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:12px}
+  .section-head h2{margin:0}
+  .live-dot{animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+  .trade-buy{color:var(--up);font-weight:600}
+  .trade-sell{color:var(--down);font-weight:600}
+
+  .log-wrap{position:relative}
+  .log-wrap pre{max-height:260px}
+  .log-clear{position:absolute;top:8px;right:12px;font-size:11px;
+    padding:3px 8px;border-radius:5px;background:rgba(255,255,255,.08);
+    border:none;color:rgba(255,255,255,.5);cursor:pointer}
+  .log-clear:hover{background:rgba(255,255,255,.15);color:#fff}
+</style>
+
+<div class="dash-header">
+  <div>
+    <h1>实时仪表盘</h1>
+    <div class="sub" style="margin-bottom:0">
+      MainEngine 实时状态 &middot; WebSocket 推送
+    </div>
+  </div>
+  <div class="ws-badge" id="ws-status">
+    <span class="ws-dot off" id="ws-dot"></span>
+    <span id="ws-text">连接中...</span>
+  </div>
+</div>
+
+{# ---- KPI 卡片 ---- #}
+<div class="kpi-grid">
+  <div class="kpi" id="kpi-engine">
+    <div class="l">引擎状态</div>
+    <div class="v" id="v-engine">-</div>
+    <div class="s" id="s-engine">等待启动</div>
+  </div>
+  <div class="kpi" id="kpi-gateway">
+    <div class="l">网关连接</div>
+    <div class="v" id="v-gateway">未连接</div>
+    <div class="s" id="s-gateway">-</div>
+  </div>
+  <div class="kpi" id="kpi-account">
+    <div class="l">总资产</div>
+    <div class="v" id="v-account">-</div>
+    <div class="s" id="s-account">-</div>
+  </div>
+  <div class="kpi" id="kpi-strategies">
+    <div class="l">运行策略</div>
+    <div class="v" id="v-strategies">-</div>
+    <div class="s" id="s-strategies">-</div>
+  </div>
+</div>
+
+{# ---- 控制面板 ---- #}
+<div class="ctrl-bar">
+  <select id="sel-gateway">
+    <option value="sim">SIM 模拟网关</option>
+    <option value="miniqmt">miniQMT 实盘</option>
+  </select>
+  <button class="primary" onclick="startEngine()">启动引擎</button>
+  <button onclick="stopEngine()">停止引擎</button>
+  <span class="ctrl-sep"></span>
+  <button class="danger" onclick="killSwitch(true)">急停</button>
+  <button onclick="killSwitch(false)">解除急停</button>
+</div>
+
+{# ---- 策略列表 ---- #}
+<div class="section">
+  <div class="section-head">
+    <h2>策略实例</h2>
+    <span class="tag t-run live-dot" id="live-indicator" style="display:none">LIVE</span>
+  </div>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead><tr>
+        <th>策略名称</th><th>策略类</th><th>状态</th>
+        <th class="num">标的数</th><th style="width:120px">操作</th>
+      </tr></thead>
+      <tbody id="strategy-body">
+        <tr><td colspan="5" class="empty">等待引擎启动...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ---- 双栏：持仓 + 委托 ---- #}
+<div class="grid g2">
+  <div class="section">
+    <h2>实时持仓</h2>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table>
+        <thead><tr>
+          <th>标的</th><th class="num">持仓</th><th class="num">可用</th>
+          <th class="num">成本价</th>
+        </tr></thead>
+        <tbody id="position-body">
+          <tr><td colspan="4" class="empty">无持仓</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div class="section">
+    <h2>活动委托</h2>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table>
+        <thead><tr>
+          <th>标的</th><th>方向</th>
+          <th class="num">价格</th><th class="num">数量</th><th>状态</th>
+        </tr></thead>
+        <tbody id="order-body">
+          <tr><td colspan="5" class="empty">无活动委托</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{# ---- 成交流水 ---- #}
+<div class="section">
+  <h2>最近成交</h2>
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead><tr>
+        <th>时间</th><th>标的</th><th>方向</th>
+        <th class="num">成交价</th><th class="num">数量</th>
+      </tr></thead>
+      <tbody id="trade-body">
+        <tr><td colspan="5" class="empty">无成交记录</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ---- 事件日志 ---- #}
+<div class="section">
+  <h2>实时事件日志</h2>
+  <div class="log-wrap">
+    <pre class="log" id="event-log"></pre>
+    <button class="log-clear" onclick="document.getElementById('event-log').textContent=''">清空</button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block script %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+(function(){
+  var MAX_LOG = 200, MAX_TRADES = 50;
+  var trades = [];
+
+  // ---- WebSocket ----
+  var wsDot = document.getElementById('ws-dot');
+  var wsText = document.getElementById('ws-text');
+  var liveInd = document.getElementById('live-indicator');
+  var socket;
+  try {
+    socket = io('/ws', {transports: ['websocket', 'polling']});
+  } catch(e) {
+    wsText.textContent = '不可用';
+    return;
+  }
+
+  socket.on('connect', function() {
+    wsDot.className = 'ws-dot on';
+    wsText.textContent = '已连接';
+  });
+  socket.on('disconnect', function() {
+    wsDot.className = 'ws-dot off';
+    wsText.textContent = '已断开';
+    liveInd.style.display = 'none';
+  });
+
+  // ---- 引擎状态 ----
+  socket.on('engine_status', function(d) {
+    var eng = document.getElementById('kpi-engine');
+    document.getElementById('v-engine').textContent = d.started ? '运行中' : '已停止';
+    document.getElementById('s-engine').textContent =
+      d.started ? '事件队列 ' + (d.event_queue_size||0) : '未启动';
+    eng.className = 'kpi ' + (d.started ? 'good' : '');
+
+    var gw = document.getElementById('kpi-gateway');
+    document.getElementById('v-gateway').textContent =
+      d.gateway_connected ? d.gateway_name.toUpperCase() : '未连接';
+    document.getElementById('s-gateway').textContent =
+      d.gateway_connected ? '通道正常' : '-';
+    gw.className = 'kpi ' + (d.gateway_connected ? 'good' : '');
+
+    if (d.account) {
+      document.getElementById('v-account').textContent = fmtMoney(d.account.balance);
+      document.getElementById('s-account').textContent =
+        '可用 ' + fmtMoney(d.account.available);
+    }
+
+    document.getElementById('v-strategies').textContent =
+      (d.running_count||0) + ' / ' + (d.strategy_count||0);
+    document.getElementById('s-strategies').textContent =
+      (d.running_count||0) + ' 个运行中';
+
+    liveInd.style.display = d.running_count > 0 ? '' : 'none';
+  });
+
+  // ---- 策略 ----
+  socket.on('eStrategyUpdate', function(d) {
+    var rows = d.strategies || [];
+    var body = document.getElementById('strategy-body');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="5" class="empty">无策略实例</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function(s) {
+      var st = s.trading
+        ? '<span class="tag t-run">运行中</span>'
+        : s.inited
+          ? '<span class="tag t-ok">已就绪</span>'
+          : '<span class="tag t-mut">未初始化</span>';
+      var btn = s.trading
+        ? '<button onclick="stopStrategy(\'' + esc(s.name) + '\')">停止</button>'
+        : '<button class="primary" onclick="startStrategy(\'' + esc(s.name) + '\')">启动</button>';
+      return '<tr><td><b>' + esc(s.name) + '</b></td><td><code>' + esc(s.class) +
+             '</code></td><td>' + st + '</td><td class="num">' +
+             s.vt_symbols.length + '</td><td>' + btn + '</td></tr>';
+    }).join('');
+  });
+
+  // ---- 账户 ----
+  socket.on('eAccount', function(d) {
+    document.getElementById('v-account').textContent = fmtMoney(d.balance);
+    document.getElementById('s-account').textContent = '可用 ' + fmtMoney(d.available);
+  });
+
+  // ---- 持仓 ----
+  var posMap = {};
+  socket.on('ePosition', function(d) {
+    var sym = d.vt_symbol || (d.symbol + '.' + (d.exchange||''));
+    if ((d.volume||0) <= 0) delete posMap[sym]; else posMap[sym] = d;
+    renderPositions();
+  });
+
+  function renderPositions() {
+    var body = document.getElementById('position-body');
+    var keys = Object.keys(posMap).sort();
+    if (!keys.length) {
+      body.innerHTML = '<tr><td colspan="4" class="empty">无持仓</td></tr>';
+      return;
+    }
+    body.innerHTML = keys.map(function(sym) {
+      var p = posMap[sym];
+      return '<tr><td><b>' + sym + '</b></td>' +
+             '<td class="num">' + (p.volume||0) + '</td>' +
+             '<td class="num">' + (p.available||0) + '</td>' +
+             '<td class="num">' + (p.price||0).toFixed(3) + '</td></tr>';
+    }).join('');
+  }
+
+  // ---- 委托 ----
+  var orderMap = {};
+  socket.on('eOrder', function(d) {
+    if (!d.vt_orderid) return;
+    orderMap[d.vt_orderid] = d;
+    renderOrders();
+    log('委托 ' + (d.vt_symbol||d.symbol) + ' ' + (d.direction||'') + ' ' + (d.status||''));
+  });
+
+  function renderOrders() {
+    var body = document.getElementById('order-body');
+    var active = Object.values(orderMap).filter(function(o) {
+      return ['提交中','未成交','部分成交'].indexOf(o.status) >= 0;
+    });
+    if (!active.length) {
+      body.innerHTML = '<tr><td colspan="5" class="empty">无活动委托</td></tr>';
+      return;
+    }
+    body.innerHTML = active.map(function(o) {
+      var cls = o.direction === '买入' ? 'trade-buy' : 'trade-sell';
+      return '<tr><td><b>' + (o.vt_symbol||o.symbol) + '</b></td>' +
+             '<td class="' + cls + '">' + (o.direction||'') + '</td>' +
+             '<td class="num">' + (o.price||0).toFixed(2) + '</td>' +
+             '<td class="num">' + (o.volume||0) + '</td>' +
+             '<td>' + (o.status||'') + '</td></tr>';
+    }).join('');
+  }
+
+  // ---- 成交 ----
+  socket.on('eTrade', function(d) {
+    trades.unshift(d);
+    if (trades.length > MAX_TRADES) trades.length = MAX_TRADES;
+    renderTrades();
+    log('成交 ' + (d.vt_symbol||d.symbol) + ' ' + (d.direction||'') +
+        ' ' + (d.price||0).toFixed(2) + ' x' + (d.volume||0));
+  });
+
+  function renderTrades() {
+    var body = document.getElementById('trade-body');
+    if (!trades.length) {
+      body.innerHTML = '<tr><td colspan="5" class="empty">无成交记录</td></tr>';
+      return;
+    }
+    body.innerHTML = trades.map(function(t) {
+      var cls = t.direction === '买入' ? 'trade-buy' : 'trade-sell';
+      return '<tr><td>' + (t.datetime||'-') + '</td>' +
+             '<td><b>' + (t.vt_symbol||t.symbol) + '</b></td>' +
+             '<td class="' + cls + '">' + (t.direction||'') + '</td>' +
+             '<td class="num">' + (t.price||0).toFixed(2) + '</td>' +
+             '<td class="num">' + (t.volume||0) + '</td></tr>';
+    }).join('');
+  }
+
+  // ---- 网关状态 ----
+  socket.on('eGatewayStatus', function(d) {
+    document.getElementById('v-gateway').textContent =
+      d.connected ? (d.gateway||'').toUpperCase() || '已连接' : '已断开';
+    document.getElementById('s-gateway').textContent = d.msg || '-';
+    document.getElementById('kpi-gateway').className =
+      'kpi ' + (d.connected ? 'good' : 'bad');
+    log('网关 ' + (d.connected ? '已连接' : '已断开') + (d.msg ? ': ' + d.msg : ''));
+  });
+
+  // ---- 日志 ----
+  function log(msg) {
+    var el = document.getElementById('event-log');
+    var ts = new Date().toLocaleTimeString('zh-CN');
+    el.textContent += '[' + ts + '] ' + msg + '\n';
+    var lines = el.textContent.split('\n');
+    if (lines.length > MAX_LOG) el.textContent = lines.slice(-MAX_LOG).join('\n');
+    el.scrollTop = el.scrollHeight;
+  }
+
+  socket.on('cmd_result', function(d) {
+    log('命令: ' + (d.action||'') + ' → ' + (d.ok ? '成功' : '失败'));
+  });
+
+  // ---- 工具函数 ----
+  function fmtMoney(v) {
+    return Number(v||0).toLocaleString('zh-CN', {minimumFractionDigits:2, maximumFractionDigits:2});
+  }
+  function esc(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  // ---- 控制命令 ----
+  window.startEngine = function() {
+    var gw = document.getElementById('sel-gateway').value;
+    log('正在启动引擎 (网关=' + gw + ')...');
+    fetch('/api/engine/start', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({gateway: gw, confirm: 'yes'})
+    }).then(function(r){ return r.json(); }).then(function(d) {
+      log(d.ok ? '引擎启动成功，加载 ' + d.strategies_loaded + ' 个策略' : '启动失败: ' + (d.error||''));
+      socket.emit('get_status');
+      socket.emit('get_strategies');
+    });
+  };
+  window.stopEngine = function() {
+    if (!confirm('确认停止引擎？将撤销所有挂单并停止策略。')) return;
+    fetch('/api/engine/stop', {method:'POST'}).then(function(r){ return r.json(); }).then(function() {
+      log('引擎已停止');
+      socket.emit('get_status');
+    });
+  };
+  window.startStrategy = function(name) {
+    fetch('/api/engine/strategy/' + encodeURIComponent(name) + '/start', {method:'POST'})
+      .then(function(r){ return r.json(); }).then(function(d) {
+        log(d.ok ? '策略 ' + name + ' 已启动' : '启动失败');
+        socket.emit('get_strategies');
+      });
+  };
+  window.stopStrategy = function(name) {
+    fetch('/api/engine/strategy/' + encodeURIComponent(name) + '/stop', {method:'POST'})
+      .then(function(r){ return r.json(); }).then(function(d) {
+        log(d.ok ? '策略 ' + name + ' 已停止' : '停止失败');
+        socket.emit('get_strategies');
+      });
+  };
+  window.killSwitch = function(on) {
+    if (!confirm(on ? '确认激活急停？所有下单将被禁止。' : '确认解除急停？')) return;
+    fetch('/api/engine/kill_switch', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({activate: on, reason: '仪表盘手动操作'})
+    }).then(function(r){ return r.json(); }).then(function() {
+      log(on ? '急停已激活' : '急停已解除');
+    });
+  };
+
+  log('仪表盘已就绪');
+  setInterval(function() {
+    if (socket.connected) socket.emit('get_status');
+  }, 5000);
+})();
+</script>
+{% endblock %}

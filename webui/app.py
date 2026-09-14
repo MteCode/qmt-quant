@@ -28,6 +28,7 @@ from plotly.offline import get_plotlyjs
 from . import data_browser, jobs, loaders, scheduler
 from . import attribution
 from . import console
+from . import realtime
 from . import services
 from . import strategies as strat
 from .registry import TASKS, TASK_BY_ID
@@ -591,6 +592,106 @@ def api_schedule_run(sched_id):
     return jsonify(ok=True, job_id=job_id)
 
 
+@app.route("/dashboard")
+def dashboard():
+    """实时仪表盘 —— MainEngine 状态、策略运行、持仓、成交，全部 WebSocket 推送。"""
+    return render_template("dashboard.html")
+
+
+@app.get("/api/engine/status")
+def api_engine_status():
+    if realtime._engine is None:
+        return jsonify({"started": False, "error": "引擎未初始化"})
+    return jsonify(realtime._engine.get_engine_status())
+
+
+@app.post("/api/engine/start")
+def api_engine_start():
+    """启动 MainEngine 并连接网关。"""
+    data = request.get_json(silent=True) or {}
+    gateway = data.get("gateway", "sim")
+
+    if data.get("confirm") != "yes" and gateway != "sim":
+        return jsonify(ok=False, error="非模拟网关需要二次确认"), 400
+
+    engine = realtime._engine
+    if engine is None:
+        return jsonify(ok=False, error="引擎未初始化"), 500
+
+    if engine.gateway_connected:
+        return jsonify(ok=False, error="引擎已在运行"), 409
+
+    ok = engine.connect_gateway(gateway)
+    if not ok:
+        return jsonify(ok=False, error="网关连接失败")
+    count = engine.load_strategies_from_config()
+    engine.init_all_strategies()
+    engine.start_all_strategies()
+    return jsonify(ok=True, strategies_loaded=count)
+
+
+@app.post("/api/engine/stop")
+def api_engine_stop():
+    engine = realtime._engine
+    if engine is None:
+        return jsonify(ok=False, error="引擎未初始化")
+    engine.close()
+    return jsonify(ok=True)
+
+
+@app.get("/api/engine/strategies")
+def api_engine_strategies():
+    engine = realtime._engine
+    if engine is None:
+        return jsonify([])
+    return jsonify(engine.get_all_strategies())
+
+
+@app.post("/api/engine/strategy/<name>/start")
+def api_strategy_start(name):
+    engine = realtime._engine
+    if engine is None:
+        return jsonify(ok=False, error="引擎未初始化")
+    return jsonify(ok=engine.start_strategy(name))
+
+
+@app.post("/api/engine/strategy/<name>/stop")
+def api_strategy_stop(name):
+    engine = realtime._engine
+    if engine is None:
+        return jsonify(ok=False, error="引擎未初始化")
+    return jsonify(ok=engine.stop_strategy(name))
+
+
+@app.get("/api/engine/positions")
+def api_engine_positions():
+    engine = realtime._engine
+    if engine is None:
+        return jsonify([])
+    return jsonify(engine.get_all_positions())
+
+
+@app.get("/api/engine/orders")
+def api_engine_orders():
+    engine = realtime._engine
+    if engine is None:
+        return jsonify([])
+    return jsonify(engine.get_active_orders())
+
+
+@app.post("/api/engine/kill_switch")
+def api_kill_switch():
+    engine = realtime._engine
+    if engine is None:
+        return jsonify(ok=False, error="引擎未初始化")
+    data = request.get_json(silent=True) or {}
+    if data.get("activate"):
+        engine.activate_kill_switch(data.get("reason", "手动急停"))
+    else:
+        engine.deactivate_kill_switch()
+    return jsonify(ok=True)
+
+
 @app.route("/jobs")
 def job_list():
     return render_template("jobs.html", rows=jobs.list_jobs(limit=50))
@@ -655,6 +756,24 @@ def api_log(job_id):
                    log=jobs.read_log(job_id))
 
 
+def _init_main_engine():
+    """初始化 MainEngine（仅创建实例，不连接网关）。
+
+    引擎启动和网关连接由用户在仪表盘手动触发，或通过 API 调用。
+    """
+    try:
+        from qmtquant.engine.main_engine import MainEngine
+        engine = MainEngine()
+        engine.start()
+        realtime.init_realtime(app, engine)
+        print("  MainEngine 已初始化（事件引擎已启动，等待连接网关）")
+        print("  实时仪表盘: /dashboard")
+    except Exception as e:
+        print(f"  [WARN] MainEngine 初始化失败: {e}")
+        print("  仅 WebSocket 不可用，其余功能不受影响")
+        realtime.init_realtime(app)
+
+
 def main():
     p = argparse.ArgumentParser(description="量化研究管理台")
     p.add_argument("--port", type=int, default=8800)
@@ -662,6 +781,8 @@ def main():
                     help="默认只监听本机。管理台能触发真实下单，"
                          "改成 0.0.0.0 等于把交易接口暴露给局域网")
     p.add_argument("--debug", action="store_true")
+    p.add_argument("--no-engine", action="store_true",
+                    help="不初始化 MainEngine（仅管理台功能）")
     args = p.parse_args()
 
     if args.host not in ("127.0.0.1", "localhost"):
@@ -674,9 +795,17 @@ def main():
         n = sum(1 for s in scheduler.list_schedules() if s["enabled"])
         print(f"  定时调度已启动（{n} 条计划生效）")
 
+    if not args.no_engine:
+        _init_main_engine()
+    else:
+        realtime.init_realtime(app)
+
     print(f"\n  管理台已启动: http://127.0.0.1:{args.port}\n")
-    app.run(host=args.host, port=args.port, debug=args.debug,
-            threaded=True)
+    realtime.run_socketio(
+        app, host=args.host, port=args.port,
+        debug=args.debug, use_reloader=args.debug,
+        allow_unsafe_werkzeug=True,
+    )
 
 
 if __name__ == "__main__":
