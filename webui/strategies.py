@@ -30,13 +30,19 @@ from __future__ import annotations
 import csv
 import datetime as _dt
 import json
+import logging
 import math
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 from qmtquant.core.costs import DEFAULT_COST  # noqa: E402
+
+from . import discovery  # noqa: E402
+
+logger = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------- 工具
@@ -800,7 +806,11 @@ def _load_t0_allocation() -> dict:
 
 # --------------------------------------------------------------- 注册表
 
-STRATEGIES: list[Strategy] = [
+#: 手写的核心清单。**保留**是刻意的 —— 这 13 条里只有 4 条指向
+#: strategies/<目录>/，另外 9 条（t0_*、qlib_ml…）的产物散在 models/ 与
+#: reports/，**没有 manifest 可供发现**。若改成"用发现结果替换本清单"，
+#: 会静默丢掉这 9 个能用的页面。发现结果只做**追加**（见 _merge_discovered）。
+_CORE: list[Strategy] = [
     Strategy(
         id="intraday_gbm",
         name="全市场日内 GBM 选股",
@@ -1085,8 +1095,126 @@ STRATEGIES: list[Strategy] = [
     ),
 ]
 
+# --------------------------------------------------------------- 发现层
+
+#: 排障开关：设为 0 则退回「与手写清单完全一致」的旧行为
+_DISCOVERY_ON = os.environ.get("QMT_WEBUI_DISCOVERY", "1") not in ("0", "false", "False")
+
+
+def _dig(obj, path: str):
+    """按 'a.b.c' 取值。任一段缺失返回 None，不抛异常。"""
+    cur = obj
+    for part in str(path).split("."):
+        if not part:
+            continue
+        cur = cur.get(part) if isinstance(cur, dict) else getattr(cur, part, None)
+        if cur is None:
+            return None
+    return cur
+
+
+def _numeric(v):
+    """metrics 里只允许数字或 None —— test_console_registry 守着这条。
+
+    字符串会让模板的 |pct 过滤器吐出「—」，看起来像「没测过」，
+    其实是有值但类型错了。"""
+    if v is None or isinstance(v, bool):
+        return None
+    return v if isinstance(v, (int, float)) else None
+
+
+def _generic_loader(spec, base: Path = ROOT) -> object:
+    """按 manifest 的 results 声明读结果。
+
+    只走声明的点路径，绝不猜：文件缺失或字段对不上就返回空态，
+    任何异常都吞成空态 —— 编造数字比空白危险得多。
+
+    ``base`` 可覆盖（测试用），默认仓库根。"""
+    def load() -> dict:
+        try:
+            res = spec.result
+            if res.kind == "none" or not spec.output_dir or not res.source_json:
+                return {"has_result": False}
+            data = _read_json(base / spec.output_dir / res.source_json)
+            if data is None:
+                return {"has_result": False}
+
+            metrics = {k: _numeric(_dig(data, p))
+                       for k, p in (res.metrics or {}).items()}
+            if res.normalize_drawdown and "max_drawdown" in metrics:
+                metrics["max_drawdown"] = _norm_dd(metrics["max_drawdown"])
+
+            period = _dig(data, res.period) if res.period else None
+            if isinstance(period, (list, tuple)):
+                period = " ~ ".join(str(x) for x in period)
+            return {
+                "has_result": True,
+                "metrics": metrics,
+                "period": "" if period is None else str(period),
+                "source": f"{spec.output_dir}/{res.source_json}",
+                "n_trades": (_numeric(_dig(data, res.n_trades))
+                             if res.n_trades else None),
+            }
+        except Exception as e:                    # noqa: BLE001
+            logger.warning("通用 loader 读 %s 失败: %s", spec.id, e)
+            return {"has_result": False}
+    return load
+
+
+def _strategy_from_spec(spec) -> Strategy:
+    is_code = spec.source in ("builtin", "code")
+    # output_dir 只在真的存在时才声明 —— test_console_registry 要求
+    # 「声明了就必须存在」，否则一个新策略还没跑出产物就把测试打红。
+    out_dir = (spec.output_dir
+               if spec.output_dir and (ROOT / spec.output_dir).is_dir() else "")
+    return Strategy(
+        id=spec.id,
+        name=spec.name or spec.id,
+        category=spec.category or "未分类",
+        summary=spec.summary or "",
+        how=list(spec.how), inputs=list(spec.inputs), risk=list(spec.risk),
+        code=spec.code,
+        dir=spec.dir,
+        output_dir=out_dir,
+        backtest_task=spec.backtest_task,
+        live_task=spec.live_task,
+        status=spec.status or "research",
+        caveat=spec.caveat,
+        # 代码策略没有产物 loader，走空态；项目策略走通用 loader
+        loader=None if is_code else _generic_loader(spec),
+    )
+
+
+def _merge_discovered(core: list[Strategy]) -> list[Strategy]:
+    """核心清单 + 发现结果，三键去重（核心优先）。
+
+    核心优先是刻意的：那 9 个没有 manifest 的实验必须留在页面上。"""
+    if not _DISCOVERY_ON:
+        return list(core)
+    claimed: set[str] = set()
+    for s in core:
+        claimed |= discovery.keys(s.id, s.dir, s.output_dir)
+    out = list(core)
+    try:
+        specs = discovery.discovered_specs()
+    except Exception as e:                        # noqa: BLE001
+        logger.warning("策略发现失败，退回手写清单: %s", e, exc_info=True)
+        return out
+    for spec in specs:
+        if discovery.keys(spec.id, spec.dir, spec.output_dir) & claimed:
+            continue
+        try:
+            out.append(_strategy_from_spec(spec))
+        except Exception as e:                    # noqa: BLE001
+            logger.warning("构造策略 %s 失败: %s", spec.id, e)
+    return out
+
+
+STRATEGIES: list[Strategy] = _merge_discovered(_CORE)
 BY_ID = {s.id: s for s in STRATEGIES}
-CATEGORIES = ["日内", "日频", "组合", "研究"]
+CATEGORIES = ["日内", "日频", "组合", "研究"] + [
+    c for c in sorted({s.category for s in STRATEGIES})
+    if c not in ("日内", "日频", "组合", "研究")]
 
 
 

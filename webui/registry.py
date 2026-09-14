@@ -14,12 +14,22 @@
 `paper_trade` 会真实下单。它在这里登记时 `dry_run` 默认为真，且标记
 `dangerous=True`，前端必须二次确认才能提交非预览的执行。
 """
+import json
+import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from . import discovery
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = ROOT / ".venv" / "Scripts" / "python.exe"
 STRATEGY = "strategies/alstm_ppo_csi1000"
+
+logger = logging.getLogger(__name__)
+
+#: 排障开关：设为 0 则只用核心清单，行为与改造前完全一致
+_DISCOVERY_ON = os.environ.get("QMT_WEBUI_DISCOVERY", "1") not in ("0", "false", "False")
 
 
 @dataclass
@@ -49,9 +59,16 @@ class Task:
     dangerous: bool = False
     #: 该任务产出哪些结果文件，跑完后前端可直接跳转查看
     outputs: list = field(default_factory=list)
+    #: 参数传递风格。flag = ``--name value``；set = ``--set name=<json>``
+    #: （通用回测入口 run_strategy.py 用后者，好让参数保持类型往返）
+    param_style: str = "flag"
+    #: 固定附加参数，拼在脚本路径之后、用户参数之前。
+    #: 目前用于把 run_strategy.py 的 ``--strategy <点路径>`` 固定下来。
+    extra_args: list = field(default_factory=list)
 
 
-TASKS = [
+#: 手写的核心任务清单。保留（而非用发现结果替换）的理由见 strategies.py::_CORE
+_CORE_TASKS = [
     Task(
         id="download_full_market",
         name="下载全市场行情",
@@ -219,7 +236,7 @@ TASKS = [
 ]
 
 # 盘中行情增量更新
-TASKS.append(
+_CORE_TASKS.append(
     Task(
         id="update_intraday",
         name="盘中行情增量更新",
@@ -238,7 +255,7 @@ TASKS.append(
 )
 
 # 全市场日内 GBM
-TASKS.extend([
+_CORE_TASKS.extend([
     Task(
         id="train_intraday_gbm",
         name="训练全市场日内GBM",
@@ -295,7 +312,7 @@ TASKS.extend([
 ])
 
 # 920368 1分钟日内做T：模型训练与样本外回测
-TASKS.extend([
+_CORE_TASKS.extend([
     Task(id="train_intraday_t_920368", name="训练920368做T模型",
          script="strategies/intraday_t_920368/train_gbm.py",
          desc="用920368.BSE清洗后的1分钟数据训练LightGBM短线方向模型。",
@@ -306,6 +323,87 @@ TASKS.extend([
          eta="约1分钟", outputs=["strategies/intraday_t_920368/backtest/report.html", "strategies/intraday_t_920368/backtest/summary.json"]),
 ])
 
+def _param_from_spec(p) -> Param:
+    return Param(name=p.name, label=p.label, kind=p.kind, default=p.default,
+                 choices=list(p.choices), flag=p.flag, help=p.help)
+
+
+def _task_from_spec(spec) -> Task:
+    """把 manifest 的任务转成 registry.Task。
+
+    script 统一成**仓库相对**路径（与核心清单一致），这样去重和
+    ``jobs.py`` 的 ``cwd=ROOT`` 都对得上。"""
+    project = ROOT / spec.project_dir if spec.project_dir else ROOT
+    full = discovery.resolve_script(project, spec.script)
+    return Task(
+        id=spec.id, name=spec.name, script=full.relative_to(ROOT).as_posix(),
+        desc=spec.desc, eta=spec.eta, dangerous=spec.dangerous,
+        outputs=list(spec.outputs), param_style=spec.param_style,
+        extra_args=list(spec.extra_args),
+        params=[_param_from_spec(p) for p in spec.params],
+    )
+
+
+def _code_strategy_task(spec) -> Task:
+    """代码策略走通用回测入口，参数由 ``StrategyBase.parameters`` 派生。"""
+    return Task(
+        id=f"{spec.id}.run_strategy",
+        name=f"回测 {spec.name}",
+        script="scripts/run_strategy.py",
+        desc="通用回测入口；参数由策略声明自动派生，不用为它单独写脚本。",
+        eta="视标的池与区间而定",
+        param_style="set",
+        extra_args=["--strategy", spec.dotted],
+        params=[_param_from_spec(p) for p in spec.params],
+    )
+
+
+def _build_tasks() -> list[Task]:
+    """核心任务 + 发现任务（按 id / script 去重，核心优先）。"""
+    if not _DISCOVERY_ON:
+        return list(_CORE_TASKS)
+    try:
+        specs = discovery.discovered_specs()
+    except Exception as e:                        # noqa: BLE001
+        logger.warning("任务发现失败，退回核心清单: %s", e, exc_info=True)
+        return list(_CORE_TASKS)
+
+    core_ids = {t.id for t in _CORE_TASKS}
+    core_scripts = {t.script for t in _CORE_TASKS}
+    extra: list[Task] = []
+    for spec in specs:
+        if spec.source in ("builtin", "code"):
+            if not spec.dotted:
+                continue
+            try:
+                t = _code_strategy_task(spec)
+            except Exception:                     # noqa: BLE001
+                continue
+            if t.id not in core_ids:
+                extra.append(t)
+                core_ids.add(t.id)
+            continue
+        try:
+            task_specs = discovery.project_tasks(spec)
+        except Exception as e:                    # noqa: BLE001
+            logger.warning("列 %s 的任务失败: %s", spec.id, e)
+            continue
+        for ts in task_specs:
+            if ts.id in core_ids:
+                continue
+            try:
+                t = _task_from_spec(ts)
+            except (ValueError, OSError):
+                continue
+            if t.script in core_scripts:          # 核心已有同脚本任务，跳过
+                continue
+            extra.append(t)
+            core_ids.add(t.id)
+            core_scripts.add(t.script)
+    return list(_CORE_TASKS) + extra
+
+
+TASKS = _build_tasks()
 TASK_BY_ID = {t.id: t for t in TASKS}
 
 
@@ -315,12 +413,27 @@ def build_command(task_id: str, values: dict) -> list:
     if task is None:
         raise ValueError(f"未登记的任务: {task_id}")
 
-    cmd = [str(PYTHON), "-u", task.script]
+    cmd = [str(PYTHON), "-u", task.script, *task.extra_args]
     for p in task.params:
         if p.name not in values:
             continue
         v = values[p.name]
-        if p.kind == "bool":
+        if task.param_style == "set":
+            # 走通用入口的 --set k=<json>，保持类型往返
+            # 表单值都是字符串，而 update_setting 不转类型，这里必须按 kind 转
+            if p.kind == "bool":
+                v = v in (True, "true", "True", "1", 1, "on")
+            elif v is None or v == "":
+                continue
+            elif p.kind in ("int", "float"):
+                try:
+                    v = int(v) if p.kind == "int" else float(v)
+                except (TypeError, ValueError):
+                    raise ValueError(f"参数 {p.name} 应为 {p.kind}，收到 {v!r}") from None
+            else:
+                v = str(v)
+            cmd += ["--set", f"{p.name}={json.dumps(v)}"]
+        elif p.kind == "bool":
             # 布尔型只在为真时附加开关
             if v in (True, "true", "True", "1", 1, "on"):
                 cmd.append(p.cli_flag())
