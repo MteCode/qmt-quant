@@ -141,13 +141,19 @@ def main():
             code = pos.stock_code
             parts = code.split(".")
             vt = f"{parts[0]}.SSE" if parts[1] == "SH" else f"{parts[0]}.SZSE"
+            # 盯市现价 = 市值 / 持仓量。avg_price 是**成本价**，不是现价 ——
+            # 拿它当参考价会让对账把浮盈算成滑点（实测某笔浮盈 88% 被记成
+            # 「有利滑点 88%」），也会让清仓预估金额按成本价而非市价算。
+            mv = pos.market_value or 0.0
+            last = (mv / pos.volume) if pos.volume else 0.0
             positions.append({
                 "xt_code": code,
                 "vt_symbol": vt,
                 "volume": pos.volume,
                 "available": pos.can_use_volume,
                 "avg_price": pos.avg_price,
-                "market_value": pos.market_value,
+                "last_price": last or pos.avg_price,
+                "market_value": mv,
             })
 
     if not positions:
@@ -185,7 +191,7 @@ def main():
         event_engine.stop()
         return 0
 
-    sell_value = sum(p["available"] * p["avg_price"] for p in sellable)
+    sell_value = sum(p["available"] * p["last_price"] for p in sellable)
     print(f"\n  可卖出 {len(sellable)} 只，"
           f"预计卖出金额 ~{sell_value:,.0f} 元")
 
@@ -199,7 +205,7 @@ def main():
         vt = p["vt_symbol"]
         vol = p["available"]
         xt_code = p["xt_code"]
-        price = p["avg_price"]
+        price = p["last_price"]
         name = names.get(vt, "")
         remark = f"{run_id}_{seq:03d}"
 
