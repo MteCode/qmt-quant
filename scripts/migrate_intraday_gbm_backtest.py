@@ -27,12 +27,15 @@ LEGACY_DIR = ROOT / "models" / "intraday_gbm" / "backtest"
 RUNS_DIR = ROOT / "strategies" / "intraday_gbm" / "runs"
 
 _CORE = ("total_return", "annual_return", "monthly_return",
-         "max_drawdown", "sharpe", "n_trades", "win_rate")
+         "max_drawdown", "sharpe", "volatility",
+         "n_trades", "win_rate", "trading_days")
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="迁移历史回测产物为标准 run")
     p.add_argument("--dry-run", action="store_true", help="只看不写")
+    p.add_argument("--force", action="store_true",
+                   help="run 已存在时重新生成（指标口径变更后用）")
     args = p.parse_args()
 
     summary_path = LEGACY_DIR / "summary.json"
@@ -56,8 +59,10 @@ def main() -> int:
     run_id = f"bt_legacy_{stamp}"
 
     if any(r.get("run_id") == run_id for r in discover_backtests()):
-        print(f"run 已存在，跳过: {run_id}")
-        return 0
+        if not args.force:
+            print(f"run 已存在，跳过: {run_id}（要重建加 --force）")
+            return 0
+        print(f"run 已存在，--force 重建: {run_id}")
 
     best_mode = max(results, key=lambda m: results[m].get("sharpe") or 0)
     best = results[best_mode]

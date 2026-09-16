@@ -490,7 +490,8 @@ RUNS_DIR = ROOT / "strategies" / "intraday_gbm" / "runs"
 #: 进 manifest.metrics 的核心指标。回测脚本内部还算了波动率、交易日数等，
 #: 但列表页排序和跨 run 对比只用得上这几个。
 _CORE_METRICS = ("total_return", "annual_return", "monthly_return",
-                 "max_drawdown", "sharpe", "n_trades", "win_rate")
+                 "max_drawdown", "sharpe", "volatility",
+                 "n_trades", "win_rate", "trading_days")
 
 
 def _save_run(summary: dict, out: Path, results: dict, args) -> str:

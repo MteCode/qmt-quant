@@ -32,8 +32,10 @@
     "monthly_return": 0.1029,
     "max_drawdown": -0.007,
     "sharpe": 31.972,
+    "volatility": 0.0648,
     "n_trades": 4560,
     "win_rate": 0.693,
+    "trading_days": 251,
     "best_mode": "t_plus_0",
     "modes": [
       "mean_reversion",
@@ -47,8 +49,10 @@
         "monthly_return": 0.1029,
         "max_drawdown": -0.007,
         "sharpe": 31.972,
+        "volatility": 0.0648,
         "n_trades": 4560,
         "win_rate": 0.693,
+        "trading_days": 251,
         "targets_passed": 2,
         "targets_total": 3
       },
@@ -58,8 +62,10 @@
         "monthly_return": 0.0814,
         "max_drawdown": -0.0077,
         "sharpe": 18.048,
+        "volatility": 0.08,
         "n_trades": 3961,
         "win_rate": 0.6519,
+        "trading_days": 251,
         "targets_passed": 2,
         "targets_total": 3
       },
@@ -69,8 +75,10 @@
         "monthly_return": 0.0116,
         "max_drawdown": -0.0092,
         "sharpe": 3.764,
+        "volatility": 0.0323,
         "n_trades": 249,
         "win_rate": 0.7229,
+        "trading_days": 251,
         "targets_passed": 2,
         "targets_total": 3
       }

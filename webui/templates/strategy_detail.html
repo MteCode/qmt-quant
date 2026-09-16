@@ -123,6 +123,34 @@
       {% endif %}</div>
   </div>
 </div>
+
+{# 交易活跃度 —— 只看收益不看换手，没法判断结果是不是靠高频摩擦堆出来的 #}
+{% if m.n_trades is not none %}
+<div class="grid g4" style="margin-top:12px">
+  <div class="kpi">
+    <div class="l">交易次数</div>
+    <div class="v">{{ m.n_trades }}</div>
+    <div class="s">完整回合（开仓→平仓）</div>
+  </div>
+  <div class="kpi">
+    <div class="l">日均交易</div>
+    <div class="v">
+      {% if m.trading_days %}{{ '%.1f'|format(m.n_trades / m.trading_days) }}
+      {% else %}&mdash;{% endif %}</div>
+    <div class="s">笔 / 交易日</div>
+  </div>
+  <div class="kpi">
+    <div class="l">胜率</div>
+    <div class="v">{{ m.win_rate|pct(1) }}</div>
+    <div class="s">盈利回合占比</div>
+  </div>
+  <div class="kpi">
+    <div class="l">交易日数</div>
+    <div class="v">{{ m.trading_days or '—' }}</div>
+    <div class="s">{{ r.period or '回测区间' }}</div>
+  </div>
+</div>
+{% endif %}
 {% endif %}
 
 {% if r.equity %}
@@ -172,7 +200,8 @@
   <table>
     <thead><tr><th>模式</th><th class="num">总收益</th>
       <th class="num">月化</th><th class="num">回撤</th><th class="num">夏普</th>
-      <th class="num">交易</th><th class="num">胜率</th><th>达标</th></tr></thead>
+      <th class="num">交易</th><th class="num">交易日</th><th class="num">日均</th>
+      <th class="num">胜率</th><th>达标</th></tr></thead>
     <tbody>
     {% for x in r.modes %}
       <tr>
@@ -183,6 +212,9 @@
         <td class="num">{{ x.max_drawdown|pct }}</td>
         <td class="num">{{ x.sharpe|num(2) }}</td>
         <td class="num">{{ x.n_trades }}</td>
+        <td class="num">{{ x.trading_days or '—' }}</td>
+        <td class="num">{% if x.trading_days
+          %}{{ '%.1f'|format(x.n_trades / x.trading_days) }}{% else %}&mdash;{% endif %}</td>
         <td class="num">{{ x.win_rate|pct(1) }}</td>
         <td><span class="tag {{ 't-ok' if x.targets_passed == x.targets_total
               else ('t-warn' if x.targets_passed else 't-err') }}">

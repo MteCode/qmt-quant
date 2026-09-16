@@ -202,8 +202,8 @@ def _norm_dd(v):
 
 #: 回测 run 里进「各模式对比」表的字段
 _MODE_FIELDS = ("total_return", "annual_return", "monthly_return",
-                "sharpe", "n_trades", "win_rate",
-                "targets_passed", "targets_total")
+                "sharpe", "volatility", "n_trades", "win_rate",
+                "trading_days", "targets_passed", "targets_total")
 
 
 def result_from_runs(strategy_dir: str, root: Path = ROOT) -> dict:
@@ -254,6 +254,10 @@ def result_from_runs(strategy_dir: str, root: Path = ROOT) -> dict:
             "annual_return": bm.get("annual_return"),
             "max_drawdown": _norm_dd(bm.get("max_drawdown")),
             "sharpe": bm.get("sharpe"),
+            "volatility": bm.get("volatility"),
+            "n_trades": bm.get("n_trades"),
+            "win_rate": bm.get("win_rate"),
+            "trading_days": bm.get("trading_days"),
         }
         out["config"] = bt.get("params") or {}
         out["generated_at"] = bt.get("created_at")
