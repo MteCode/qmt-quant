@@ -527,9 +527,13 @@ def _save_run(summary: dict, out: Path, results: dict, args) -> str:
     metrics = {k: best.get(k) for k in _CORE_METRICS}
     metrics["best_mode"] = best_mode
     metrics["modes"] = sorted(results)
-    metrics["by_mode"] = {
-        m: {k: r.get(k) for k in _CORE_METRICS} for m, r in results.items()
-    }
+    metrics["by_mode"] = {}
+    for m, r in results.items():
+        tg = r.get("targets") or {}
+        row = {k: r.get(k) for k in _CORE_METRICS}
+        row["targets_passed"] = sum(1 for v in tg.values() if v.get("pass"))
+        row["targets_total"] = len(tg)
+        metrics["by_mode"][m] = row
 
     manifest = create_manifest(
         run_id=run_id,

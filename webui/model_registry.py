@@ -189,6 +189,80 @@ def discover_backtests(root: Path = ROOT,
     return rows
 
 
+def _norm_dd(v):
+    """回撤统一为负数 —— 各产物符号约定不一致，不在这里统一，
+    页面就得逐处判断，迟早有一处把 -27% 显示成 +27%。"""
+    if v is None:
+        return None
+    try:
+        return -abs(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+#: 回测 run 里进「各模式对比」表的字段
+_MODE_FIELDS = ("total_return", "annual_return", "monthly_return",
+                "sharpe", "n_trades", "win_rate",
+                "targets_passed", "targets_total")
+
+
+def result_from_runs(strategy_dir: str, root: Path = ROOT) -> dict:
+    """把该策略最新的回测 run 与模型 run 合成策略页要的统一结构。
+
+    这一份取代 strategies.py 里「一个策略一个」的 _load_* 函数。那些函数
+    存在的唯一原因是每个策略的产物格式都不同 —— 产物一旦统一成 manifest，
+    读取逻辑就只剩这一份，与策略数量无关。
+    """
+    mine = [r for r in discover_runs(root)
+            if (r.get("strategy_id") or r.get("_strategy_dir")) == strategy_dir]
+    # discover_runs 已按 created_at 倒序，取首个即最新
+    bt = next((r for r in mine if kind_of(r) == "backtest"), None)
+    md = next((r for r in mine if kind_of(r) == "model"), None)
+    if bt is None and md is None:
+        return {"has_result": False}
+
+    out: dict = {"has_result": True, "model": {}, "modes": []}
+
+    if md:
+        mm = md.get("metrics") or {}
+        mp = md.get("params") or {}
+        out["model"] = {
+            "test_auc": mm.get("test_auc"),
+            "test_accuracy": mm.get("test_accuracy"),
+            "train_auc": mm.get("train_auc"),
+            "n_features": mm.get("n_features"),
+            "train_samples": mm.get("train_samples"),
+            "horizon": mp.get("horizon_bars"),
+            "period": " ~ ".join(str(x)[:10]
+                                 for x in (md.get("train_period") or [])),
+        }
+        imp = (md.get("artifacts") or {}).get("feature_importance")
+        if imp:
+            out["importance"] = _read_csv(Path(md["_dir"]) / imp)[:10]
+        out["source"] = str(Path(md["_dir"]).relative_to(root))
+
+    if bt:
+        bm = bt.get("metrics") or {}
+        for mode, r in (bm.get("by_mode") or {}).items():
+            row = {k: r.get(k) for k in _MODE_FIELDS}
+            row["mode"] = mode
+            row["max_drawdown"] = _norm_dd(r.get("max_drawdown"))
+            out["modes"].append(row)
+        # 顶层指标已由回测脚本取夏普最高的模式，这里直接用
+        out["metrics"] = {
+            "total_return": bm.get("total_return"),
+            "annual_return": bm.get("annual_return"),
+            "max_drawdown": _norm_dd(bm.get("max_drawdown")),
+            "sharpe": bm.get("sharpe"),
+        }
+        out["config"] = bt.get("params") or {}
+        out["generated_at"] = bt.get("created_at")
+        out["run_id"] = bt.get("run_id")
+        out.setdefault("source", str(Path(bt["_dir"]).relative_to(root)))
+
+    return out
+
+
 def get_run(run_id: str, root: Path = ROOT) -> dict | None:
     """按 run_id 查找任意类型的 run。"""
     for r in discover_runs(root):

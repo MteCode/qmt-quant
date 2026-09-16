@@ -226,54 +226,14 @@ class Strategy:
 # --------------------------------------------------------------- 各策略 loader
 
 def _load_intraday_gbm() -> dict:
-    d = ROOT / "models" / "intraday_gbm"
-    metrics = _read_json(d / "metrics.json")
-    bt = _read_json(d / "backtest" / "summary.json")
-    if not metrics and not bt:
-        return {"has_result": False}
+    """试点：产物已标准化为 manifest，读取交给通用 reader。
 
-    out = {"has_result": True, "source": str(d.relative_to(ROOT)),
-           "model": {}, "modes": []}
-    if metrics:
-        out["model"] = {
-            "test_auc": metrics.get("test_auc"),
-            "test_accuracy": metrics.get("test_accuracy"),
-            "train_auc": metrics.get("train_auc"),
-            "n_features": metrics.get("n_features"),
-            "train_samples": metrics.get("train_samples"),
-            "horizon": metrics.get("horizon_bars"),
-            "period": " ~ ".join(
-                [str(x)[:10] for x in metrics.get("train_date_range", [])]),
-        }
-        out["importance"] = _read_csv(d / "feature_importance.csv")[:10]
-
-    if bt and bt.get("results"):
-        for mode, r in bt["results"].items():
-            tg = r.get("targets", {})
-            out["modes"].append({
-                "mode": mode,
-                "total_return": r.get("total_return"),
-                "annual_return": r.get("annual_return"),
-                "monthly_return": r.get("monthly_return"),
-                "max_drawdown": _norm_dd(r.get("max_drawdown")),
-                "sharpe": r.get("sharpe"),
-                "n_trades": r.get("n_trades"),
-                "win_rate": r.get("win_rate"),
-                "targets_passed": sum(1 for v in tg.values() if v.get("pass")),
-                "targets_total": len(tg),
-            })
-        out["config"] = bt.get("config", {})
-        out["generated_at"] = bt.get("generated_at")
-        # 取第一个模式作为主指标
-        if out["modes"]:
-            m = out["modes"][0]
-            out["metrics"] = {
-                "total_return": m["total_return"],
-                "annual_return": m["annual_return"],
-                "max_drawdown": m["max_drawdown"],
-                "sharpe": m["sharpe"],
-            }
-    return out
+    原先这里是 51 行专读 models/intraday_gbm/ 的代码。产物统一之后，
+    每个策略不再需要自己的 loader —— 其余 11 个按同样方式迁移后，
+    这一族函数可以整体删除。
+    """
+    from . import model_registry
+    return model_registry.result_from_runs("intraday_gbm")
 
 
 def _load_t0_single() -> dict:
