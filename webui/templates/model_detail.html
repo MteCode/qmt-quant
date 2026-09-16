@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% block title %}{{ model.run_id }} · 模型详情{% endblock %}
+{% block body %}
+
+{% set met = model.metrics or {} %}
+{% set params = model.params or {} %}
+
+{# ---- 头部 ---- #}
+<div class="row" style="justify-content:space-between;align-items:flex-start;margin-bottom:18px">
+  <div>
+    <div style="margin-bottom:4px">
+      <a href="/models" style="font-size:12px;color:var(--muted)">&larr; 模型管理</a>
+    </div>
+    <h1 style="margin-bottom:2px">{{ model.run_id }}</h1>
+    <div class="sub" style="margin:0">
+      <span class="tag t-run">{{ model.model_type }}</span>
+      <span class="tag t-mut">{{ model.strategy_id or model._strategy_dir }}</span>
+      {% if model.is_deployed %}
+        <span class="tag t-ok">已部署</span>
+      {% elif model.status == 'training' %}
+        <span class="tag t-warn">训练中</span>
+      {% else %}
+        <span class="tag t-mut">已完成</span>
+      {% endif %}
+      <span style="color:var(--muted);font-size:12px;margin-left:8px">
+        {{ model.created_at[:16] if model.created_at else '' }}
+      </span>
+    </div>
+  </div>
+  <div>
+    {% if model.is_deployed %}
+      <button class="danger" onclick="undeployModel()">取消部署</button>
+    {% else %}
+      <button class="primary" onclick="deployModel()">部署到实盘</button>
+    {% endif %}
+  </div>
+</div>
+
+{# ---- KPI 卡片 ---- #}
+<div class="grid g4" style="margin-bottom:20px">
+  <div class="kpi{{ ' good' if met.total_return is not none and met.total_return > 0 else ' bad' if met.total_return is not none and met.total_return < 0 else '' }}">
+    <div class="l">总收益</div>
+    <div class="v">{{ met.total_return|pct(2, true) }}</div>
+    <div class="s">{{ (model.test_period or ['',''])|join(' ~ ') }}</div>
+  </div>
+  <div class="kpi{{ ' good' if met.annual_return is not none and met.annual_return > 0 else ' bad' if met.annual_return is not none and met.annual_return < 0 else '' }}">
+    <div class="l">年化收益</div>
+    <div class="v">{{ met.annual_return|pct(2, true) }}</div>
+    <div class="s">按 244 交易日折算</div>
+  </div>
+  <div class="kpi{{ ' bad' if met.max_drawdown is not none and met.max_drawdown < -0.2 else '' }}">
+    <div class="l">最大回撤</div>
+    <div class="v">{{ met.max_drawdown|pct(2) }}</div>
+    <div class="s">{{ '超过 20% 上限' if met.max_drawdown is not none and met.max_drawdown < -0.2 else '风控达标' if met.max_drawdown is not none else '' }}</div>
+  </div>
+  <div class="kpi{{ ' good' if met.sharpe is not none and met.sharpe > 1 else ' bad' if met.sharpe is not none and met.sharpe < 0 else '' }}">
+    <div class="l">Sharpe</div>
+    <div class="v">{{ met.sharpe|num(3) }}</div>
+    <div class="s">年化波动 {{ met.volatility|pct(2) if met.volatility is not none else '—' }}</div>
+  </div>
+</div>
+
+{# ---- 第二行 KPI ---- #}
+<div class="grid g4" style="margin-bottom:20px">
+  <div class="kpi">
+    <div class="l">平均仓位</div>
+    <div class="v">{{ met.avg_position|pct(1) if met.avg_position is not none else '—' }}</div>
+    <div class="s">{{ '偏低，主要靠空仓' if met.avg_position is not none and met.avg_position < 0.3 else '' }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">初始资金</div>
+    <div class="v">{{ '{:,.0f}'.format(params.capital) if params.capital else '—' }}</div>
+    <div class="s">元</div>
+  </div>
+  <div class="kpi">
+    <div class="l">训练耗时</div>
+    <div class="v">{% if model.train_time_sec %}{{ (model.train_time_sec / 60)|round(1) }} 分{% else %}—{% endif %}</div>
+    <div class="s">{{ (model.train_period or ['',''])|join(' ~ ') }}</div>
+  </div>
+  <div class="kpi">
+    <div class="l">测试区间</div>
+    <div class="v" style="font-size:16px">{{ (model.test_period or ['',''])|join(' ~ ') or '—' }}</div>
+    <div class="s">样本外</div>
+  </div>
+</div>
+
+{# ---- 净值曲线 ---- #}
+{% if equity_chart %}
+<h2>净值曲线</h2>
+<div class="card">{{ equity_chart|safe }}</div>
+{% endif %}
+
+{# ---- 参数 ---- #}
+<div class="grid g2">
+  <div>
+    <h2>训练参数</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>参数</th><th class="num">值</th></tr></thead>
+        <tbody>
+        {% for k, v in params.items() %}
+        <tr><td>{{ k }}</td><td class="num">{{ v }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  <div>
+    <h2>产物文件</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>文件</th><th>路径</th></tr></thead>
+        <tbody>
+        {% for k, v in (model.artifacts or {}).items() %}
+        <tr><td>{{ k }}</td><td style="font-size:12px;color:var(--muted)">{{ v }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if model.notes %}
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line);
+                  font-size:12.5px;color:var(--muted)">
+        {{ model.notes }}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<script>
+function deployModel(){
+  if(!confirm('确认部署模型 {{ model.run_id }} 到实盘？\n实盘引擎下次启动时将加载此模型。')) return;
+  fetch('/api/models/{{ model.run_id }}/deploy',{method:'POST'})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.ok) location.reload();
+      else alert('部署失败: '+(d.error||'未知错误'));
+    });
+}
+function undeployModel(){
+  if(!confirm('确认取消部署？')) return;
+  fetch('/api/models/{{ model.run_id }}/undeploy',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({strategy_dir:'{{ model._strategy_dir }}'})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.ok) location.reload();
+      else alert('操作失败: '+(d.error||'未知错误'));
+    });
+}
+</script>
+
+{% endblock %}

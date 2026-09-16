@@ -25,7 +25,7 @@ from flask import Flask, jsonify, render_template, request, send_file
 from pathlib import Path
 from plotly.offline import get_plotlyjs
 
-from . import data_browser, jobs, loaders, scheduler
+from . import data_browser, jobs, loaders, model_registry, scheduler
 from . import attribution
 from . import console
 from . import realtime
@@ -115,6 +115,9 @@ def experiments():
         seed=loaders.seed_figure(),
         scaling=loaders.scaling_figure(),
         sweep=loaders.sweep_figure(),
+        sweep_20w=loaders.sweep_20w_figure(),
+        sweep_20w_table=loaders.sweep_20w_table(),
+        ppo_metrics=loaders.ppo_retrain_metrics(),
         subperiod=loaders.subperiod_table(),
     )
 
@@ -260,6 +263,74 @@ def api_strategy_equity(sid):
     return jsonify(eq)
 
 
+@app.route("/models")
+def models_page():
+    """模型管理 —— 训练产物自动发现、对比、部署。"""
+    summary = model_registry.models_summary()
+    model_types = sorted({m.get("model_type", "")
+                          for m in summary["models"]} - {""})
+    return render_template(
+        "models.html",
+        summary=summary,
+        models=summary["models"],
+        strategies=summary["strategies"],
+        model_types=model_types,
+    )
+
+
+@app.route("/models/<run_id>")
+def model_detail(run_id):
+    """单个模型的详情页 —— 指标、净值曲线、参数、部署。"""
+    m = model_registry.get_model(run_id)
+    if m is None:
+        return "模型不存在", 404
+    deployed = {d["run_id"] for d in model_registry.list_deployed()}
+    m["is_deployed"] = run_id in deployed
+
+    eq = model_registry.get_model_equity(run_id)
+    eq_chart = None
+    if eq and len(eq["dates"]) > 1:
+        import plotly.graph_objects as go
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=eq["dates"], y=eq["values"],
+            mode="lines", name="净值",
+            line=dict(color="#2c7be5", width=2),
+            fill="tozeroy",
+            fillcolor="rgba(44,123,229,0.08)",
+        ))
+        fig.update_layout(
+            height=340, margin=dict(l=50, r=20, t=10, b=40),
+            xaxis_title="日期", yaxis_title="净值（元）",
+            template="plotly_white",
+            hovermode="x unified",
+        )
+        eq_chart = fig.to_html(full_html=False, include_plotlyjs=False)
+
+    return render_template(
+        "model_detail.html",
+        model=m,
+        equity_chart=eq_chart,
+    )
+
+
+@app.post("/api/models/<run_id>/deploy")
+def api_deploy_model(run_id):
+    return jsonify(model_registry.deploy_model(run_id))
+
+
+@app.post("/api/models/<run_id>/undeploy")
+def api_undeploy_model(run_id):
+    data = request.get_json(silent=True) or {}
+    strat_dir = data.get("strategy_dir", "")
+    if not strat_dir:
+        m = model_registry.get_model(run_id)
+        strat_dir = m["_strategy_dir"] if m else ""
+    if not strat_dir:
+        return jsonify(ok=False, error="缺少 strategy_dir")
+    return jsonify(model_registry.undeploy_model(strat_dir))
+
+
 @app.route("/console")
 def console_page():
     """交易台 —— 右侧策略列表，左侧选中策略的回测数据。"""
@@ -315,6 +386,16 @@ def api_services():
     return jsonify(services.list_status())
 
 
+@app.post("/api/services/<sid>/stop_liquidate")
+def api_service_stop_liquidate(sid):
+    """停止策略并清仓。"""
+    svc = services.BY_ID.get(sid)
+    if svc is None:
+        return jsonify(ok=False, error="未登记的服务"), 400
+    ok, msg = services.stop_and_liquidate(sid)
+    return jsonify(ok=ok, message=msg)
+
+
 @app.post("/api/services/<sid>/<action>")
 def api_service_action(sid, action):
     if action not in ("start", "stop"):
@@ -324,7 +405,6 @@ def api_service_action(sid, action):
     if svc is None:
         return jsonify(ok=False, error="未登记的服务"), 400
 
-    # 会产生真实委托的服务必须二次确认 —— 与下单类任务同一条规则
     if svc.dangerous and action == "start":
         data = request.get_json(silent=True) or {}
         if data.get("confirm") != "yes":
@@ -334,6 +414,23 @@ def api_service_action(sid, action):
     ok, msg = (services.start(sid) if action == "start"
                else services.stop(sid))
     return jsonify(ok=ok, message=msg)
+
+
+@app.post("/api/liquidate")
+def api_liquidate():
+    """一键清仓 —— 市价卖出全部持仓。"""
+    ok, msg = services.liquidate()
+    return jsonify(ok=ok, message=msg)
+
+
+@app.get("/api/liquidate/status")
+def api_liquidate_status():
+    return jsonify(services.liquidate_status())
+
+
+@app.get("/api/liquidate/log")
+def api_liquidate_log():
+    return jsonify(ok=True, log=services.read_liquidate_log())
 
 
 @app.get("/api/services/<sid>/log")

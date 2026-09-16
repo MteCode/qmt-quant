@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-09-15T12:15:43",
+  "scores": "D:\\qmt\\qmt\\strategies\\alstm_ppo_csi1000\\models\\alstm_scores.parquet",
+  "period": [
+    "2022-01-01",
+    "2026-08-27"
+  ],
+  "runs": [
+    {
+      "total_return": -0.34286807401376573,
+      "annual_return": -0.08621368297173948,
+      "max_drawdown": 0.41012369556853534,
+      "sharpe": -1.111121393094874,
+      "calmar": -0.21021385475478435,
+      "win_rate": 0.3898617511520737,
+      "total_trades": 2177,
+      "drawdown_ok": false,
+      "peak_resets": 8,
+      "risk_exit_orders": 4,
+      "holdings": 10,
+      "rebalance": 1
+    },
+    {
+      "total_return": -0.2561734624440638,
+      "annual_return": -0.06157149225305092,
+      "max_drawdown": 0.26704689295883854,
+      "sharpe": -0.6543386713896007,
+      "calmar": -0.23056434609984877,
+      "win_rate": 0.3823038397328882,
+      "total_trades": 1179,
+      "drawdown_ok": false,
+      "peak_resets": 7,
+      "risk_exit_orders": 29,
+      "holdings": 10,
+      "rebalance": 3
+    },
+    {
+      "total_return": -0.05647753513982423,
+      "annual_return": -0.012405720968361345,
+      "max_drawdown": 0.22481376148216314,
+      "sharpe": -0.1982319352258381,
+      "calmar": -0.055182213431118725,
+      "win_rate": 0.4558303886925795,
+      "total_trades": 1124,
+      "drawdown_ok": false,
+      "peak_resets": 6,
+      "risk_exit_orders": 19,
+      "holdings": 10,
+      "rebalance": 5
+    },
+    {
+      "total_return": -0.30396212597006667,
+      "annual_return": -0.07485745036727232,
+      "max_drawdown": 0.4065435382759379,
+      "sharpe": -0.8476147136852542,
+      "calmar": -0.1841314479741244,
+      "win_rate": 0.34408602150537637,
+      "total_trades": 523,
+      "drawdown_ok": false,
+      "peak_resets": 6,
+      "risk_exit_orders": 45,
+      "holdings": 10,
+      "rebalance": 10
+    },
+    {
+      "total_return": -0.06967886226552511,
+      "annual_return": -0.015389279839732484,
+      "max_drawdown": 0.2747159773392631,
+      "sharpe": -0.195331722881285,
+      "calmar": -0.056018874434548616,
+      "win_rate": 0.3805668016194332,
+      "total_trades": 432,
+      "drawdown_ok": false,
+      "peak_resets": 5,
+      "risk_exit_orders": 78,
+      "holdings": 10,
+      "rebalance": 20
+    }
+  ]
+}

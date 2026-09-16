@@ -68,6 +68,8 @@ class Service:
     #: 停止时是否需要额外确认（会影响真实交易的服务）
     dangerous: bool = False
     note: str = ""
+    #: 分组标识，用于 UI 归类
+    group: str = ""
 
 
 SERVICES = [
@@ -87,16 +89,57 @@ SERVICES = [
         args=["-u", "scripts/run_live.py", "--gateway", "sim"],
         heartbeat="webui/.heartbeat_live",
         note="安全：不会产生真实委托",
+        group="strategy",
     ),
     Service(
         id="live_qmt",
-        name="实盘引擎（miniQMT）",
-        desc="事件驱动引擎 + miniQMT 网关。**会产生真实委托**，"
-             "需 QMT 客户端已登录。",
+        name="ALSTM+PPO 选股",
+        desc="ALSTM 选股 + PPO 择时，日频换仓。**真实委托**。",
         args=["-u", "scripts/run_live.py", "--gateway", "miniqmt"],
         heartbeat="webui/.heartbeat_live",
         dangerous=True,
-        note="会下真实委托；先用「模拟撮合」跑通再切",
+        note="日频换仓，20 万本金，中证 1000 成分",
+        group="strategy",
+    ),
+    Service(
+        id="intraday_gbm",
+        name="日内 GBM 动量",
+        desc="LightGBM 全市场日内动量策略。**真实委托**。",
+        args=["-u", "scripts/run_intraday_gbm.py"],
+        heartbeat="webui/.heartbeat_live",
+        dangerous=True,
+        note="日内策略，09:35~14:50，20 万本金，CSI1000",
+        group="strategy",
+    ),
+    Service(
+        id="intraday_hft",
+        name="日内高频剥头皮",
+        desc="Tick 级 VWAP 回归 + 动量突破。**真实委托**。",
+        args=["-u", "scripts/run_intraday_hft.py"],
+        heartbeat="webui/.heartbeat_live",
+        dangerous=True,
+        note="Tick 级策略，需高频行情推送",
+        group="strategy",
+    ),
+    Service(
+        id="intraday_t_920368",
+        name="920368 日内做T",
+        desc="单票底仓 + GBM 择时日内回转。**真实委托**。",
+        args=["-u", "scripts/run_intraday_t.py"],
+        heartbeat="webui/.heartbeat_live",
+        dangerous=True,
+        note="单票做T，需持有底仓",
+        group="strategy",
+    ),
+    Service(
+        id="lgb_agents_ppo",
+        name="LGB+Agents 四层选股",
+        desc="LightGBM 粗筛 + 多 Agent 精选 + PPO 择时，20 日调仓。**真实委托**。",
+        args=["-u", "scripts/run_lgb_agents.py"],
+        heartbeat="webui/.heartbeat_live",
+        dangerous=True,
+        note="20 日调仓，20 万本金，中证 1000",
+        group="strategy",
     ),
 ]
 
@@ -199,7 +242,7 @@ def status(sid: str) -> dict:
 
     return {
         "id": sid, "exists": True, "name": svc.name, "desc": svc.desc,
-        "note": svc.note, "dangerous": svc.dangerous,
+        "note": svc.note, "dangerous": svc.dangerous, "group": svc.group,
         "running": alive, "healthy": healthy,
         "pid": pid if alive else None,
         "started_at": started if alive else None,
@@ -244,12 +287,13 @@ def start(sid: str) -> tuple[bool, str]:
         if st["running"]:
             return False, f"{svc.name} 已在运行（PID {st['pid']}）"
 
-        # 实盘引擎两个变体共用心跳文件，不能同时开 —— 会双份下单
-        if sid.startswith("live_"):
-            for other in ("live_sim", "live_qmt"):
+        # 策略服务共用网关，不能同时开 —— 会双份下单或抢连接
+        strategy_ids = [s.id for s in SERVICES if s.group == "strategy"]
+        if sid in strategy_ids:
+            for other in strategy_ids:
                 if other != sid and status(other)["running"]:
                     return False, (f"{BY_ID[other].name} 正在运行，"
-                                   f"请先停止 —— 两个引擎同时跑会重复下单")
+                                   f"请先停止 —— 两个策略同时跑会重复下单")
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -306,6 +350,111 @@ def stop(sid: str) -> tuple[bool, str]:
         d[sid]["exit_note"] = "手动停止"
         _save(d)
         return True, f"{svc.name} 停止信号已发送（PID {pid}）"
+
+
+def stop_and_liquidate(sid: str) -> tuple[bool, str]:
+    """停止策略并清仓 —— 先优雅退出，再市价卖出全部持仓。"""
+    svc = BY_ID.get(sid)
+    if svc is None:
+        return False, f"未登记的服务: {sid}"
+
+    st = status(sid)
+    msgs = []
+
+    # 1. 先停进程
+    if st["running"]:
+        ok, msg = stop(sid)
+        msgs.append(msg)
+        # 等进程退出（最多 15 秒），确保网关释放
+        import time as _time
+        for _ in range(15):
+            _time.sleep(1)
+            if not status(sid)["running"]:
+                break
+
+    # 2. 启动清仓脚本
+    ok, msg = liquidate()
+    msgs.append(msg)
+    return ok, " → ".join(msgs)
+
+
+def liquidate() -> tuple[bool, str]:
+    """一键清仓 —— 停掉所有策略后市价卖出全部持仓。"""
+    import time as _time
+
+    msgs = []
+    # 先停掉所有正在运行的策略服务
+    strategy_ids = [s.id for s in SERVICES if s.group == "strategy"]
+    for sid in strategy_ids:
+        st = status(sid)
+        if st["running"]:
+            ok, msg = stop(sid)
+            msgs.append(f"停止 {BY_ID[sid].name}: {msg}")
+
+    # 等策略进程退出（最多 15 秒）
+    if msgs:
+        for _ in range(15):
+            _time.sleep(1)
+            if not any(status(s)["running"] for s in strategy_ids):
+                break
+
+    with _lock:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        log_path = LOG_DIR / f"liquidate-{ts}.log"
+        cmd = [str(PYTHON), "-u", "scripts/liquidate_all.py", "--force"]
+
+        try:
+            f = open(log_path, "w", encoding="utf-8", buffering=1)
+            f.write(f"$ {' '.join(cmd)}\n\n")
+            f.flush()
+            proc = subprocess.Popen(
+                cmd, cwd=str(ROOT), stdout=f, stderr=subprocess.STDOUT,
+                creationflags=getattr(subprocess,
+                                      "CREATE_NEW_PROCESS_GROUP", 0),
+            )
+        except OSError as e:
+            return False, f"启动失败: {e}"
+
+        d = _load()
+        d["_liquidate"] = {
+            "pid": proc.pid,
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "log_file": str(log_path),
+        }
+        _save(d)
+        stop_info = " → ".join(msgs) + " → " if msgs else ""
+        return True, f"{stop_info}清仓已启动（PID {proc.pid}）"
+
+
+def liquidate_status() -> dict:
+    """查询最近一次清仓的状态。"""
+    rec = _load().get("_liquidate", {})
+    if not rec:
+        return {"running": False, "last_run": None}
+
+    pid = rec.get("pid")
+    started = rec.get("started_at", "")
+    alive = bool(pid) and _pid_alive(pid, started)
+    return {
+        "running": alive,
+        "pid": pid if alive else None,
+        "started_at": started,
+        "log_file": rec.get("log_file"),
+    }
+
+
+def read_liquidate_log(tail: int = 200) -> str:
+    rec = _load().get("_liquidate", {})
+    p = rec.get("log_file")
+    if not p or not Path(p).exists():
+        return ""
+    try:
+        with open(p, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        return "".join(lines[-tail:])
+    except OSError as e:
+        return f"[日志读取失败] {e}"
 
 
 def beat(name: str) -> None:

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-07 16:10:42",
+  "generated_at": "2026-09-15 22:19:13",
   "config": {
     "capital": 50000.0,
     "max_positions": 5,
@@ -9,50 +9,124 @@
     "max_drawdown_stop": 0.1,
     "entry_time": "09:35",
     "exit_time": "14:50",
-    "max_symbols": 15,
-    "commission": 0.00025,
-    "stamp_tax": 0.001,
+    "max_symbols": 800,
+    "commission": 8.54e-05,
+    "stamp_tax": 0.0005,
     "slippage": 0.0005
   },
   "model": {
-    "horizon": 10,
-    "threshold": 0.0005
+    "horizon": 5,
+    "threshold": 0.002
   },
   "results": {
-    "momentum": {
-      "mode": "momentum",
+    "t_plus_0": {
+      "mode": "t_plus_0",
       "initial_capital": 50000.0,
-      "final_equity": 50000.0,
-      "total_return": 0.0,
-      "annual_return": 0.0,
-      "monthly_return": 0.0,
-      "max_drawdown": 0.0,
-      "sharpe": 0,
-      "volatility": 0.0,
-      "trading_days": 25,
-      "n_trades": 0,
-      "win_rate": 0,
-      "avg_win": 0,
-      "avg_loss": 0,
+      "final_equity": 161191.9,
+      "total_return": 2.2238,
+      "annual_return": 2.0913,
+      "monthly_return": 0.1029,
+      "max_drawdown": -0.007,
+      "sharpe": 31.972,
+      "volatility": 0.0648,
+      "trading_days": 251,
+      "n_trades": 4560,
+      "win_rate": 0.693,
+      "avg_win": 48.03,
+      "avg_loss": -28.98,
       "date_range": [
-        "2026-08-03",
+        "2025-08-25",
         "2026-09-04"
       ],
       "targets": {
         "monthly_return_30pct": {
           "target": ">= 30%",
-          "actual": "0.00%",
+          "actual": "10.29%",
           "pass": false
         },
         "max_drawdown_10pct": {
           "target": "<= 10%",
-          "actual": "0.00%",
+          "actual": "0.70%",
           "pass": true
         },
         "sharpe_above_1": {
           "target": "> 1.0",
-          "actual": "0.000",
+          "actual": "31.972",
+          "pass": true
+        }
+      }
+    },
+    "mean_reversion": {
+      "mode": "mean_reversion",
+      "initial_capital": 50000.0,
+      "final_equity": 127433.92,
+      "total_return": 1.5487,
+      "annual_return": 1.4646,
+      "monthly_return": 0.0814,
+      "max_drawdown": -0.0077,
+      "sharpe": 18.048,
+      "volatility": 0.08,
+      "trading_days": 251,
+      "n_trades": 3961,
+      "win_rate": 0.6519,
+      "avg_win": 45.49,
+      "avg_loss": -29.03,
+      "date_range": [
+        "2025-08-25",
+        "2026-09-04"
+      ],
+      "targets": {
+        "monthly_return_30pct": {
+          "target": ">= 30%",
+          "actual": "8.14%",
           "pass": false
+        },
+        "max_drawdown_10pct": {
+          "target": "<= 10%",
+          "actual": "0.77%",
+          "pass": true
+        },
+        "sharpe_above_1": {
+          "target": "> 1.0",
+          "actual": "18.048",
+          "pass": true
+        }
+      }
+    },
+    "momentum": {
+      "mode": "momentum",
+      "initial_capital": 50000.0,
+      "final_equity": 57366.59,
+      "total_return": 0.1473,
+      "annual_return": 0.1417,
+      "monthly_return": 0.0116,
+      "max_drawdown": -0.0092,
+      "sharpe": 3.764,
+      "volatility": 0.0323,
+      "trading_days": 251,
+      "n_trades": 249,
+      "win_rate": 0.7229,
+      "avg_win": 74.99,
+      "avg_loss": -88.85,
+      "date_range": [
+        "2025-08-25",
+        "2026-09-04"
+      ],
+      "targets": {
+        "monthly_return_30pct": {
+          "target": ">= 30%",
+          "actual": "1.16%",
+          "pass": false
+        },
+        "max_drawdown_10pct": {
+          "target": "<= 10%",
+          "actual": "0.92%",
+          "pass": true
+        },
+        "sharpe_above_1": {
+          "target": "> 1.0",
+          "actual": "3.764",
+          "pass": true
         }
       }
     }

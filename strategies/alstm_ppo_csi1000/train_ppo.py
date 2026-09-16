@@ -29,8 +29,9 @@ TRAIN = ("2016-01-01", "2019-12-31")
 VALID = ("2020-01-01", "2021-12-31")
 TEST = ("2022-01-01", "2026-08-27")
 
-HOLD_K = 30
-REBAL_PERIOD = 20
+_PARAMS = paths.load_params()
+HOLD_K = _PARAMS["hold_k"]
+REBAL_PERIOD = _PARAMS["rebalance_days"]
 
 
 def prepare_data(market: str):
@@ -147,6 +148,15 @@ class TimingEnv(gymnasium.Env):
         self.held_stocks = []
         self.asset_memory = []
 
+    @staticmethod
+    def _is_tradable(sym: str) -> bool:
+        code = str(sym).split(".")[0]
+        if code.startswith("688"):
+            return False
+        if code[:2] in ("43", "83", "87"):
+            return False
+        return True
+
     def _select_stocks(self, date):
         """有分数用分数选 Top-K，无分数用等权全市场"""
         if self.scores is not None:
@@ -154,6 +164,7 @@ class TimingEnv(gymnasium.Env):
             pos = self.scores.index.searchsorted(ts, side="right") - 1
             if pos >= 0:
                 row = self.scores.iloc[pos].dropna().sort_values(ascending=False)
+                row = row[row.index.map(self._is_tradable)]
                 # scores 列名可能是 vt 格式(600007.SSE)，转成 Qlib(sh600007)
                 top_vt = list(row.index[:self.hold_k])
                 if top_vt and "." in str(top_vt[0]):
@@ -344,7 +355,7 @@ def evaluate_ppo(model, env) -> dict:
 def main():
     p = argparse.ArgumentParser(description="RL PPO 择时")
     p.add_argument("--market", default="csi1000")
-    p.add_argument("--capital", type=float, default=500_000)
+    p.add_argument("--capital", type=float, default=_PARAMS["capital"])
     p.add_argument("--timesteps", type=int, default=200_000)
     p.add_argument("--report", default=str(paths.BACKTEST_DIR))
     p.add_argument("--scores", default=None,
@@ -482,30 +493,77 @@ def main():
     print(f"仓位标准差    : {exp_arr.std():.1%}")
     print(f"{'='*46}")
 
-    # 保存
-    out = Path(args.report)
-    out.mkdir(parents=True, exist_ok=True)
+    # 保存到 runs/ 目录（标准化产物，管理台自动发现）
+    from datetime import datetime as _dt
+    run_id = f"ppo_s{args.seed}_{_dt.now().strftime('%Y%m%d_%H%M%S')}"
+    run_dir = paths.STRATEGY_DIR / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     equity = pd.DataFrame({
         "date": test_env.dates[:len(asset_curve)],
         "equity": asset_curve,
     })
-    equity.to_csv(out / "ppo_equity.csv", index=False, encoding="utf-8-sig")
+    equity.to_csv(run_dir / "equity.csv", index=False, encoding="utf-8-sig")
 
     pd.DataFrame({
         "date": test_env.dates[:len(daily_ret)],
         "daily_return": daily_ret,
         "exposure": exp_arr,
-    }).to_csv(out / "daily_returns.csv", index=False, encoding="utf-8-sig")
+    }).to_csv(run_dir / "daily_returns.csv", index=False, encoding="utf-8-sig")
 
-    # 权重存到 models/，与回测结果分开 —— models/ 走 LFS 版本化
+    model.save(str((run_dir / "ppo_model").with_suffix("")))
+
+    # 兼容旧路径：同时存一份到 backtest/ 和 models/
+    out = Path(args.report)
+    out.mkdir(parents=True, exist_ok=True)
+    equity.to_csv(out / "ppo_equity.csv", index=False, encoding="utf-8-sig")
     paths.ensure_dirs()
     out_model = (paths.PPO_MODEL.with_name(
         f"ppo_model{args.tag}.zip") if args.tag else paths.PPO_MODEL)
     model.save(str(out_model.with_suffix("")))
-    print(f"\n模型已保存: {out_model}")
-    print(f"回测明细: {out.resolve()}")
-    print(f"\n总耗时 {(time.time() - t0) / 60:.1f} 分钟")
+
+    # 写标准 manifest.json —— 管理台靠这个自动发现
+    total_time = time.time() - t0
+    manifest = {
+        "run_id": run_id,
+        "model_type": "ppo",
+        "strategy_id": "alstm_ppo_csi1000",
+        "created_at": _dt.now().strftime("%Y-%m-%dT%H:%M:%S"),
+        "status": "completed",
+        "params": {
+            "capital": args.capital,
+            "hold_k": HOLD_K,
+            "rebalance_days": REBAL_PERIOD,
+            "seed": args.seed,
+            "timesteps": args.timesteps,
+            "market": args.market,
+        },
+        "metrics": {
+            "total_return": round(total_return, 6),
+            "annual_return": round(annual_return, 6),
+            "max_drawdown": round(-abs(max_dd), 6),
+            "sharpe": round(sharpe, 4),
+            "volatility": round(annual_vol, 6),
+            "avg_position": round(float(exp_arr.mean()), 4),
+        },
+        "artifacts": {
+            "model": "ppo_model.zip",
+            "equity_csv": "equity.csv",
+            "daily_returns_csv": "daily_returns.csv",
+        },
+        "train_period": list(TRAIN) + list(VALID),
+        "test_period": list(TEST),
+        "train_time_sec": round(total_time, 1),
+        "notes": f"ALSTM选股+PPO择时, seed={args.seed}",
+    }
+    import json as _json
+    (run_dir / "manifest.json").write_text(
+        _json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"\n模型已保存: {run_dir / 'ppo_model.zip'}")
+    print(f"标准产物:   {run_dir}")
+    print(f"兼容旧路径: {out_model}")
+    print(f"\n总耗时 {total_time / 60:.1f} 分钟")
 
     return 0
 

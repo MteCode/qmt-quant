@@ -1,0 +1,15 @@
+id: intraday_t_920368
+name: 920368 日内做T
+category: 日内
+frequency: 日内
+description: >-
+  单票底仓 + GBM 择时日内回转策略。基于 920368 (BSE) 底仓，利用 GBM 模型
+  预测日内短期方向，在底仓基础上做 T+0 回转交易，赚取日内波动差价。
+  需持有底仓，不改变隔夜持仓量。
+
+capital: 200000
+base_value: 100000
+trade_value: 100000
+
+backtest_task: null
+live_task: scripts/run_intraday_t.py

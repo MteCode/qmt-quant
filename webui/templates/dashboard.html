@@ -120,10 +120,11 @@
       <table>
         <thead><tr>
           <th>标的</th><th class="num">持仓</th><th class="num">可用</th>
-          <th class="num">成本价</th>
+          <th class="num">成本价</th><th class="num">现价</th>
+          <th class="num">市值</th><th class="num">盈亏</th>
         </tr></thead>
         <tbody id="position-body">
-          <tr><td colspan="4" class="empty">无持仓</td></tr>
+          <tr><td colspan="7" class="empty">无持仓</td></tr>
         </tbody>
       </table>
     </div>
@@ -262,6 +263,7 @@
 
   // ---- 持仓 ----
   var posMap = {};
+  var tickPrices = {};
   socket.on('positions', function(arr) {
     posMap = {};
     (arr || []).forEach(function(d) {
@@ -275,21 +277,46 @@
     if ((d.volume||0) <= 0) delete posMap[sym]; else posMap[sym] = d;
     renderPositions();
   });
+  socket.on('eTick', function(d) {
+    var sym = d.vt_symbol || (d.symbol + '.' + (d.exchange||''));
+    if (d.last_price > 0) {
+      tickPrices[sym] = d.last_price;
+      if (posMap[sym]) renderPositions();
+    }
+  });
 
   function renderPositions() {
     var body = document.getElementById('position-body');
     var keys = Object.keys(posMap).sort();
     if (!keys.length) {
-      body.innerHTML = '<tr><td colspan="4" class="empty">无持仓</td></tr>';
+      body.innerHTML = '<tr><td colspan="7" class="empty">无持仓</td></tr>';
       return;
     }
-    body.innerHTML = keys.map(function(sym) {
+    var totalMV = 0, totalPnL = 0;
+    var rows = keys.map(function(sym) {
       var p = posMap[sym];
+      var vol = p.volume || 0;
+      var cost = p.price || 0;
+      var cur = tickPrices[sym] || 0;
+      var mv = cur > 0 ? cur * vol : cost * vol;
+      var pnl = cur > 0 ? (cur - cost) * vol : 0;
+      totalMV += mv;
+      totalPnL += pnl;
+      var pnlCls = pnl > 0 ? 'trade-buy' : (pnl < 0 ? 'trade-sell' : '');
       return '<tr><td><b>' + sym + '</b></td>' +
-             '<td class="num">' + (p.volume||0) + '</td>' +
+             '<td class="num">' + vol + '</td>' +
              '<td class="num">' + (p.available||0) + '</td>' +
-             '<td class="num">' + (p.price||0).toFixed(3) + '</td></tr>';
-    }).join('');
+             '<td class="num">' + cost.toFixed(3) + '</td>' +
+             '<td class="num">' + (cur > 0 ? cur.toFixed(3) : '-') + '</td>' +
+             '<td class="num">' + fmtMoney(mv) + '</td>' +
+             '<td class="num ' + pnlCls + '">' + (cur > 0 ? (pnl>=0?'+':'') + fmtMoney(pnl) : '-') + '</td></tr>';
+    });
+    var footCls = totalPnL > 0 ? 'trade-buy' : (totalPnL < 0 ? 'trade-sell' : '');
+    rows.push('<tr style="font-weight:600;border-top:2px solid var(--line)">' +
+      '<td>合计</td><td></td><td></td><td></td><td></td>' +
+      '<td class="num">' + fmtMoney(totalMV) + '</td>' +
+      '<td class="num ' + footCls + '">' + (totalPnL>=0?'+':'') + fmtMoney(totalPnL) + '</td></tr>');
+    body.innerHTML = rows.join('');
   }
 
   // ---- 委托 ----

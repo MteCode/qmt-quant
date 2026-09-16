@@ -109,5 +109,5 @@ _DEFAULTS = {
     "index": "000852.SH",
     "hold_k": 10,
     "rebalance_days": 20,
-    "capital": 500_000,
+    "capital": 200_000,
 }

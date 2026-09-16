@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 MODEL_DIR = ROOT / "models" / "intraday_gbm"
+RUNS_DIR = ROOT / "strategies" / "intraday_gbm" / "runs"
 
 
 def collect_data(clean_dir: Path, max_symbols: int, min_bars: int,
@@ -359,6 +360,66 @@ def train(df: pd.DataFrame, features: list[str],
     }
 
 
+def _save_run(result: dict, out: Path, label: str = "") -> str:
+    """保存训练结果到 models/ 目录，同时注册到 runs/ 供模型管理发现。"""
+    from webui.model_registry import create_manifest, save_manifest, generate_run_id
+
+    m = result["metrics"]
+    run_id = generate_run_id("lgbm")
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    joblib.dump({
+        "model": result["model"],
+        "features": result["features"],
+        "horizon": result["horizon"],
+        "threshold": result["threshold"],
+        "params": result["params"],
+    }, run_dir / "model.joblib")
+
+    (run_dir / "metrics.json").write_text(
+        json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    result["importance"].to_csv(run_dir / "feature_importance.csv", index=False)
+    result["predictions"].to_csv(run_dir / "predictions_sample.csv", index=False)
+
+    manifest = create_manifest(
+        run_id=run_id,
+        model_type="LightGBMClassifier",
+        strategy_id="intraday_gbm",
+        params={**result["params"], "horizon_bars": result["horizon"],
+                "threshold": result["threshold"]},
+        metrics={
+            "test_accuracy": m["test_accuracy"],
+            "test_auc": m["test_auc"],
+            "train_accuracy": m["train_accuracy"],
+            "train_auc": m["train_auc"],
+            "n_features": m["n_features"],
+            "train_samples": m["train_samples"],
+            "test_samples": m["test_samples"],
+        },
+        artifacts={
+            "model": "model.joblib",
+            "metrics_json": "metrics.json",
+            "feature_importance": "feature_importance.csv",
+            "predictions_sample": "predictions_sample.csv",
+        },
+        train_period=[m["train_date_range"][0][:10], m["train_date_range"][1][:10]],
+        test_period=[m["test_date_range"][0][:10], m["test_date_range"][1][:10]],
+        train_time_sec=m.get("train_time_seconds"),
+        notes=label,
+    )
+    save_manifest(run_dir, manifest)
+
+    # 同步到 models/ 目录供策略加载
+    out.mkdir(parents=True, exist_ok=True)
+    import shutil
+    for f in ("model.joblib", "metrics.json", "feature_importance.csv",
+              "predictions_sample.csv"):
+        shutil.copy2(run_dir / f, out / f)
+
+    return run_id
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="全市场日内 GBM 模型训练")
     p.add_argument("--horizon", type=int, default=10,
@@ -481,19 +542,10 @@ def main() -> int:
         best = results[0]
         br = best["result"]
         out = Path(args.output)
-        out.mkdir(parents=True, exist_ok=True)
-        joblib.dump({
-            "model": br["model"],
-            "features": br["features"],
-            "horizon": br["horizon"],
-            "threshold": br["threshold"],
-            "params": br["params"],
-        }, out / "model.joblib")
-        (out / "metrics.json").write_text(
-            json.dumps(br["metrics"], ensure_ascii=False, indent=2),
-            encoding="utf-8")
-        br["importance"].to_csv(out / "feature_importance.csv", index=False)
-        br["predictions"].to_csv(out / "predictions_sample.csv", index=False)
+
+        label = (f"grid best: horizon={best['horizon']} "
+                 f"threshold={best['threshold']} config={best['config']}")
+        run_id = _save_run(br, out, label)
 
         # 保存全部搜索结果
         grid_df = pd.DataFrame([{k: v for k, v in r.items() if k != "result"}
@@ -504,6 +556,7 @@ def main() -> int:
               f"threshold={best['threshold']} config={best['config']}")
         print(f"  验证集 AUC={best['test_auc']:.4f} Acc={best['test_acc']:.4f}")
         print(f"  已保存到: {out}")
+        print(f"  模型管理 run_id: {run_id}")
     else:
         params = {
             "n_estimators": 400, "learning_rate": 0.03, "num_leaves": 31,
@@ -517,20 +570,8 @@ def main() -> int:
                        params)
 
         out = Path(args.output)
-        out.mkdir(parents=True, exist_ok=True)
-        joblib.dump({
-            "model": result["model"],
-            "features": result["features"],
-            "horizon": result["horizon"],
-            "threshold": result["threshold"],
-            "params": result["params"],
-        }, out / "model.joblib")
-        (out / "metrics.json").write_text(
-            json.dumps(result["metrics"], ensure_ascii=False, indent=2),
-            encoding="utf-8")
-        result["importance"].to_csv(out / "feature_importance.csv", index=False)
-        result["predictions"].to_csv(
-            out / "predictions_sample.csv", index=False)
+        label = f"horizon={args.horizon} threshold={args.threshold}"
+        run_id = _save_run(result, out, label)
 
         m = result["metrics"]
         print(f"\n{'=' * 62}")
@@ -540,6 +581,7 @@ def main() -> int:
         print(f"  训练集 accuracy {m['train_accuracy']:.4f}  "
               f"AUC {m['train_auc']:.4f}")
         print(f"\n  模型保存在: {out}")
+        print(f"  模型管理 run_id: {run_id}")
         print(f"  特征重要性 Top 5:")
         for _, row in result["importance"].head(5).iterrows():
             print(f"    {row['feature']:<20s} {int(row['importance']):>6d}")

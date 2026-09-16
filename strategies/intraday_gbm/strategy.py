@@ -146,6 +146,27 @@ class IntradayGBMStrategy(StrategyBase):
         self.entry_prices = {}
         self._bar_buffers = {}
 
+    def warmup(self, history: dict[str, list[dict]]) -> int:
+        """用当日已发生的 1m bar 预热缓冲区，返回预热成功的标的数。
+
+        `_score_all` 要求每只标的攒够 30 根 bar 才打分，而缓冲区只从实时
+        推送累积。不预热的话盘中任何时刻启动都要再等 30 分钟才可能出第一个
+        信号 —— 盘中重启一次就等于半小时不交易，且不报任何错。
+
+        只接受当日 bar：day_ret、日内位置、时间编码这几维特征都以当天开盘
+        为基准，掺进昨天的 bar 会把特征算错，比不预热更糟。
+        """
+        n = 0
+        for vt, rows in history.items():
+            if not rows:
+                continue
+            self._bar_buffers[vt] = list(rows[-120:])
+            n += 1
+        if n:
+            ready = sum(1 for b in self._bar_buffers.values() if len(b) >= 30)
+            self.write_log(f"预热 {n} 只标的，其中 {ready} 只已满足 30 根 bar")
+        return n
+
     def on_bars(self, bars: dict[str, BarData]) -> None:
         """全市场截面推送 —— 核心决策入口。"""
         if not self.model or not bars:

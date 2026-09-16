@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}模型管理 · 量化管理台{% endblock %}
+{% block body %}
+
+<div class="row" style="justify-content:space-between;align-items:flex-end;margin-bottom:16px">
+  <div>
+    <h1>模型管理</h1>
+    <div class="sub" style="margin:0">训练产物自动发现 · 对比指标 · 部署到实盘</div>
+  </div>
+  <div class="row">
+    <select id="flt-strategy" onchange="applyFilter()" style="width:auto">
+      <option value="">全部策略</option>
+      {% for s in strategies %}
+      <option value="{{ s }}">{{ s }}</option>
+      {% endfor %}
+    </select>
+    <select id="flt-type" onchange="applyFilter()" style="width:auto">
+      <option value="">全部类型</option>
+      {% for t in model_types %}
+      <option value="{{ t }}">{{ t }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+{# ---- KPI 汇总 ---- #}
+<div class="grid g4" style="margin-bottom:20px">
+  <div class="kpi">
+    <div class="l">模型总数</div>
+    <div class="v">{{ summary.total }}</div>
+    <div class="s">自动发现 · 无需改码</div>
+  </div>
+  <div class="kpi{{ ' good' if summary.deployed_count else '' }}">
+    <div class="l">已部署</div>
+    <div class="v">{{ summary.deployed_count }}</div>
+    <div class="s">实盘运行中</div>
+  </div>
+  <div class="kpi">
+    <div class="l">策略数</div>
+    <div class="v">{{ summary.strategies|length }}</div>
+    <div class="s">覆盖策略</div>
+  </div>
+  <div class="kpi{{ ' good' if summary.best_sharpe and summary.best_sharpe > 1 else '' }}">
+    <div class="l">最佳 Sharpe</div>
+    <div class="v">{{ summary.best_sharpe|num(3) if summary.best_sharpe is not none else '—' }}</div>
+    <div class="s">全部模型中</div>
+  </div>
+</div>
+
+{# ---- 空态 ---- #}
+{% if not models %}
+<div class="card empty" style="padding:60px 20px">
+  <div style="font-size:32px;margin-bottom:12px">&#9881;</div>
+  <div style="font-size:15px;margin-bottom:6px">暂无训练产物</div>
+  <div style="font-size:12.5px;max-width:400px;margin:0 auto">
+    运行训练脚本后，结果会自动保存到 <code>strategies/&lt;策略&gt;/runs/</code>，
+    刷新此页面即可看到。无需修改任何后台代码。
+  </div>
+</div>
+{% else %}
+
+{# ---- 模型列表 ---- #}
+<div class="card" style="padding:0;overflow:hidden">
+<table id="model-table">
+  <thead><tr>
+    <th style="width:36px"></th>
+    <th>模型</th>
+    <th>策略</th>
+    <th>类型</th>
+    <th class="num">总收益</th>
+    <th class="num">年化</th>
+    <th class="num">最大回撤</th>
+    <th class="num">Sharpe</th>
+    <th class="num">平均仓位</th>
+    <th>状态</th>
+    <th class="num">训练时间</th>
+    <th style="width:80px">操作</th>
+  </tr></thead>
+  <tbody>
+  {% for m in models %}
+  {% set met = m.metrics or {} %}
+  <tr class="model-row"
+      data-strategy="{{ m.strategy_id or m._strategy_dir }}"
+      data-type="{{ m.model_type }}"
+      data-rid="{{ m.run_id }}">
+    <td style="text-align:center">
+      {% if m.is_deployed %}
+      <span title="已部署到实盘" style="color:var(--down);font-size:16px">&#9679;</span>
+      {% else %}
+      <span style="color:var(--line);font-size:16px">&#9675;</span>
+      {% endif %}
+    </td>
+    <td>
+      <a href="/models/{{ m.run_id }}" style="font-weight:600">{{ m.run_id }}</a>
+      <div style="color:var(--muted);font-size:11px">{{ m.created_at[:16] if m.created_at else '' }}</div>
+    </td>
+    <td><span class="tag t-mut">{{ m.strategy_id or m._strategy_dir }}</span></td>
+    <td><span class="tag t-run">{{ m.model_type }}</span></td>
+    {% set tr = met.get('total_return') %}
+    {% set ar = met.get('annual_return') %}
+    {% set dd = met.get('max_drawdown') %}
+    {% set sp = met.get('sharpe') %}
+    {% set ap = met.get('avg_position') %}
+    <td class="num" style="color:{{ 'var(--up)' if tr is not none and tr > 0 else 'var(--down)' if tr is not none and tr < 0 else 'var(--muted)' }}">
+      {{ tr|pct(2, true) }}</td>
+    <td class="num" style="color:{{ 'var(--up)' if ar is not none and ar > 0 else 'var(--down)' if ar is not none and ar < 0 else 'var(--muted)' }}">
+      {{ ar|pct(2, true) }}</td>
+    <td class="num">{{ dd|pct(2) }}</td>
+    <td class="num" style="font-weight:600;color:{{ 'var(--down)' if sp is not none and sp > 1 else 'var(--up)' if sp is not none and sp < 0 else 'inherit' }}">
+      {{ sp|num(3) }}</td>
+    <td class="num">{{ ap|pct(1) if ap is not none else '—' }}</td>
+    <td>
+      {% if m.is_deployed %}
+        <span class="tag t-ok">已部署</span>
+      {% elif m.status == 'training' %}
+        <span class="tag t-warn">训练中</span>
+      {% else %}
+        <span class="tag t-mut">已完成</span>
+      {% endif %}
+    </td>
+    <td class="num">
+      {% if m.train_time_sec %}
+        {{ (m.train_time_sec / 60)|round(1) }} 分
+      {% else %}—{% endif %}
+    </td>
+    <td>
+      {% if m.is_deployed %}
+        <button class="btn-sm undeploy-btn" onclick="undeployModel('{{ m._strategy_dir }}','{{ m.run_id }}')"
+                title="取消部署">停用</button>
+      {% else %}
+        <button class="btn-sm deploy-btn" onclick="deployModel('{{ m.run_id }}')"
+                title="部署到实盘">部署</button>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+
+<style>
+.btn-sm{padding:4px 12px;border-radius:6px;font-size:12px;font-weight:500;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;
+  transition:all .15s}
+.btn-sm:hover{border-color:var(--accent);color:var(--accent)}
+.deploy-btn{border-color:var(--down);color:var(--down)}
+.deploy-btn:hover{background:var(--down);color:#fff}
+.undeploy-btn{border-color:var(--muted);color:var(--muted)}
+.undeploy-btn:hover{border-color:var(--up);color:var(--up)}
+#model-table td,#model-table th{padding:10px 12px}
+#model-table tbody tr{transition:background .1s}
+#model-table tbody tr:hover{background:rgba(44,123,229,.05)}
+</style>
+
+<script>
+function applyFilter(){
+  var s=document.getElementById('flt-strategy').value;
+  var t=document.getElementById('flt-type').value;
+  document.querySelectorAll('.model-row').forEach(function(row){
+    var ok=true;
+    if(s && row.dataset.strategy!==s) ok=false;
+    if(t && row.dataset.type!==t) ok=false;
+    row.style.display=ok?'':'none';
+  });
+}
+
+function deployModel(runId){
+  if(!confirm('确认部署模型 '+runId+' 到实盘？\n实盘引擎下次启动时将加载此模型。')) return;
+  fetch('/api/models/'+runId+'/deploy',{method:'POST'})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.ok) location.reload();
+      else alert('部署失败: '+(d.error||'未知错误'));
+    });
+}
+
+function undeployModel(stratDir,runId){
+  if(!confirm('确认取消部署？\n实盘引擎下次启动后将不再使用此模型。')) return;
+  fetch('/api/models/'+runId+'/undeploy',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({strategy_dir:stratDir})})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      if(d.ok) location.reload();
+      else alert('操作失败: '+(d.error||'未知错误'));
+    });
+}
+</script>
+
+{% endblock %}

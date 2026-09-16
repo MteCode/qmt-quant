@@ -1,0 +1,32 @@
+{
+  "run_id": "ppo_s42_20260915_123100",
+  "model_type": "ppo",
+  "strategy_id": "alstm_ppo_csi1000",
+  "created_at": "2026-09-15T12:31:00",
+  "status": "completed",
+  "params": {
+    "capital": 200000,
+    "hold_k": 10,
+    "rebalance_days": 1,
+    "seed": 42,
+    "timesteps": 200000,
+    "market": "csi1000"
+  },
+  "metrics": {
+    "total_return": 1.2221,
+    "annual_return": 0.1993,
+    "max_drawdown": -0.0842,
+    "sharpe": 2.637,
+    "volatility": 0.0756,
+    "avg_position": 0.22
+  },
+  "artifacts": {
+    "model": "ppo_model.zip",
+    "equity_csv": "equity.csv",
+    "daily_returns_csv": "daily_returns.csv"
+  },
+  "train_period": ["2016-01-01", "2021-12-31"],
+  "test_period": ["2022-01-01", "2026-08-27"],
+  "train_time_sec": 690,
+  "notes": "ALSTM选股+PPO择时, seed=42, 本金20万, 平均仓位仅22%主要靠空仓"
+}

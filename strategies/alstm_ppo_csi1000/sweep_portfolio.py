@@ -54,7 +54,7 @@ def main() -> int:
     p.add_argument("--scores", default=None,
                     help="分数面板路径，默认用 models/alstm_scores.parquet（集成）")
     p.add_argument("--index", default="000852.SH")
-    p.add_argument("--capital", type=float, default=1_000_000)
+    p.add_argument("--capital", type=float, default=200_000)
     p.add_argument("--holdings", type=int, nargs="*", default=HOLDINGS)
     p.add_argument("--rebalance", type=int, nargs="*", default=REBALANCE)
     p.add_argument("--start", default=TEST[0],
@@ -82,6 +82,15 @@ def main() -> int:
         print(f"分数文件不存在: {scores_path}")
         return 1
     scores = pd.read_parquet(scores_path).sort_index()
+
+    # 过滤不可交易标的：科创板(688)、北交所(43/83/87)
+    before = scores.shape[1]
+    ok_cols = [c for c in scores.columns
+               if not str(c).split(".")[0].startswith("688")
+               and str(c).split(".")[0][:2] not in ("43", "83", "87")]
+    scores = scores[ok_cols]
+    if scores.shape[1] < before:
+        print(f"过滤不可交易标的: {before} -> {scores.shape[1]}")
 
     print("=" * 74)
     print("组合构造参数扫描")

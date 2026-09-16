@@ -203,6 +203,20 @@ def get_ppo_exposure(feat_df, date: str) -> float:
     return exposure
 
 
+def _filter_banned(scores: "pd.Series") -> "pd.Series":
+    """排除不可交易标的：科创板(688)、北交所(43/83/87)、ST。"""
+    def _ok(sym: str) -> bool:
+        code = str(sym).split(".")[0]
+        if code.startswith("688"):
+            return False
+        if code[:2] in ("43", "83", "87"):
+            return False
+        if "ST" in str(sym).upper():
+            return False
+        return True
+    return scores[scores.index.map(_ok)]
+
+
 def generate_signal(date: str, market: str = "csi1000",
                     capital: float = 500_000) -> pd.DataFrame:
     """生成目标持仓。"""
@@ -216,6 +230,12 @@ def generate_signal(date: str, market: str = "csi1000",
     if scores.empty:
         print("  无信号，跳过")
         return pd.DataFrame()
+
+    # 硬性过滤：科创板、北交所、ST
+    before = len(scores)
+    scores = _filter_banned(scores)
+    if before != len(scores):
+        print(f"  过滤不可交易标的: {before} -> {len(scores)}")
 
     top_stocks = scores.head(HOLD_K)
     print(f"  选出 Top-{len(top_stocks)} 只")

@@ -39,6 +39,89 @@
 <div class="card empty">尚未运行参数扫描</div>
 {% endif %}
 
+{% if ppo_metrics %}
+<h2>PPO 仓位择时（重训结果）</h2>
+<div class="card">
+  <table>
+    <thead><tr>
+      <th>指标</th><th class="num">数值</th>
+    </tr></thead>
+    <tbody>
+    <tr><td>回测区间</td><td class="num">{{ ppo_metrics.period }}</td></tr>
+    <tr><td>初始资金</td><td class="num">{{ '{:,.0f}'.format(ppo_metrics.initial) }}</td></tr>
+    <tr><td>期末净值</td><td class="num">{{ '{:,.0f}'.format(ppo_metrics.final) }}</td></tr>
+    <tr><td>总收益</td>
+        <td class="num" style="color:{{ 'var(--up)' if ppo_metrics.total_return>0 else 'var(--down)' }}">
+          {{ ppo_metrics.total_return|pct(2, true) }}</td></tr>
+    <tr><td>年化收益</td>
+        <td class="num" style="color:{{ 'var(--up)' if ppo_metrics.annual_return>0 else 'var(--down)' }}">
+          {{ ppo_metrics.annual_return|pct(2, true) }}</td></tr>
+    <tr><td>最大回撤</td>
+        <td class="num">{{ ppo_metrics.max_drawdown|pct(2) }}</td></tr>
+    <tr><td>Sharpe</td>
+        <td class="num" style="color:{{ 'var(--up)' if ppo_metrics.sharpe>0.5 else 'var(--down)' }}">
+          {{ ppo_metrics.sharpe|num(3, true) }}</td></tr>
+    <tr><td>交易天数</td><td class="num">{{ ppo_metrics.days }}</td></tr>
+    <tr><td>模型更新</td><td class="num">{{ ppo_metrics.mtime }}</td></tr>
+    </tbody>
+  </table>
+</div>
+<div class="note">
+  PPO 以 ALSTM 选股为基础，学习仓位择时（0~100%）。
+  <b>平均仓位偏低说明 PPO 主要靠空仓规避风险</b>，而非靠选股赚取 alpha。
+  此外，多种子实验中 5/6 退化为零仓位，仅 seed 42 出结果 —— 可靠性存疑。
+</div>
+{% endif %}
+
+{% if sweep_20w %}
+<h2>20 万本金参数扫描</h2>
+<div class="card">{{ sweep_20w|safe }}</div>
+{% if sweep_20w_table %}
+<div class="card">
+  <table>
+    <thead><tr>
+      <th class="num">持仓</th>
+      <th class="num">调仓</th>
+      <th class="num">总收益</th>
+      <th class="num">年化</th>
+      <th class="num">最大回撤</th>
+      <th class="num">Sharpe</th>
+      <th class="num">成交</th>
+      <th class="num">峰值重置</th>
+      <th>合规</th>
+    </tr></thead>
+    <tbody>
+    {% for r in sweep_20w_table.runs %}
+    <tr>
+      <td class="num">{{ r.holdings }}</td>
+      <td class="num">{{ r.rebalance }} 日</td>
+      <td class="num" style="color:{{ 'var(--up)' if r.total_return>0 else 'var(--down)' }}">
+        {{ r.total_return|pct(2, true) }}</td>
+      <td class="num" style="color:{{ 'var(--up)' if r.annual_return>0 else 'var(--down)' }}">
+        {{ r.annual_return|pct(2, true) }}</td>
+      <td class="num">{{ r.max_drawdown|pct(2) }}</td>
+      <td class="num">{{ r.sharpe|num(3, true) }}</td>
+      <td class="num">{{ r.total_trades }}</td>
+      <td class="num">{{ r.peak_resets }}</td>
+      <td>{% if r.drawdown_ok %}<span class="tag t-ok">达标</span>
+          {% else %}<span class="tag t-err">超限</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="sub" style="margin-top:.5em">
+    回测段: {{ sweep_20w_table.period }} · 生成时间: {{ sweep_20w_table.generated_at }}
+  </div>
+</div>
+{% endif %}
+<div class="note">
+  以实际本金 20 万、持仓 10 只、过滤科创板/北交所/ST 运行。
+  <b>DrawdownController 在小资金下反复触发</b>（峰值重置 5~8 次），
+  日频调仓（1 天）是最差配置，5 天调仓最不差但仍亏损。
+  纯 ALSTM 信号（IC=0.017）不足以在此条件下产生 alpha。
+</div>
+{% endif %}
+
 {% if subperiod %}
 <h2>跨期稳定性</h2>
 <div class="card">

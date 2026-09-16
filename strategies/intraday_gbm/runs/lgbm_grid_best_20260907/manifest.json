@@ -1,0 +1,42 @@
+{
+  "run_id": "lgbm_grid_best_20260907",
+  "model_type": "LightGBMClassifier",
+  "strategy_id": "intraday_gbm",
+  "created_at": "2026-09-07T19:22:00",
+  "status": "completed",
+  "params": {
+    "n_estimators": 600,
+    "learning_rate": 0.02,
+    "num_leaves": 63,
+    "max_depth": 8,
+    "min_child_samples": 200,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_alpha": 0.5,
+    "reg_lambda": 2.0,
+    "horizon_bars": 5,
+    "threshold": 0.002
+  },
+  "metrics": {
+    "test_accuracy": 0.7912,
+    "test_auc": 0.6808,
+    "train_accuracy": 0.8359,
+    "train_auc": 0.7218,
+    "train_positive_rate": 0.1653,
+    "test_positive_rate": 0.2088,
+    "n_features": 23,
+    "train_samples": 20000000,
+    "test_samples": 5000000,
+    "train_time_seconds": 140.4
+  },
+  "artifacts": {
+    "model": "model.joblib",
+    "metrics_json": "metrics.json",
+    "feature_importance": "feature_importance.csv",
+    "predictions_sample": "predictions_sample.csv"
+  },
+  "train_period": ["2025-08-25", "2026-05-20"],
+  "test_period": ["2026-05-21", "2026-08-26"],
+  "train_time_sec": 140.4,
+  "notes": "网格搜索最优模型 (horizon=5, threshold=0.002, config=deep)"
+}

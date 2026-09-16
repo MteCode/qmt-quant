@@ -1,0 +1,27 @@
+id: intraday_gbm
+name: 日内 GBM 动量
+category: 日内
+frequency: 日内
+description: >-
+  全市场日内 LightGBM 选股策略。读取全市场 1m 清洗数据（已排除北交所、科创板、
+  股价>500元标的），计算 23 维日内特征（多周期动量、均线偏离、量能 z-score、
+  ATR、RSI、VWAP 偏离、订单不平衡、Amihud 非流动性、日内位置、时间编码），
+  LightGBM 二分类训练，按日期 70/30 分割避免前视。盘中对全市场打分排序，
+  按概率筛选标的进行日内交易。
+
+data_source: data/clean/1m/
+
+risk:
+  intraday_stop_loss: true
+  drawdown_stop_open: true
+  force_close_eod: true
+  no_overnight: true
+
+capital: 200000
+max_positions: 10
+trade_window: "09:35-14:50"
+universe: CSI1000
+
+backtest_task: null
+live_task: scripts/run_intraday_gbm.py
+train_task: scripts/train_intraday_gbm.py

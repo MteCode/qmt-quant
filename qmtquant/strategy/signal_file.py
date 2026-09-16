@@ -59,6 +59,7 @@ class SignalFileStrategy(PortfolioStrategy):
 
     parameters = PortfolioStrategy.parameters + [
         "signal_file", "max_signal_age_days", "min_order_value",
+        "max_hold_days", "capital",
     ]
 
     variables = PortfolioStrategy.variables + ["last_signal_key"]
@@ -69,10 +70,17 @@ class SignalFileStrategy(PortfolioStrategy):
     max_signal_age_days: int = 3
     #: 单笔委托金额下限，低于此值不下单（避免几百块的碎单）
     min_order_value: float = 5000.0
+    #: 最大持仓天数，超过强制卖出。0 = 不限制
+    max_hold_days: int = 0
+    #: 策略可用资金上限。>0 时用此值替代账户总资产计算目标仓位，
+    #: 避免千万级账户按全部资金计算小策略的持仓
+    capital: float = 0
 
     def __init__(self, engine, strategy_name, vt_symbols, setting=None):
         #: 上次执行的信号标识（文件修改时间），用于避免重复调仓
         self.last_signal_key: str = ""
+        #: 持仓建仓日期 {vt_symbol: date_str}
+        self._entry_dates: dict[str, str] = {}
         super().__init__(engine, strategy_name, vt_symbols, setting)
 
     # ------------------------------------------------------------ 信号读取
@@ -150,6 +158,39 @@ class SignalFileStrategy(PortfolioStrategy):
         sig = self.load_signal()
         return list(sig[0]) if sig else []
 
+    def on_start(self) -> None:
+        """启动时从账户同步真实持仓，并重置信号标记以便重新评估。
+
+        paper_trade.py 等外部脚本建的仓不经过引擎策略框架，
+        策略的 pos 不知道它们的存在——如果不同步，策略会以为自己空仓，
+        调仓时只买不卖。重置 last_signal_key 确保首次收到 bar 时
+        重新对比信号与实际持仓。
+        """
+        super().on_start()
+        self._sync_positions_from_account()
+        self.last_signal_key = ""
+
+    def _sync_positions_from_account(self) -> None:
+        """把账户实际持仓写入策略 pos，以便调仓逻辑正确计算差异。"""
+        positions = getattr(self.engine, "positions", {})
+        if not positions:
+            return
+        synced = 0
+        for sym, pos_data in positions.items():
+            vol = pos_data.volume
+            if sym and vol > 0:
+                old = self.pos.get(sym, 0)
+                if old != vol:
+                    self.pos[sym] = vol
+                    synced += 1
+        if synced:
+            self.write_log(f"从账户同步 {synced} 只持仓到策略 pos")
+
+    def _estimate_total_value(self, bars):
+        if self.capital > 0:
+            return self.capital
+        return super()._estimate_total_value(bars)
+
     def on_bars(self, bars: dict[str, BarData]) -> None:
         """信号文件更新时调仓。
 
@@ -178,6 +219,31 @@ class SignalFileStrategy(PortfolioStrategy):
 
     # ------------------------------------------------------------ 调仓
 
+    def _expired_symbols(self, bars: dict[str, BarData]) -> set[str]:
+        """找出持仓超过 max_hold_days 的标的。"""
+        if self.max_hold_days <= 0:
+            return set()
+        today = datetime.now().strftime("%Y-%m-%d")
+        expired = set()
+        for sym, entry_date in list(self._entry_dates.items()):
+            if self.get_pos(sym) <= 0:
+                self._entry_dates.pop(sym, None)
+                continue
+            try:
+                days = (datetime.strptime(today, "%Y-%m-%d")
+                        - datetime.strptime(entry_date, "%Y-%m-%d")).days
+            except ValueError:
+                continue
+            if days >= self.max_hold_days:
+                expired.add(sym)
+        return expired
+
+    @staticmethod
+    def _lot_size(vt_symbol: str) -> int:
+        """科创板（688）最小申报 200 股，其余 100 股。"""
+        code = vt_symbol.split(".")[0] if "." in vt_symbol else vt_symbol
+        return 200 if code.startswith("688") else 100
+
     def rebalance_by_weight(self, weights: dict[str, float],
                             bars: dict[str, BarData]) -> None:
         """按信号权重调仓。先卖后买 —— 卖出释放的资金供买入使用。"""
@@ -188,24 +254,41 @@ class SignalFileStrategy(PortfolioStrategy):
 
         target_set = set(weights)
         held = {s for s, v in self.pos.items() if v > 0}
+        expired = self._expired_symbols(bars)
 
-        # ---- 卖出不在目标里的 ----
+        # ---- 卖出：不在目标里的 + 超期持仓 ----
+        max_val = getattr(
+            getattr(getattr(self.engine, 'risk_manager', None), 'cfg', None),
+            'max_order_value', 0) or 50000
+        sell_set = (held - target_set) | expired
         n_sell = 0
-        for vt_symbol in sorted(held - target_set):
+        for vt_symbol in sorted(sell_set):
             bar = bars.get(vt_symbol)
             if bar is None or bar.suspended:
                 self.write_log(f"  {vt_symbol} 停牌，本次不卖")
                 continue
             volume = self.get_pos(vt_symbol)
             if volume > 0:
-                self.sell(vt_symbol,
-                          bar.close_price * (1 - self.price_buffer), volume)
+                reason = "超期" if vt_symbol in expired else "不在目标"
+                self.write_log(f"  卖出 {vt_symbol}（{reason}）")
+                sell_price = bar.close_price * (1 - self.price_buffer)
+                ls = self._lot_size(vt_symbol)
+                max_lot = max(int(max_val / sell_price / ls) * ls, ls)
+                remaining = int(volume)
+                while remaining > 0:
+                    lot = min(remaining, max_lot)
+                    self.sell(vt_symbol, sell_price, lot)
+                    remaining -= lot
+                self._entry_dates.pop(vt_symbol, None)
                 n_sell += 1
 
-        # ---- 买入 / 补足目标仓位 ----
+        # ---- 买入 / 补足目标仓位（排除超期的，下期信号再考虑） ----
         n_buy = 0
+        today = datetime.now().strftime("%Y-%m-%d")
         investable = total_value * (1 - self.cash_buffer)
         for vt_symbol, w in sorted(weights.items(), key=lambda x: -x[1]):
+            if vt_symbol in expired:
+                continue
             bar = bars.get(vt_symbol)
             if bar is None or bar.suspended or bar.close_price <= 0:
                 continue
@@ -213,10 +296,20 @@ class SignalFileStrategy(PortfolioStrategy):
             held_value = self.get_pos(vt_symbol) * bar.close_price
             gap = target_value - held_value
             if gap < self.min_order_value:
-                continue        # 已达标或差额太小，不值得付一次交易成本
-            volume = gap / bar.close_price
-            self.buy(vt_symbol,
-                     bar.close_price * (1 + self.price_buffer), volume)
+                continue
+            buy_price = bar.close_price * (1 + self.price_buffer)
+            ls = self._lot_size(vt_symbol)
+            total_vol = int(gap / bar.close_price / ls) * ls
+            if total_vol <= 0:
+                continue
+            max_lot = max(int(max_val / buy_price / ls) * ls, ls)
+            remaining = total_vol
+            while remaining > 0:
+                lot = min(remaining, max_lot)
+                self.buy(vt_symbol, buy_price, lot)
+                remaining -= lot
+            if vt_symbol not in self._entry_dates:
+                self._entry_dates[vt_symbol] = today
             n_buy += 1
 
         self.write_log(f"调仓完成：卖出 {n_sell} 只，买入 {n_buy} 只")

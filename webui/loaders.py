@@ -223,6 +223,93 @@ def sweep_figure():
     return _fig_html(fig)
 
 
+def sweep_20w_figure():
+    """20 万本金参数扫描（hold_k=10，不同调仓周期）。"""
+    d = _read_json("sweep_portfolio_20w.json")
+    if not d or not d.get("runs"):
+        return None
+    runs = sorted(d["runs"], key=lambda r: r["rebalance"])
+
+    labels = [f"{r['rebalance']} 日" for r in runs]
+    sharpes = [r["sharpe"] for r in runs]
+    colors = [C_UP if r["drawdown_ok"] else C_DOWN for r in runs]
+    hover = [f"Sharpe {r['sharpe']:+.3f}<br>"
+             f"收益 {r['total_return']:+.1%}<br>"
+             f"回撤 {r['max_drawdown']:.1%}<br>"
+             f"{'达标' if r['drawdown_ok'] else '超限'}"
+             for r in runs]
+
+    fig = go.Figure(go.Bar(
+        x=labels, y=sharpes, marker_color=colors,
+        text=[f"{s:+.3f}" for s in sharpes], textposition="outside",
+        hovertext=hover, hoverinfo="text"))
+    fig.add_hline(y=0, line=dict(color=C_MUTED, width=1))
+    fig.update_layout(**{**LAYOUT, "height": 320,
+                         "title": "20 万本金参数扫描（持仓 10 只）",
+                         "xaxis": dict(title="调仓周期"),
+                         "yaxis": dict(title="Sharpe")})
+    return _fig_html(fig)
+
+
+def sweep_20w_table():
+    """20 万参数扫描的明细表格数据。"""
+    d = _read_json("sweep_portfolio_20w.json")
+    if not d or not d.get("runs"):
+        return None
+    runs = sorted(d["runs"], key=lambda r: r["rebalance"])
+    return {
+        "period": " ~ ".join(d.get("period", ["", ""])),
+        "generated_at": d.get("generated_at", ""),
+        "runs": runs,
+    }
+
+
+def ppo_retrain_metrics() -> dict | None:
+    """PPO 重训后的回测指标，从净值曲线计算。"""
+    import math
+    import pandas as pd
+
+    p = BACKTEST / "ppo_equity.csv"
+    if not p.exists():
+        return None
+    try:
+        df = pd.read_csv(p)
+    except (OSError, pd.errors.ParserError):
+        return None
+    if df.empty or "equity" not in df.columns:
+        return None
+
+    s = pd.to_numeric(df["equity"], errors="coerce").dropna()
+    if len(s) < 2 or float(s.iloc[0]) == 0:
+        return None
+
+    initial = float(s.iloc[0])
+    final = float(s.iloc[-1])
+    total_ret = final / initial - 1
+    days = len(s)
+    years = days / 252
+    annual_ret = (1 + total_ret) ** (1 / years) - 1 if years > 0 else 0
+    dd = float((s / s.cummax() - 1).min())
+    daily = s.pct_change().dropna()
+    sharpe = (float(daily.mean() / daily.std() * math.sqrt(252))
+              if daily.std() else 0.0)
+
+    date_col = "date" if "date" in df.columns else df.columns[0]
+    dates = pd.to_datetime(df[date_col])
+
+    return {
+        "initial": initial,
+        "final": final,
+        "total_return": total_ret,
+        "annual_return": annual_ret,
+        "max_drawdown": dd,
+        "sharpe": sharpe,
+        "days": days,
+        "period": f"{dates.min():%Y-%m-%d} ~ {dates.max():%Y-%m-%d}",
+        "mtime": _mtime_str(p.stat().st_mtime),
+    }
+
+
 # ------------------------------------------------------------------ 概况
 
 def strategy_overview() -> dict:
@@ -319,6 +406,27 @@ def strategy_overview() -> dict:
             "label": "参数网格正收益比例", "value": f"{pos}/{len(runs)}",
             "sub": "孤立亮格通常意味着过拟合",
             "bad": pos < len(runs) * 0.3,
+        })
+
+    sweep_20w = _read_json("sweep_portfolio_20w.json")
+    if sweep_20w and sweep_20w.get("runs"):
+        runs_20w = sweep_20w["runs"]
+        ok_20w = sum(1 for r in runs_20w if r["drawdown_ok"])
+        best_20w = max(runs_20w, key=lambda r: r["sharpe"])
+        info["metrics"].append({
+            "label": "20万回撤达标率",
+            "value": f"{ok_20w}/{len(runs_20w)}",
+            "sub": f"最佳 Sharpe {best_20w['sharpe']:+.3f}（{best_20w['rebalance']}日调仓）",
+            "bad": ok_20w == 0,
+        })
+
+    ppo = ppo_retrain_metrics()
+    if ppo:
+        info["metrics"].append({
+            "label": "PPO 重训 Sharpe",
+            "value": f"{ppo['sharpe']:+.3f}",
+            "sub": f"回撤 {ppo['max_drawdown']:.2%} · 更新于 {ppo['mtime']}",
+            "bad": ppo["sharpe"] <= 0.5,
         })
 
     return info
