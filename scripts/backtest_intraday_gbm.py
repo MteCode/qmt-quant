@@ -485,6 +485,68 @@ def check_targets(r: dict) -> dict:
     }
 
 
+RUNS_DIR = ROOT / "strategies" / "intraday_gbm" / "runs"
+
+#: 进 manifest.metrics 的核心指标。回测脚本内部还算了波动率、交易日数等，
+#: 但列表页排序和跨 run 对比只用得上这几个。
+_CORE_METRICS = ("total_return", "annual_return", "monthly_return",
+                 "max_drawdown", "sharpe", "n_trades", "win_rate")
+
+
+def _save_run(summary: dict, out: Path, results: dict, args) -> str:
+    """把本次回测存成独立 run，供管理台按历史对比。
+
+    旧路径 models/intraday_gbm/backtest/ 是固定覆写的 —— 跑第二次就把第一次
+    冲掉，既没法比较参数，也随时可能弄丢有价值的结果。这里额外落一份带
+    参数快照的 run，旧路径保留为「最近一次」，不破坏现有页面。
+    """
+    if not results:
+        return ""
+
+    import shutil
+
+    from webui.model_registry import (create_manifest, generate_run_id,
+                                      save_manifest)
+
+    run_id = generate_run_id("bt")
+    run_dir = RUNS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    artifacts = {"summary_json": "summary.json"}
+    shutil.copy2(out / "summary.json", run_dir / "summary.json")
+    for mode in results:
+        for suffix, key in (("daily", "daily_csv"), ("trades", "trades_csv")):
+            src = out / f"{mode}_{suffix}.csv"
+            if src.exists():
+                shutil.copy2(src, run_dir / src.name)
+                artifacts[f"{mode}_{key}"] = src.name
+
+    # 顶层指标取夏普最高的模式，让回测 run 能和模型 run 用同一组列展示、排序
+    best_mode = max(results, key=lambda m: results[m].get("sharpe") or 0)
+    best = results[best_mode]
+    metrics = {k: best.get(k) for k in _CORE_METRICS}
+    metrics["best_mode"] = best_mode
+    metrics["modes"] = sorted(results)
+    metrics["by_mode"] = {
+        m: {k: r.get(k) for k in _CORE_METRICS} for m, r in results.items()
+    }
+
+    manifest = create_manifest(
+        run_id=run_id,
+        kind="backtest",
+        model_type="IntradayGBM",
+        strategy_id="intraday_gbm",
+        params={**summary["config"], "modes": sorted(results),
+                "start": args.start or "", "end": args.end or ""},
+        metrics=metrics,
+        artifacts=artifacts,
+        test_period=[args.start or "", args.end or ""],
+        notes=f"回测 {'/'.join(sorted(results))}，标的上限 {args.max_symbols}",
+    )
+    save_manifest(run_dir, manifest)
+    return run_id
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="全市场日内 GBM 策略回测")
     p.add_argument("--mode", default="all",
@@ -602,8 +664,12 @@ def main() -> int:
     (out / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    run_id = _save_run(summary, out, results, args)
+
     print(f"\n{'=' * 66}")
     print(f"  回测结果已保存: {out}")
+    if run_id:
+        print(f"  回测 run: strategies/intraday_gbm/runs/{run_id}")
     if results:
         print(f"\n  {'模式':<16} {'总收益':>9} {'月化':>9} {'回撤':>9} "
               f"{'夏普':>8} {'交易数':>7}")

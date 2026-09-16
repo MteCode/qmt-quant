@@ -44,14 +44,21 @@ def create_manifest(
     params: dict,
     metrics: dict,
     artifacts: dict,
+    kind: str = "model",
     train_period: list[str] | None = None,
     test_period: list[str] | None = None,
     train_time_sec: float | None = None,
     notes: str = "",
 ) -> dict:
-    """构造标准 manifest dict，供训练脚本调用后写入 JSON。"""
+    """构造标准 manifest dict，供训练/回测脚本调用后写入 JSON。
+
+    `kind` 区分产物类型："model" 是训练产物，"backtest" 是回测产物。
+    两者共用同一套 runs/ 目录与 manifest 结构，但在 UI 上分开展示 ——
+    没有这个字段的话，回测 run 会被模型管理页当成可部署的模型。
+    """
     return {
         "run_id": run_id,
+        "kind": kind,
         "model_type": model_type,
         "strategy_id": strategy_id,
         "created_at": datetime.now().strftime("%Y-%m-%dT%H:%M:%S"),
@@ -137,12 +144,17 @@ def _metrics_from_equity(values: list[float], capital: float) -> dict:
     }
 
 
-def discover_models(root: Path = ROOT) -> list[dict]:
-    """扫描所有 strategies/*/runs/*/manifest.json，返回模型列表。"""
-    models = []
+def kind_of(manifest: dict) -> str:
+    """manifest 的产物类型。早于 kind 字段的 manifest 一律是训练产物。"""
+    return manifest.get("kind") or "model"
+
+
+def discover_runs(root: Path = ROOT, kind: str | None = None) -> list[dict]:
+    """扫描所有 strategies/*/runs/*/manifest.json。kind 为 None 时不过滤。"""
+    runs = []
     strategies_dir = root / "strategies"
     if not strategies_dir.is_dir():
-        return models
+        return runs
     for strat_dir in sorted(strategies_dir.iterdir()):
         runs_dir = strat_dir / "runs"
         if not runs_dir.is_dir():
@@ -153,11 +165,36 @@ def discover_models(root: Path = ROOT) -> list[dict]:
             m = _read_json(run_dir / "manifest.json")
             if m is None:
                 continue
+            if kind is not None and kind_of(m) != kind:
+                continue
             m["_dir"] = str(run_dir)
             m["_strategy_dir"] = strat_dir.name
-            models.append(m)
-    models.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-    return models
+            runs.append(m)
+    runs.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return runs
+
+
+def discover_models(root: Path = ROOT) -> list[dict]:
+    """训练产物列表 —— 模型管理页与部署只认这一类。"""
+    return discover_runs(root, kind="model")
+
+
+def discover_backtests(root: Path = ROOT,
+                       strategy_id: str | None = None) -> list[dict]:
+    """回测产物列表，可按策略过滤。"""
+    rows = discover_runs(root, kind="backtest")
+    if strategy_id:
+        rows = [r for r in rows
+                if (r.get("strategy_id") or r.get("_strategy_dir")) == strategy_id]
+    return rows
+
+
+def get_run(run_id: str, root: Path = ROOT) -> dict | None:
+    """按 run_id 查找任意类型的 run。"""
+    for r in discover_runs(root):
+        if r.get("run_id") == run_id:
+            return r
+    return None
 
 
 def get_model(run_id: str, root: Path = ROOT) -> dict | None:

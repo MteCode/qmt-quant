@@ -194,6 +194,45 @@
 </div>
 {% endif %}
 
+{% if backtests %}
+<h2>回测历史 <span class="sub" style="font-weight:400">共 {{ backtests|length }} 次 · 每次独立存档，互不覆盖</span></h2>
+<div class="card" style="padding:0;overflow:hidden">
+  <table>
+    <thead><tr>
+      <th>run</th><th>模式</th><th class="num">资金</th><th class="num">持仓</th>
+      <th class="num">买入阈值</th><th class="num">标的数</th>
+      <th class="num">总收益</th><th class="num">回撤</th><th class="num">夏普</th>
+      <th class="num">交易</th>
+    </tr></thead>
+    <tbody>
+    {% for b in backtests %}
+      {% set p = b.params or {} %}
+      {% set mt = b.metrics or {} %}
+      <tr>
+        <td>
+          <span style="font-weight:600">{{ b.run_id }}</span>
+          <div style="color:var(--muted);font-size:11px">
+            {{ b.created_at[:16] if b.created_at else '' }}</div>
+        </td>
+        <td><span class="tag t-mut">{{ mt.get('best_mode') or '—' }}</span></td>
+        <td class="num">{{ p.get('capital')|num(0) }}</td>
+        <td class="num">{{ p.get('max_positions') }}</td>
+        <td class="num">{{ p.get('prob_buy') }}</td>
+        <td class="num">{{ p.get('max_symbols') }}</td>
+        {% set tr = mt.get('total_return') %}
+        <td class="num" style="color:{{ 'var(--up)' if (tr or 0) > 0
+            else 'var(--down)' if tr is not none else 'var(--muted)' }}">
+          {{ tr|pct(2, true) }}</td>
+        <td class="num">{{ mt.get('max_drawdown')|pct(2) }}</td>
+        <td class="num">{{ mt.get('sharpe')|num(2) }}</td>
+        <td class="num">{{ mt.get('n_trades') }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
 <!-- 模型指标 -->
 {% if r.model %}
 <h2>模型</h2>

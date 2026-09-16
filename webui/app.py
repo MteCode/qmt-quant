@@ -247,8 +247,16 @@ def strategy_detail(sid):
         task=TASK_BY_ID.get(s.backtest_task),
         live_task=TASK_BY_ID.get(s.live_task),
         running={r["task_id"] for r in jobs.running_jobs()},
+        backtests=model_registry.discover_backtests(strategy_id=sid),
         recent=[j for j in jobs.list_jobs(limit=30)
                 if j.get("task_id") in (s.backtest_task, s.live_task)][:8])
+
+
+@app.get("/api/strategies/<sid>/backtests")
+def api_strategy_backtests(sid):
+    """该策略的历次回测 run —— 参数快照 + 指标，供前端对比。"""
+    return jsonify(ok=True, runs=model_registry.discover_backtests(
+        strategy_id=sid))
 
 
 @app.get("/api/strategy/<sid>/equity")
