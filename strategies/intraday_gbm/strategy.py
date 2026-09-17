@@ -50,6 +50,7 @@ class IntradayGBMStrategy(StrategyBase):
         "vol_z_threshold",      # momentum 模式的量能放大阈值
         "vwap_deviation",       # mean_reversion 模式的 VWAP 偏离阈值
         "use_rank",             # 按概率排序选前 N 名，而非用绝对阈值
+        "t_plus_1",             # A股T+1：当日买入不可卖，止损顺延到次日
     ]
 
     variables = StrategyBase.variables + [
@@ -74,6 +75,8 @@ class IntradayGBMStrategy(StrategyBase):
         # 正类比例，换个 horizon 重训一次就全变了；而**排序是稳定的**——
         # 这也正是横截面选股模型该用的方式。
         self.use_rank = False
+        #: A 股股票必须开着。关掉只适用于 T+0 品种（ETF、可转债）
+        self.t_plus_1 = True
 
         self.today_entries: dict[str, float] = {}
         self.entry_prices: dict[str, float] = {}
@@ -142,9 +145,37 @@ class IntradayGBMStrategy(StrategyBase):
                 f"或改用 top_k 排序选股（设 use_rank=true）。")
 
     def on_start(self) -> None:
+        # today_entries 是「今天买的」，换日/重启后自然清空
         self.today_entries = {}
-        self.entry_prices = {}
         self._bar_buffers = {}
+        # entry_prices 不清：T+1 下隔夜仓要靠它兜底做止损。
+        # 正常情况下 stop_ref_price 会优先用券商成本价，这里只是退路。
+        if not hasattr(self, "entry_prices") or self.entry_prices is None:
+            self.entry_prices = {}
+
+    def sellable(self, vt: str) -> float:
+        """能卖多少 —— 所有卖出路径（止损/信号/尾盘）都必须先过这道闸。
+
+        A 股 T+1：当日买入部分被冻结，按持仓量直接下卖单会被券商逐笔拒。
+        实盘出现过每分钟发单、每分钟被「可卖数量不足」拒掉的情况，
+        连 -2.4% 的止损单都执行不了 —— 日志刷满拒单，实际什么也没做。
+
+        与其发出去让券商拒，不如自己先判断：卖不了就不发，日志才有信噪比。
+        """
+        pos = self.get_pos(vt)
+        if pos <= 0:
+            return 0.0
+        if not self.t_plus_1:
+            return pos
+        return max(0.0, min(pos, self.get_available(vt)))
+
+    def stop_ref_price(self, vt: str) -> float:
+        """止损参考价：优先用券商成本价，退回自记的入场价。
+
+        隔夜仓必须靠成本价 —— 策略每天重启会清空 entry_prices，
+        只认内存的话隔夜仓就完全失去止损保护，而那恰恰是风险最大的仓位。
+        """
+        return self.get_cost_price(vt) or self.entry_prices.get(vt, 0.0)
 
     def warmup(self, history: dict[str, list[dict]]) -> int:
         """用当日已发生的 1m bar 预热缓冲区，返回预热成功的标的数。
@@ -246,11 +277,12 @@ class IntradayGBMStrategy(StrategyBase):
             if pos <= 0:
                 continue
 
-            # 止损检查
-            if vt in self.entry_prices:
-                pnl = (price - self.entry_prices[vt]) / self.entry_prices[vt]
+            # 止损检查。做 T 模式卖的本就是昨仓，sellable 正好等于可回转的量
+            ref = self.stop_ref_price(vt)
+            if ref > 0:
+                pnl = (price - ref) / ref
                 if pnl < -self.max_intraday_loss:
-                    vol = min(pos, self.position_size / price)
+                    vol = min(self.sellable(vt), self.position_size / price)
                     if vol > 0:
                         self.sell(vt, price, vol, OrderType.LIMIT)
                         self.write_log(f"T0 止损 {vt} pnl={pnl:.2%}")
@@ -263,7 +295,7 @@ class IntradayGBMStrategy(StrategyBase):
                     self.entry_prices[vt] = price
                     self.write_log(f"T0 加仓 {vt} prob={row['prob_up']:.3f}")
             elif row["prob_up"] < self.prob_sell_threshold:
-                vol = min(pos, self.position_size / price)
+                vol = min(self.sellable(vt), self.position_size / price)
                 if vol > 0:
                     self.sell(vt, price, vol, OrderType.LIMIT)
                     self.write_log(f"T0 减仓 {vt} prob={row['prob_up']:.3f}")
@@ -279,12 +311,15 @@ class IntradayGBMStrategy(StrategyBase):
             pos = self.get_pos(vt)
             vwap_gap = row["vwap_gap"]
 
-            # 止损
-            if vt in self.entry_prices and pos > 0:
-                pnl = (price - self.entry_prices[vt]) / self.entry_prices[vt]
+            # 止损（T+1 下当日买入卖不掉，自然顺延到次日）
+            ref = self.stop_ref_price(vt)
+            if ref > 0 and pos > 0:
+                pnl = (price - ref) / ref
                 if pnl < -self.max_intraday_loss:
-                    self.sell(vt, price, pos, OrderType.LIMIT)
-                    self.write_log(f"MR 止损 {vt} pnl={pnl:.2%}")
+                    vol = self.sellable(vt)
+                    if vol > 0:
+                        self.sell(vt, price, vol, OrderType.LIMIT)
+                        self.write_log(f"MR 止损 {vt} pnl={pnl:.2%}")
                     continue
 
             # 价格低于 VWAP + 模型看多 → 买入（预期回归均值上方）
@@ -304,8 +339,10 @@ class IntradayGBMStrategy(StrategyBase):
             elif (vwap_gap > self.vwap_deviation
                   and row["prob_up"] < self.prob_sell_threshold
                   and pos > 0):
-                self.sell(vt, price, pos, OrderType.LIMIT)
-                self.write_log(f"MR 卖出 {vt} vwap_gap={vwap_gap:.4f}")
+                vol = self.sellable(vt)
+                if vol > 0:
+                    self.sell(vt, price, vol, OrderType.LIMIT)
+                    self.write_log(f"MR 卖出 {vt} vwap_gap={vwap_gap:.4f}")
 
     def _execute_momentum(self, scores: pd.DataFrame,
                           bars: dict[str, BarData]) -> None:
@@ -318,12 +355,16 @@ class IntradayGBMStrategy(StrategyBase):
             price = row["close"]
             pos = self.get_pos(vt)
 
-            # 止损
-            if vt in self.entry_prices and pos > 0:
-                pnl = (price - self.entry_prices[vt]) / self.entry_prices[vt]
+            # 止损。T+1 下当日买入的卖不掉，止损自然顺延到次日 ——
+            # 参考价用券商成本价，保证隔夜仓跨重启仍受保护
+            ref = self.stop_ref_price(vt)
+            if ref > 0 and pos > 0:
+                pnl = (price - ref) / ref
                 if pnl < -self.max_intraday_loss:
-                    self.sell(vt, price, pos, OrderType.LIMIT)
-                    self.write_log(f"MOM 止损 {vt} pnl={pnl:.2%}")
+                    vol = self.sellable(vt)
+                    if vol > 0:
+                        self.sell(vt, price, vol, OrderType.LIMIT)
+                        self.write_log(f"MOM 止损 {vt} pnl={pnl:.2%}")
                     continue
 
             # 高概率 + 量能放大 + 日内正收益
@@ -349,15 +390,34 @@ class IntradayGBMStrategy(StrategyBase):
 
             # 已持仓但模型转空
             elif pos > 0 and row["prob_up"] < self.prob_sell_threshold:
-                self.sell(vt, price, pos, OrderType.LIMIT)
-                self.write_log(f"MOM 卖出 {vt} prob={row['prob_up']:.3f}")
+                vol = self.sellable(vt)
+                if vol > 0:
+                    self.sell(vt, price, vol, OrderType.LIMIT)
+                    self.write_log(f"MOM 卖出 {vt} prob={row['prob_up']:.3f}")
 
     def _close_all_intraday(self, bars: dict[str, BarData]) -> None:
-        """尾盘平掉所有日内仓位。"""
-        for vt in list(self.today_entries.keys()):
-            pos = self.get_pos(vt)
-            if pos > 0 and vt in bars:
-                self.sell(vt, bars[vt].close_price, pos, OrderType.LIMIT)
-                self.write_log(f"尾盘平仓 {vt}")
-        self.today_entries.clear()
-        self.entry_prices.clear()
+        """尾盘清掉**可卖**的持仓。
+
+        T+1 下这不再是「日内平仓」：当日买入的卖不掉，能平的只有昨仓。
+        原先的实现按 today_entries 遍历并按持仓量下单，结果是每只都被
+        券商以「可卖数量不足」拒掉 —— 声称的「不留隔夜」从来没做到过。
+
+        因此这里改为遍历全部持仓、只卖 sellable 的部分，并且**不再清空
+        entry_prices**：今天买的要留到明天才能卖，清掉就失去止损参考了。
+        """
+        closed = 0
+        for vt in list(set(list(self.today_entries) + list(self.pos))):
+            if vt not in bars:
+                continue
+            vol = self.sellable(vt)
+            if vol > 0:
+                self.sell(vt, bars[vt].close_price, vol, OrderType.LIMIT)
+                self.write_log(f"尾盘平仓 {vt} 量={vol:.0f}")
+                closed += 1
+                self.today_entries.pop(vt, None)
+                self.entry_prices.pop(vt, None)
+
+        held = [v for v in self.pos if self.get_pos(v) > 0]
+        if held:
+            self.write_log(
+                f"尾盘：平掉 {closed} 只，{len(held)} 只因 T+1 留隔夜")

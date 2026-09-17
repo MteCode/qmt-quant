@@ -122,6 +122,21 @@ class StrategyBase(ABC):
     def get_pos(self, vt_symbol: str) -> float:
         return self.pos.get(vt_symbol, 0)
 
+    def get_available(self, vt_symbol: str) -> float:
+        """可卖数量。A 股 T+1 下当日买入的部分不可卖。
+
+        引擎没实现时退化为 get_pos —— 这是为了让不受 T+1 约束的场景
+        （模拟撮合、ETF/可转债）照常工作，而不是默默放行一个错误。
+        真正跑 A 股股票实盘的 LiveEngine 一定实现了它。
+        """
+        fn = getattr(self.engine, "get_available", None)
+        return fn(vt_symbol) if fn else self.get_pos(vt_symbol)
+
+    def get_cost_price(self, vt_symbol: str) -> float:
+        """持仓成本价，取不到返回 0（调用方需自行回退到自记的入场价）。"""
+        fn = getattr(self.engine, "get_cost_price", None)
+        return fn(vt_symbol) if fn else 0.0
+
     def get_cash(self) -> float:
         return self.engine.get_cash()
 

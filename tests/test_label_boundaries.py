@@ -179,3 +179,76 @@ class TestMaskingActuallyChangesLabels:
         assert max(abs(fut[i]) for i in crossed) > 1.0, \
             "跨标的的「收益率」应当大到一眼可辨"
         assert not any(keep[i] for i in crossed)
+
+
+class TestT1Labels:
+    """T+1 标签：当日买入、次一交易日卖出。
+
+    ## 和日内标签的关系是「相反」
+
+    日内版把跨日样本当越界屏蔽掉，因为策略尾盘强平。T+1 策略的持有期
+    必然跨越隔夜，所以跨日不是越界而是标签本身 —— 这两套逻辑容易写串，
+    所以分别测。
+
+    实盘印证过必要性：日内版每分钟发卖单、每分钟被「可卖数量不足」拒，
+    连止损都执行不了。
+    """
+
+    def _t1(self, close, day, sym, exit_at="open"):
+        return TRAINER.make_labels_t1(close, day, sym,
+                                      threshold=0.0, exit_at=exit_at)
+
+    def test_exit_is_next_day_first_bar(self):
+        """exit_at=open 时，出场价必须是次日第一根 bar。"""
+        close, day, sym = _panel(1, 3, 4)
+        y, keep, _ = self._t1(close, day, sym, "open")
+        starts = [i for i in range(len(close))
+                  if i == 0 or day[i] != day[i - 1]]
+        # 第 0 天任意一行，出场都应当是第 1 天的首根
+        for i in range(starts[0], starts[1]):
+            assert keep[i]
+            expected = close[starts[1]] / close[i] - 1
+            assert y[i] == int(expected > 0)
+
+    def test_exit_at_close_uses_next_day_last_bar(self):
+        """exit_at=close 时，出场价必须是次日**最后**一根 bar。
+
+        不比较两种口径的标签是否不同 —— 合成数据价格单调时它们本就相同，
+        那样的断言测不出取错 bar。直接验证用的是哪一根。
+        """
+        close, day, sym = _panel(1, 3, 4)
+        y, keep, _ = self._t1(close, day, sym, "close")
+        starts = [i for i in range(len(close))
+                  if i == 0 or day[i] != day[i - 1]]
+        day1_last = starts[2] - 1
+        for i in range(starts[0], starts[1]):
+            assert keep[i]
+            expected = close[day1_last] / close[i] - 1
+            assert y[i] == int(expected > 0)
+
+    def test_last_day_has_no_label(self):
+        """最后一个交易日没有次日，必须无标签 —— 否则会取到别的标的。"""
+        close, day, sym = _panel(1, 3, 4)
+        _, keep, _ = self._t1(close, day, sym)
+        last_day = day[-1]
+        assert not keep[day == last_day].any()
+
+    def test_never_crosses_symbol(self):
+        """每只标的最后一天的「次日」不能落到下一只股票头上。"""
+        close, day, sym = _panel(3, 3, 4)
+        _, keep, _ = self._t1(close, day, sym)
+        for s in np.unique(sym):
+            idx = np.flatnonzero(sym == s)
+            last_day = day[idx].max()
+            tail = idx[day[idx] == last_day]
+            assert not keep[tail].any(), "跨标的取值必须被屏蔽"
+
+    def test_same_day_rows_never_labelled_intraday(self):
+        """T+1 标签不应退化成日内标签：出场绝不在当天。"""
+        close, day, sym = _panel(2, 3, 5)
+        _, keep, _ = self._t1(close, day, sym)
+        assert keep.any(), "应当有可用样本"
+        # 有标签的行，其出场日必须严格晚于入场日
+        for i in np.flatnonzero(keep):
+            later = day[i + 1:][day[i + 1:] != day[i]]
+            assert len(later) > 0, "有标签却找不到次日，逻辑有误"

@@ -274,6 +274,27 @@ class LiveEngine:
         pos = self.positions.get(normalize(vt_symbol))
         return pos.volume if pos else 0.0
 
+    def get_available(self, vt_symbol: str) -> float:
+        """可卖数量。A 股 T+1：当日买入的部分被冻结，available < volume。
+
+        策略据此决定能不能卖 —— 不看这个直接按 volume 下卖单，会被券商
+        以「可卖数量不足」逐笔拒掉。实盘出现过每分钟发单每分钟被拒、
+        连止损都执行不了的情况。
+
+        持仓在每次成交后由 _on_trade 刷新，所以盘中是准的。
+        """
+        pos = self.positions.get(normalize(vt_symbol))
+        return pos.available if pos else 0.0
+
+    def get_cost_price(self, vt_symbol: str) -> float:
+        """持仓成本价 —— 隔夜仓做止损时的参考价。
+
+        用券商的成本价而非策略自己记的入场价：策略每天重启会清空内存状态，
+        隔夜仓就失去止损保护了；而券商的成本价跨重启始终可靠。
+        """
+        pos = self.positions.get(normalize(vt_symbol))
+        return pos.price if pos else 0.0
+
     def get_tick(self, vt_symbol: str) -> TickData | None:
         return self.ticks.get(normalize(vt_symbol))
 

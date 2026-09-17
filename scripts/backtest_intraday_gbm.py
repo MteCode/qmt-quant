@@ -239,10 +239,26 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
              max_intraday_loss: float, entry_min: int, exit_min: int,
              vol_z_threshold: float, vwap_deviation: float,
              max_drawdown_stop: float,
-             factors: dict | None = None) -> dict:
-    """按 mode 跑一遍日内回测。
+             factors: dict | None = None,
+             t_plus_1: bool = True) -> dict:
+    """按 mode 跑一遍回测。
 
-    逐日推进：每天在时间窗内按分钟遍历，选股/开仓/止损/尾盘平仓。
+    逐日推进：每天在时间窗内按分钟遍历，选股/开仓/止损/卖出。
+
+    ## T+1（默认开启）
+
+    A 股当日买入的股票当日不可卖。此前这个回测完全没有该约束：持仓字典
+    每天重置、日终无条件强平，于是自由地做同日买卖回合 —— 有一条记录是
+    10:33 买、10:37 卖。那种交易在 A 股根本不可能发生。
+
+    夏普 31.97、日均 18.2 个回合就是这么来的：收益建立在一个不存在的
+    交易机制上。实盘印证了这点 —— 每分钟发卖单，每分钟被券商以
+    「可卖数量不足」拒掉，连止损都执行不了。
+
+    开启后持仓跨日保留，只有入场日早于当日的仓位才可卖；净值也相应改为
+    现金 + 持仓盯市，否则隔夜仓的盈亏不会反映在曲线上。
+
+    关掉只适用于 T+0 品种（ETF、可转债）。
     """
     tod = _time_of_day(df.index)
     # 只保留交易时段
@@ -259,17 +275,27 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
     peak_equity = capital
     trading_halted = False
 
+    # T+1 下持仓必须跨日保留 —— 原先每天重置，等于假设所有仓位隔夜凭空消失
+    positions: dict[str, dict] = {}   # symbol -> {vol, entry, entry_t, entry_day}
+
+    def _can_sell(pos: dict, today) -> bool:
+        """T+1：入场日必须早于当日。"""
+        return (not t_plus_1) or pos["entry_day"] != today
+
     for day in days:
         dd = d[d["day"] == day]
         if dd.empty:
             continue
 
-        # 组合回撤控制：从峰值回撤超阈值则当日停止开新仓
-        cur_dd = (cash - peak_equity) / peak_equity if peak_equity > 0 else 0
-        allow_new = (cur_dd > -max_drawdown_stop) and not trading_halted
+        day_start_equity = cash + sum(
+            p["vol"] * p["last"] for p in positions.values())
 
-        positions: dict[str, dict] = {}   # symbol -> {vol, entry, entry_t}
-        day_start_cash = cash
+        # 组合回撤控制：从峰值回撤超阈值则当日停止开新仓。
+        # 必须用净值而非现金 —— T+1 下持仓过夜，现金天然偏低，
+        # 拿它比会把「正常持仓」误判成回撤，直接停掉开仓
+        cur_dd = ((day_start_equity - peak_equity) / peak_equity
+                  if peak_equity > 0 else 0)
+        allow_new = (cur_dd > -max_drawdown_stop) and not trading_halted
 
         # 该日的分钟时点
         times = dd.index.unique()
@@ -291,15 +317,20 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                     row = row.iloc[0]
                 price = float(row["close"])
                 pos = positions[sym]
+                pos["last"] = price          # 盯市价，隔夜仓算净值要用
                 pnl_pct = (price - pos["entry"]) / pos["entry"]
+
+                # T+1：当日买入的一律不可卖，止损与信号都只能顺延到次日
+                if not _can_sell(pos, day):
+                    continue
 
                 should_exit = False
                 reason = ""
 
-                # 风控：单票日内止损（硬约束，优先于任何信号）
+                # 风控：单票止损（硬约束，优先于任何信号）
                 if pnl_pct < -max_intraday_loss:
                     should_exit, reason = True, "止损"
-                # 尾盘强制平仓
+                # 尾盘平仓（T+1 下只平得掉昨仓）
                 elif t_min >= exit_min:
                     should_exit, reason = True, "尾盘平仓"
                 # 模型转空
@@ -373,9 +404,10 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                 if cost > cash:
                     continue
                 cash -= cost
-                positions[sym] = {"vol": vol, "entry": price, "entry_t": t}
+                positions[sym] = {"vol": vol, "entry": price, "entry_t": t,
+                                  "entry_day": day, "last": price}
 
-        # 收盘：强平所有残留持仓（用当日最后价）
+        # 收盘：平掉**可卖**的残留持仓。T+1 下当日买入的平不掉，留隔夜
         if positions:
             last_snap = dd.loc[[times[-1]]].set_index("symbol")
             for sym, pos in list(positions.items()):
@@ -384,8 +416,11 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                     if isinstance(r, pd.DataFrame):
                         r = r.iloc[0]
                     price = float(r["close"])
+                    pos["last"] = price
                 else:
-                    price = pos["entry"]
+                    price = pos["last"]
+                if not _can_sell(pos, day):
+                    continue
                 proceeds = price * pos["vol"] - _fee(price * pos["vol"], True)
                 cost = pos["entry"] * pos["vol"] + _fee(pos["entry"] * pos["vol"], False)
                 cash += proceeds
@@ -402,16 +437,25 @@ def backtest(df: pd.DataFrame, mode: str, capital: float,
                         (price - pos["entry"]) / pos["entry"], 5),
                     "reason": "收盘平仓",
                 })
-            positions.clear()
+                # 只删已平的 —— clear() 会把留隔夜的仓位一并抹掉，
+                # 那等于假设隔夜仓凭空消失，盈亏全丢
+                del positions[sym]
 
-        peak_equity = max(peak_equity, cash)
+        # 净值 = 现金 + 持仓盯市。T+1 下隔夜仓是常态，只算现金会让
+        # 「买入当天」凭空亏掉全部买入金额，次日卖出再凭空赚回来
+        hold_value = sum(p["vol"] * p["last"] for p in positions.values())
+        equity = cash + hold_value
+        peak_equity = max(peak_equity, equity)
         daily_rows.append({
             "date": str(pd.Timestamp(day).date()),
-            "equity": round(cash, 2),
-            "ret": round((cash - day_start_cash) / day_start_cash, 6)
-            if day_start_cash > 0 else 0,
+            "equity": round(equity, 2),
+            "cash": round(cash, 2),
+            "hold_value": round(hold_value, 2),
+            "n_holding": len(positions),
+            "ret": round((equity - day_start_equity) / day_start_equity, 6)
+            if day_start_equity > 0 else 0,
         })
-        equity_curve.append(cash)
+        equity_curve.append(equity)
 
     # ---------- 绩效统计 ----------
     daily = pd.DataFrame(daily_rows)

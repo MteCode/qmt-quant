@@ -211,14 +211,87 @@ def make_labels(close: np.ndarray, day_codes: np.ndarray,
     return y, has_label, int(labelled.sum() - has_label.sum())
 
 
+def make_labels_t1(close: np.ndarray, day_codes: np.ndarray,
+                   sym_codes: np.ndarray | None, threshold: float,
+                   exit_at: str = "open") -> tuple:
+    """T+1 标签：当日买入，次一交易日卖出。
+
+    ## 为什么要有这个函数
+
+    A 股 T+1，当天买入的股票当天卖不掉。日内标签（make_labels）刻意屏蔽了
+    跨日样本，因为那种策略尾盘强平；而 T+1 策略的持有期**必然跨越隔夜**，
+    所以这里的取值方向和它正好相反 —— 跨日不是要屏蔽的越界，而是标签本身。
+
+    实盘印证过这件事：日内版每分钟都在发卖单，每分钟都被
+    「可卖数量不足」拒掉，连止损单也执行不了。
+
+    ## 出场取在哪一根
+
+    - ``open``：次日第一根 bar。T+1 一开盘就能卖，是最早的合法出场，
+      持有隔夜风险最短，也最容易在实盘复现
+    - ``close``：次日最后一根 bar，等于多持有一整天
+
+    「次一交易日」用数据里该标的的下一个日期块判定，不按自然日加一 ——
+    停牌、节假日都会让自然日算法取错。
+
+    ## 屏蔽什么
+
+    仍然要屏蔽跨标的：长表按标的分块拼接，每只最后一天的「次日」会落到
+    下一只股票头上。两只股票价格量级不同，算出的收益率是异常值不是噪声。
+
+    :returns: (y, has_label, n_dropped)
+    """
+    n = len(close)
+    if n == 0:
+        return (np.zeros(0, dtype=np.int8), np.zeros(0, dtype=bool), 0)
+
+    sym = (np.zeros(n, dtype=np.int64) if sym_codes is None
+           else np.asarray(sym_codes))
+
+    # (标的, 日期) 变化处即新块的起点
+    new_block = np.empty(n, dtype=bool)
+    new_block[0] = True
+    new_block[1:] = (day_codes[1:] != day_codes[:-1]) | (sym[1:] != sym[:-1])
+
+    block_id = np.cumsum(new_block) - 1
+    block_start = np.flatnonzero(new_block)
+    block_end = np.r_[block_start[1:], n] - 1
+    block_sym = sym[block_start]
+    nb = len(block_start)
+
+    # 下一块必须是同一标的，否则「次日」跨到了别的股票
+    exit_row = np.full(nb, -1, dtype=np.int64)
+    if nb > 1:
+        nxt = block_start[1:] if exit_at == "open" else block_end[1:]
+        same = block_sym[1:] == block_sym[:-1]
+        exit_row[:-1] = np.where(same, nxt, -1)
+
+    row_exit = exit_row[block_id]
+    has = row_exit >= 0
+
+    fut = np.full(n, np.nan, dtype=np.float64)
+    fut[has] = close[row_exit[has]] / close[has] - 1
+
+    labelled = ~np.isnan(fut)
+    has_label = labelled & has
+    y = (fut > threshold).astype(np.int8)
+    return y, has_label, int(n - has_label.sum())
+
+
 def train(df: pd.DataFrame, features: list[str],
           horizon: int, threshold: float,
-          params: dict) -> dict:
-    """训练 GBM 模型并返回结果。"""
+          params: dict, label_mode: str = "intraday",
+          exit_at: str = "open") -> dict:
+    """训练 GBM 模型并返回结果。
+
+    label_mode:
+      - ``intraday``：未来 horizon 根 bar 的收益，屏蔽跨日（尾盘强平的策略）
+      - ``t1``：当日买入、次一交易日卖出（A 股 T+1，持有期必然跨夜）
+    """
     from lightgbm import LGBMClassifier
     from sklearn.metrics import accuracy_score, roc_auc_score
 
-    # 标签与边界屏蔽见 make_labels()（抽出来是为了能单独测边界）
+    # 标签与边界屏蔽见 make_labels() / make_labels_t1()
     close = df["close"].values.astype(np.float64)
     day_codes = pd.factorize(df.index.normalize())[0]
     sym_codes = (pd.factorize(df["symbol"].values)[0]
@@ -226,10 +299,17 @@ def train(df: pd.DataFrame, features: list[str],
     if sym_codes is None:
         print("  [!] 无 symbol 列，跨标的边界无法屏蔽（约 0.004% 的行）")
 
-    y_all, has_label, n_drop = make_labels(
-        close, day_codes, sym_codes, horizon, threshold)
-    print(f"  标签：屏蔽跨日/跨标的越界 {n_drop:,} 行 "
-          f"（{n_drop / max(1, len(close)):.2%}）")
+    if label_mode == "t1":
+        y_all, has_label, n_drop = make_labels_t1(
+            close, day_codes, sym_codes, threshold, exit_at)
+        print(f"  标签：T+1（次日{'开盘' if exit_at == 'open' else '收盘'}卖出）"
+              f"，无次日可用 {n_drop:,} 行"
+              f"（{n_drop / max(1, len(close)):.2%}）")
+    else:
+        y_all, has_label, n_drop = make_labels(
+            close, day_codes, sym_codes, horizon, threshold)
+        print(f"  标签：屏蔽跨日/跨标的越界 {n_drop:,} 行 "
+              f"（{n_drop / max(1, len(close)):.2%}）")
     del close, day_codes, sym_codes
 
     # 按日期分割：前 70% 的天数做训练
@@ -308,7 +388,11 @@ def train(df: pd.DataFrame, features: list[str],
 
     metrics = {
         "model": "LightGBMClassifier",
-        "horizon_bars": horizon,
+        # 口径必须跟着模型走 —— 日内模型和 T+1 模型的输出含义完全不同，
+        # 装错了策略照样能跑、照样出信号，只是全错，且没有任何报错
+        "label_mode": label_mode,
+        "exit_at": exit_at if label_mode == "t1" else None,
+        "horizon_bars": horizon if label_mode != "t1" else None,
         "threshold": threshold,
         "n_features": len(features),
         "features": features,
@@ -353,6 +437,8 @@ def train(df: pd.DataFrame, features: list[str],
         "features": features,
         "horizon": horizon,
         "threshold": threshold,
+        "label_mode": label_mode,
+        "exit_at": exit_at,
         "params": params,
         "metrics": metrics,
         "importance": importance,
@@ -374,6 +460,9 @@ def _save_run(result: dict, out: Path, label: str = "") -> str:
         "features": result["features"],
         "horizon": result["horizon"],
         "threshold": result["threshold"],
+        # 策略加载时据此校验口径是否匹配 —— 缺这个字段的是旧的日内模型
+        "label_mode": result.get("label_mode", "intraday"),
+        "exit_at": result.get("exit_at"),
         "params": result["params"],
     }, run_dir / "model.joblib")
 
@@ -422,10 +511,18 @@ def _save_run(result: dict, out: Path, label: str = "") -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser(description="全市场日内 GBM 模型训练")
+    p.add_argument("--label-mode", default="intraday",
+                   choices=["intraday", "t1"],
+                   help="intraday=未来N根bar收益（尾盘强平的策略）；"
+                        "t1=当日买入次日卖出（A股T+1，默认策略该用这个）")
+    p.add_argument("--exit-at", default="open", choices=["open", "close"],
+                   help="t1 模式的出场口径：次日开盘或次日收盘")
     p.add_argument("--horizon", type=int, default=10,
-                   help="预测窗口（bar 数，默认 10，即 10 分钟）")
+                   help="预测窗口（bar 数，默认 10，即 10 分钟）。"
+                        "t1 模式下不使用")
     p.add_argument("--threshold", type=float, default=0.0005,
-                   help="正类阈值（默认 5bp）")
+                   help="正类阈值（默认 5bp）。t1 模式的收益量级远大于日内，"
+                        "阈值应相应调高")
     p.add_argument("--max-symbols", type=int, default=3500,
                    help="最多使用多少只标的（默认 3500，32GB RAM 上限）")
     p.add_argument("--min-bars", type=int, default=1000,
@@ -567,10 +664,13 @@ def main() -> int:
             "verbosity": -1, "n_jobs": -1,
         }
         result = train(df, INTRADAY_FEATURES, args.horizon, args.threshold,
-                       params)
+                       params, args.label_mode, args.exit_at)
 
         out = Path(args.output)
-        label = f"horizon={args.horizon} threshold={args.threshold}"
+        if args.label_mode == "t1":
+            label = (f"T+1 exit={args.exit_at} threshold={args.threshold}")
+        else:
+            label = f"horizon={args.horizon} threshold={args.threshold}"
         run_id = _save_run(result, out, label)
 
         m = result["metrics"]
