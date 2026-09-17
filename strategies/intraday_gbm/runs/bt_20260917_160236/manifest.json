@@ -1,0 +1,70 @@
+{
+  "run_id": "bt_20260917_160236",
+  "kind": "backtest",
+  "model_type": "IntradayGBM",
+  "strategy_id": "intraday_gbm",
+  "created_at": "2026-09-17T16:02:36",
+  "status": "completed",
+  "params": {
+    "capital": 50000.0,
+    "max_positions": 5,
+    "prob_buy": 0.4,
+    "prob_sell": 0.25,
+    "max_intraday_loss": 0.02,
+    "max_drawdown_stop": 0.1,
+    "entry_time": "09:35",
+    "exit_time": "14:50",
+    "max_symbols": 300,
+    "commission": 8.54e-05,
+    "stamp_tax": 0.0005,
+    "slippage": 0.0005,
+    "modes": [
+      "momentum"
+    ],
+    "start": "",
+    "end": "",
+    "t_plus_1": true
+  },
+  "metrics": {
+    "total_return": 0.2825,
+    "annual_return": 0.2711,
+    "monthly_return": 0.021,
+    "max_drawdown": -0.1153,
+    "sharpe": 1.495,
+    "volatility": 0.168,
+    "n_trades": 539,
+    "win_rate": 0.4174,
+    "trading_days": 251,
+    "best_mode": "momentum",
+    "modes": [
+      "momentum"
+    ],
+    "by_mode": {
+      "momentum": {
+        "total_return": 0.2825,
+        "annual_return": 0.2711,
+        "monthly_return": 0.021,
+        "max_drawdown": -0.1153,
+        "sharpe": 1.495,
+        "volatility": 0.168,
+        "n_trades": 539,
+        "win_rate": 0.4174,
+        "trading_days": 251,
+        "targets_passed": 1,
+        "targets_total": 3
+      }
+    }
+  },
+  "artifacts": {
+    "summary_json": "summary.json",
+    "momentum_daily_csv": "momentum_daily.csv",
+    "momentum_trades_csv": "momentum_trades.csv"
+  },
+  "train_period": [],
+  "test_period": [
+    "",
+    ""
+  ],
+  "train_time_sec": null,
+  "notes": "T+1 约束下的阈值标定，prob_buy=0.4，300 只标的全区间"
+}

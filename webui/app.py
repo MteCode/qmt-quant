@@ -242,10 +242,18 @@ def strategy_detail(sid):
                                                   strat.STRATEGIES}),
                                running=set(), task_by_id=TASK_BY_ID,
                                error=f"策略不存在: {sid}"), 404
+    # 策略页直接管实盘 —— 否则用户得自己去服务页找对应条目，两个页面割裂
+    svc = None
+    if getattr(s, "live_service", ""):
+        st = services.status(s.live_service)
+        if st.get("exists"):
+            svc = st
+
     return render_template(
         "strategy_detail.html", s=s, r=s.result(),
         task=TASK_BY_ID.get(s.backtest_task),
         live_task=TASK_BY_ID.get(s.live_task),
+        svc=svc,
         running={r["task_id"] for r in jobs.running_jobs()},
         backtests=model_registry.discover_backtests(strategy_id=sid),
         recent=[j for j in jobs.list_jobs(limit=30)

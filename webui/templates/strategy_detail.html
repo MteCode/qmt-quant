@@ -24,9 +24,43 @@
 </div>
 {% endif %}
 
+{# ---------------- 实盘 ---------------- #}
+{% if svc %}
+<div class="card" style="border-left:4px solid {{ 'var(--up)' if svc.running else 'var(--line)' }}">
+  <div class="row" style="justify-content:space-between;align-items:center">
+    <div>
+      <div class="lbl">实盘</div>
+      <div style="margin-top:4px">
+        <span class="tag {{ 't-ok' if svc.running else 't-mut' }}">
+          {{ '运行中' if svc.running else '已停止' }}</span>
+        {% if svc.dangerous %}<span class="tag t-err">真实委托</span>{% endif %}
+        {% if svc.running and svc.pid %}
+          <span style="color:var(--muted);font-size:12px">PID {{ svc.pid }}</span>
+        {% endif %}
+        {% if svc.running and svc.heartbeat_age is not none %}
+          <span class="tag {{ 't-ok' if svc.heartbeat_ok else 't-warn' }}">
+            心跳 {{ svc.heartbeat_age|round(0)|int }}s</span>
+        {% endif %}
+      </div>
+      <div style="color:var(--muted);font-size:12px;margin-top:6px">
+        {{ svc.note or '' }}</div>
+    </div>
+    <div class="row">
+      {% if svc.running %}
+        <button onclick="svcAct('stop')">停止</button>
+      {% else %}
+        <button class="primary" onclick="svcAct('start')">启动实盘</button>
+      {% endif %}
+      <a href="/services" style="font-size:12px;color:var(--muted);
+         align-self:center">服务页 →</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <!-- ---------------- 操作区 ---------------- -->
 <div class="card">
-  <div class="lbl">运行</div>
+  <div class="lbl">回测</div>
   {% if task %}
     <form id="btform" onsubmit="return submitBT(event)">
       <div class="grid g3" style="margin:10px 0">
@@ -384,6 +418,26 @@
 
 {% block script %}
 <script>
+{% if svc %}
+function svcAct(action){
+  var dangerous = {{ 'true' if svc.dangerous else 'false' }};
+  var msg = action === 'start'
+    ? (dangerous ? '启动「{{ s.name }}」实盘？\n\n会产生真实委托，请确认 QMT 客户端已登录。'
+                 : '启动「{{ s.name }}」？')
+    : '停止「{{ s.name }}」实盘？\n\n已持仓的标的不会自动平仓。';
+  if(!window.confirm(msg)) return;
+  var body = action === 'start' ? JSON.stringify({confirm:'yes'}) : '{}';
+  fetch('/api/services/{{ svc.id }}/' + action,
+        {method:'POST', headers:{'Content-Type':'application/json'}, body:body})
+    .then(function(r){return r.json()})
+    .then(function(d){
+      window.alert(d.ok ? (d.message || '已执行') : ('失败：' + (d.error||'未知')));
+      if(d.ok) setTimeout(function(){location.reload()}, 1200);
+    })
+    .catch(function(e){ window.alert('请求失败：' + e); });
+}
+{% endif %}
+
 function submitBT(e){
   e.preventDefault();
   const fd = new FormData(document.getElementById('btform'));

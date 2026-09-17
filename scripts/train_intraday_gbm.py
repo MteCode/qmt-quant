@@ -475,9 +475,15 @@ def _save_run(result: dict, out: Path, label: str = "") -> str:
         run_id=run_id,
         model_type="LightGBMClassifier",
         strategy_id="intraday_gbm",
-        params={**result["params"], "horizon_bars": result["horizon"],
+        params={**result["params"],
+                # 口径进 params，管理台列表页才看得到这个模型是哪种标签训的。
+                # 日内模型和 T+1 模型混在一个列表里，不标出来就会装错
+                "label_mode": result.get("label_mode", "intraday"),
+                "exit_at": result.get("exit_at"),
+                "horizon_bars": result["horizon"],
                 "threshold": result["threshold"]},
         metrics={
+            "label_mode": result.get("label_mode", "intraday"),
             "test_accuracy": m["test_accuracy"],
             "test_auc": m["test_auc"],
             "train_accuracy": m["train_accuracy"],

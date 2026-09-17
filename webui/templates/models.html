@@ -67,6 +67,7 @@
     <th>模型</th>
     <th>策略</th>
     <th>类型</th>
+    <th>口径</th>
     <th class="num">总收益</th>
     <th class="num">年化</th>
     <th class="num">最大回撤</th>
@@ -96,6 +97,18 @@
     </td>
     <td><span class="tag t-mut">{{ m.strategy_id or m._strategy_dir }}</span></td>
     <td><span class="tag t-run">{{ m.model_type }}</span></td>
+    {# 口径决定模型能不能用：日内模型装到 T+1 策略上照样跑、照样出信号，
+       只是全错且不报错。必须一眼可辨 #}
+    {% set lm = (m.params or {}).get('label_mode') or (m.metrics or {}).get('label_mode') %}
+    <td>
+      {% if lm == 't1' %}
+        <span class="tag t-ok" title="当日买入、次日卖出（A股T+1）">T+1</span>
+      {% elif lm %}
+        <span class="tag t-warn" title="未来N根bar收益，A股股票无法执行">日内</span>
+      {% else %}
+        <span class="tag t-mut">—</span>
+      {% endif %}
+    </td>
     {% set tr = met.get('total_return') %}
     {% set ar = met.get('annual_return') %}
     {% set dd = met.get('max_drawdown') %}

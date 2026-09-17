@@ -207,6 +207,9 @@ class Strategy:
     output_dir: str = ""
     backtest_task: str = ""       # registry.py 中的 task_id
     live_task: str = ""           # 实盘/信号生成的 task_id
+    #: services.py 中的常驻服务 id。有它才能从策略页直接启停实盘 ——
+    #: 否则用户得自己在「服务」页找对应条目，两个页面割裂
+    live_service: str = ""
     status: str = "research"      # research / backtest_only / live_ready
     caveat: str = ""              # 已知问题或结论，红字显示
 
@@ -775,23 +778,29 @@ _CORE: list[Strategy] = [
         id="intraday_gbm",
         name="全市场日内 GBM 选股",
         category="日内",
-        summary="用 1 分钟 K 线训练横截面模型，判断当前时刻全市场哪些票适合日内操作，"
-                "再按做T/均值回归/打板三种模式执行。",
+        summary="用 1 分钟 K 线训练横截面模型，盘中对全市场打分选股，"
+                "当日买入、次一交易日卖出（A 股 T+1）。",
         how=[
             "读取全市场 1m 清洗数据（已排除北交所、科创板、股价 >500 元的标的）",
             "计算 23 维日内特征：多周期动量、均线偏离、量能 z-score、ATR、"
             "RSI、VWAP 偏离、订单不平衡、Amihud 非流动性、日内位置、时间编码",
-            "标签为「未来 N 根 bar 收益率是否超过阈值」，LightGBM 二分类",
+            "标签为「当日买入、次日开盘卖出的收益是否超过阈值」，LightGBM 二分类",
             "按日期 70/30 分割，训练集与验证集不重叠，避免前视",
-            "盘中对全市场打分排序，下游策略按概率筛选标的",
+            "盘中对全市场打分排序，按概率选前 N 名买入；持仓次日才可卖",
         ],
         inputs=["data/clean/1m/ 全市场分钟线"],
-        risk=["单票日内止损", "组合回撤分档停止开仓", "尾盘强制平仓，不留隔夜"],
+        risk=["单票止损（T+1 下顺延至次日执行）",
+              "组合回撤分档停止开仓",
+              "持仓次日才可卖，隔夜跳空风险无法规避"],
+        caveat="2026-09-17 前的回测未加 T+1 约束，同日买卖回合在 A 股无法执行，"
+               "历史上那份 +222%/夏普 31.97 的结果不可引用。"
+               "当前口径：夏普 1.50、年化 27.11%、回撤 -11.53%（prob_buy=0.40）。",
         code="strategies/intraday_gbm/strategy.py",
         output_dir="models/intraday_gbm",
         backtest_task="backtest_intraday_gbm",
-        live_task="predict_intraday",
-        status="backtest_only",
+        live_task="run_intraday_gbm",
+        live_service="intraday_gbm",
+        status="live_ready",
         loader=_load_intraday_gbm,
     ),
     Strategy(

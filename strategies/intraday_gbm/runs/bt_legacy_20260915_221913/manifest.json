@@ -24,7 +24,8 @@
       "t_plus_0"
     ],
     "model_horizon": 5,
-    "model_threshold": 0.002
+    "model_threshold": 0.002,
+    "t_plus_1": false
   },
   "metrics": {
     "total_return": 2.2238,
@@ -96,5 +97,5 @@
   "train_period": [],
   "test_period": [],
   "train_time_sec": null,
-  "notes": "由 models\\intraday_gbm\\backtest 迁移，原生成于 2026-09-15 22:19:13"
+  "notes": "【口径失效·勿引用】此 run 跑在加 T+1 约束之前，4560 笔全部是同日买卖回合，在 A 股根本无法执行（当日买入不可卖）。夏普 31.97 由此而来。保留仅为追溯，不可作为策略有效性证据。"
 }
