@@ -1179,7 +1179,31 @@ def _merge_discovered(core: list[Strategy]) -> list[Strategy]:
     return out
 
 
-STRATEGIES: list[Strategy] = _merge_discovered(_CORE)
+def _merge_catalog(base: list[Strategy]) -> list[Strategy]:
+    """并入 config/catalog.yaml 里手工登记的条目。
+
+    catalog 是加策略的统一入口（一个文件搞定元信息/模型/回测/实盘），
+    这里把它的条目并进来。id 相同时**以 catalog 为准** —— 这样既能新增，
+    也能把 _CORE 里的老条目逐个迁过去，而不必一次性重写这 1400 行。
+    """
+    try:
+        from . import catalog
+        extra = catalog.build_strategies(Strategy)
+    except Exception as e:                           # noqa: BLE001
+        logger.error("catalog.yaml 加载失败，仅用内置条目: %s", e)
+        return base
+
+    if not extra:
+        return base
+    by_id = {s.id: s for s in base}
+    for s in extra:
+        by_id[s.id] = s
+    order = [s.id for s in base] + [s.id for s in extra if s.id not in
+                                    {b.id for b in base}]
+    return [by_id[i] for i in order]
+
+
+STRATEGIES: list[Strategy] = _merge_catalog(_merge_discovered(_CORE))
 BY_ID = {s.id: s for s in STRATEGIES}
 CATEGORIES = ["日内", "日频", "组合", "研究"] + [
     c for c in sorted({s.category for s in STRATEGIES})

@@ -1,0 +1,102 @@
+# 策略与模型总目录 —— 手工登记入口
+#
+# 加一个策略只需要在 strategies: 下面追加一条，不用改任何 Python。
+# 管理台读这个文件，自动生成：
+#   策略中心条目 + 回测参数表单 + 实盘启停按钮 + 模型口径标识
+#
+# 原先这些信息分散在四个地方（webui/strategies.py 的元信息、
+# webui/registry.py 的任务与参数、webui/services.py 的常驻服务、
+# strategies/*/strategy.yaml 的自动发现），加一个策略要改三四个
+# Python 文件且容易漏。这个文件是那些的统一手工入口。
+#
+# ---------------------------------------------------------------- 字段说明
+#
+# id            必填，唯一标识，也是策略页 URL /strategies/<id>
+# name          必填，显示名
+# category      分类：日内 / 日频 / 组合 / 研究
+# summary       一句话说明，列表页显示
+# how           工作原理，逐条列出，详情页展开
+# inputs        依赖的数据
+# risk          风控约束
+# code          主要代码位置（详情页给出路径，方便查看）
+# output_dir    产物目录，用于发现未登记的结果
+# status        research / backtest_only / live_ready
+# caveat        已知问题或结论，详情页红字显示
+#
+# model:                模型信息，没有模型的策略可整段省略
+#   path                模型文件，策略实际加载的那个
+#   label_mode          t1 = 当日买入次日卖出；intraday = 未来N根bar
+#                       口径写在这里是为了在管理台一眼可辨 —— 日内模型
+#                       装到 T+1 策略上照样跑、照样出信号，只是全错
+#   train_script        训练脚本
+#   runs_dir            历史训练/回测产物目录（manifest.json 所在）
+#
+# backtest:             回测入口，省略则策略页没有回测按钮
+#   script              回测脚本
+#   eta                 预计耗时，前端提示用
+#   params              参数表单，逐个定义：
+#     - name / label / kind(int,float,str,bool,choice) / default
+#       choices / help / flag（命令行开关，留空则用 --{name}）
+#
+# live:                 实盘入口，省略则策略页没有实盘控制区
+#   service             webui/services.py 中的服务 id（有它才能启停）
+#   script              实盘脚本，仅用于展示
+#   dangerous           true 表示会产生真实委托，前端二次确认
+
+version: 1
+
+strategies:
+  - id: intraday_gbm
+    name: 全市场日内 GBM 选股
+    category: 日内
+    status: live_ready
+    summary: >-
+      用 1 分钟 K 线训练横截面模型，盘中对全市场打分选股，
+      当日买入、次一交易日卖出（A 股 T+1）。
+    how:
+      - 读取全市场 1m 清洗数据（已排除北交所、科创板、股价 >500 元的标的）
+      - 计算 23 维日内特征：多周期动量、均线偏离、量能 z-score、ATR、RSI、
+        VWAP 偏离、订单不平衡、Amihud 非流动性、日内位置、时间编码
+      - 标签为「当日买入、次日开盘卖出的收益是否超过阈值」，LightGBM 二分类
+      - 按日期 70/30 分割，训练集与验证集不重叠，避免前视
+      - 盘中对全市场打分排序，按概率选前 N 名买入；持仓次日才可卖
+    inputs:
+      - data/clean/1m/ 全市场分钟线
+    risk:
+      - 单票止损（T+1 下顺延至次日执行）
+      - 组合回撤分档停止开仓
+      - 持仓次日才可卖，隔夜跳空风险无法规避
+    caveat: >-
+      2026-09-17 前的回测未加 T+1 约束，同日买卖回合在 A 股无法执行，
+      历史上那份 +222%/夏普 31.97 的结果不可引用。
+      当前口径：夏普 1.50、年化 27.11%、回撤 -11.53%（prob_buy=0.40）。
+    code: strategies/intraday_gbm/strategy.py
+    output_dir: models/intraday_gbm
+
+    model:
+      path: models/intraday_gbm/model.joblib
+      label_mode: t1
+      train_script: scripts/train_intraday_gbm.py
+      runs_dir: strategies/intraday_gbm/runs
+
+    backtest:
+      script: scripts/backtest_intraday_gbm.py
+      eta: 800 只标的约 10-20 分钟
+      params:
+        - {name: mode, label: 交易模式, kind: str, default: momentum,
+           help: "t_plus_0 / mean_reversion / momentum / all"}
+        - {name: capital, label: 初始资金, kind: float, default: 200000}
+        - {name: max_positions, label: 同时持仓标的数, kind: int, default: 10}
+        - {name: prob_buy, label: 买入概率阈值, kind: float, default: 0.40,
+           help: "标定结论：0.40 最优（夏普 1.50）。模型 95% 输出低于 0.42"}
+        - {name: prob_sell, label: 卖出概率阈值, kind: float, default: 0.25}
+        - {name: max_intraday_loss, label: 单票止损线, kind: float, default: 0.02}
+        - {name: max_drawdown_stop, label: 组合回撤停止开仓线, kind: float, default: 0.10}
+        - {name: max_symbols, label: 回测标的数, kind: int, default: 300}
+        - {name: start, label: 起始日期, kind: str, default: "",
+           help: 留空则用全部历史}
+
+    live:
+      service: intraday_gbm
+      script: scripts/run_intraday_gbm.py
+      dangerous: true

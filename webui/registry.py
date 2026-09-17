@@ -403,7 +403,23 @@ def _build_tasks() -> list[Task]:
     return list(_CORE_TASKS) + extra
 
 
-TASKS = _build_tasks()
+def _with_catalog(tasks: list) -> list:
+    """并入 config/catalog.yaml 里登记的回测任务。
+
+    catalog 条目自带参数表单定义，策略页据此渲染输入框 —— 加策略不用再
+    来这个文件补一份 Task。
+    """
+    try:
+        from . import catalog
+        extra = catalog.build_tasks(Task, Param)
+    except Exception as e:                        # noqa: BLE001
+        logger.error("catalog.yaml 任务加载失败: %s", e)
+        return tasks
+    known = {t.id for t in tasks}
+    return tasks + [t for t in extra if t.id not in known]
+
+
+TASKS = _with_catalog(_build_tasks())
 TASK_BY_ID = {t.id: t for t in TASKS}
 
 
