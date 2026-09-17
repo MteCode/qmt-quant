@@ -23,6 +23,50 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def preheat_lightgbm() -> bool:
+    """在任何 xtquant 导入之前，把 LightGBM 的原生运行时初始化完。
+
+    ## 不这么做会发生什么
+
+    xtquant 和 LightGBM 各自带一套 OpenMP 运行时。同进程下若 xtquant 先
+    加载，LightGBM 后续第一次 predict 会直接
+    `access violation reading 0x0` 崩在原生层 —— Python 侧只看到 OSError，
+    堆栈指向 lightgbm/basic.py，完全指不到真正的原因。
+
+    实测：先 predict 一次再 import xtquant 正常，反过来必崩；
+    `num_threads=1` 之类的参数不管用，因为崩在运行时初始化而不是并行调度。
+
+    表现形式极具迷惑性：引擎正常、行情正常、心跳正常，只是每根 bar 都
+    在 _score_all 里抛异常被吞掉，**一整天不下一笔单也不报错到界面上**。
+
+    这个函数必须在 load_universe / 网关连接之前调用 —— 那两处都会 import
+    xtquant。
+    """
+    try:
+        import numpy as np
+
+        from strategies.intraday_gbm.strategy import MODEL_PATH
+    except ImportError as e:
+        print(f"  [WARN] LightGBM 预热跳过（导入失败）: {e}")
+        return False
+
+    if not MODEL_PATH.exists():
+        print(f"  [WARN] LightGBM 预热跳过：模型不存在 {MODEL_PATH}")
+        return False
+
+    try:
+        import joblib
+
+        data = joblib.load(MODEL_PATH)
+        model = data["model"]
+        n = len(data.get("features") or [])
+        model.predict_proba(np.zeros((1, n), dtype=np.float64))
+    except Exception as e:                           # noqa: BLE001
+        print(f"  [WARN] LightGBM 预热失败: {e}")
+        return False
+    return True
+
+
 def load_full_market() -> list[str]:
     """全市场标的池 —— 取自 1m 清洗数据目录，与模型训练集完全一致。
 
@@ -244,6 +288,11 @@ def main() -> int:
         print("  ** DRY RUN — 只观察不下单 **")
     print()
 
+    # 必须在 load_universe / 网关连接之前 —— 它们都会 import xtquant，
+    # 之后 LightGBM 的第一次 predict 就会崩在原生层
+    print("预热 LightGBM 运行时...")
+    print(f"  {'完成' if preheat_lightgbm() else '未完成（打分可能失败）'}")
+
     # 加载标的池
     print("加载标的池...")
     ranked = load_universe(args.universe, args.max_price)
@@ -268,6 +317,12 @@ def main() -> int:
     gateway = MiniQmtGateway(event_engine)
     risk_manager = RiskManager(cfg.risk, event_engine)
 
+    # 必须在 connect 之前构造 —— connect 内部会 query_account 并发出
+    # EVENT_ACCOUNT，而注册该事件处理器的正是 LiveEngine。顺序反了的话
+    # 账户快照发出时没人接，risk_manager.account 永远是 None，
+    # 于是每一笔买单都被判「可用资金不足」——哪怕账上有一千万。
+    engine = LiveEngine(event_engine, gateway, risk_manager)
+
     print(f"\n连接 miniQMT...")
     print(f"  路径: {cfg.gateway.qmt_path}")
     print(f"  账号: {cfg.gateway.account_id}")
@@ -285,8 +340,6 @@ def main() -> int:
         event_engine.stop()
         return 1
     print("  连接成功")
-
-    engine = LiveEngine(event_engine, gateway, risk_manager)
 
     if args.dry_run:
         risk_manager.activate_kill_switch("dry-run 模式，只观察不下单")

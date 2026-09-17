@@ -39,6 +39,11 @@ def main() -> int:
     gateway = MiniQmtGateway(event_engine)
     risk_manager = RiskManager(cfg.risk, event_engine)
 
+    # 必须在 connect 之前 —— connect 内部 query_account 会发出 EVENT_ACCOUNT，
+    # 而注册该处理器的正是 LiveEngine。顺序反了账户快照就丢了，
+    # risk_manager.account 永远是 None，每笔买单都被判「可用资金不足」
+    engine = LiveEngine(event_engine, gateway, risk_manager)
+
     print(f"连接 miniQMT... 账号: {cfg.gateway.account_id}")
     connected = gateway.connect({
         "qmt_path": cfg.gateway.qmt_path,
@@ -53,7 +58,6 @@ def main() -> int:
         event_engine.stop()
         return 1
 
-    engine = LiveEngine(event_engine, gateway, risk_manager)
     if args.dry_run:
         risk_manager.activate_kill_switch("dry-run")
 
