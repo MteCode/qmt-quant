@@ -51,6 +51,7 @@ class IntradayGBMStrategy(StrategyBase):
         "vwap_deviation",       # mean_reversion 模式的 VWAP 偏离阈值
         "use_rank",             # 按概率排序选前 N 名，而非用绝对阈值
         "t_plus_1",             # A股T+1：当日买入不可卖，止损顺延到次日
+        "avoid_limit_up",       # 涨停板不买 —— 挂上去也排不进队，只是占额度
     ]
 
     variables = StrategyBase.variables + [
@@ -77,6 +78,13 @@ class IntradayGBMStrategy(StrategyBase):
         self.use_rank = False
         #: A 股股票必须开着。关掉只适用于 T+0 品种（ETF、可转债）
         self.t_plus_1 = True
+        #: 涨停板不买。momentum 的三个条件（排名靠前 + 放量 + 日内正收益）
+        #: 筛出来的几乎全是已涨停的票，而涨停板上没有卖单，限价单只能排队 ——
+        #: 实测挂在封单 116 万手后面，一天也成交不了，白占资金额度
+        self.avoid_limit_up = True
+        #: vt_symbol -> 涨停价。由启动脚本从 get_instrument_detail 取来传入；
+        #: 为空时退化为「用昨收推算」，见 _at_limit_up
+        self.limit_up_prices: dict[str, float] = {}
 
         self.today_entries: dict[str, float] = {}
         self.entry_prices: dict[str, float] = {}
@@ -86,6 +94,14 @@ class IntradayGBMStrategy(StrategyBase):
         self._bar_buffers: dict[str, list] = {}
 
         super().__init__(engine, strategy_name, vt_symbols, setting)
+
+        # 涨停价是**数据**不是参数：几百条的字典，放进 parameters 会灌进
+        # 参数表单和状态持久化。而 update_setting 只认 parameters 里声明过的
+        # 字段，所以这里单独取 —— 漏了这一步的话启动脚本传了也不生效，
+        # 过滤静默失效（测试正是抓到这一点）。
+        lu = (setting or {}).get("limit_up_prices")
+        if isinstance(lu, dict):
+            self.limit_up_prices = {k: float(v) for k, v in lu.items() if v}
 
     def on_init(self) -> None:
         if not MODEL_PATH.exists():
@@ -152,6 +168,25 @@ class IntradayGBMStrategy(StrategyBase):
         # 正常情况下 stop_ref_price 会优先用券商成本价，这里只是退路。
         if not hasattr(self, "entry_prices") or self.entry_prices is None:
             self.entry_prices = {}
+
+    def _at_limit_up(self, vt: str, price: float) -> bool:
+        """当前价是否已在涨停价上。
+
+        涨停价优先用券商给的精确值（get_instrument_detail 的 UpStopPrice，
+        已按主板 10% / 创业板 20% / ST 5% 区分好），拿不到时退回「昨收 ×1.098」
+        近似 —— 近似会漏掉创业板和 ST，所以只作兜底，正常路径应当传入。
+        """
+        if not self.avoid_limit_up or price <= 0:
+            return False
+        up = self.limit_up_prices.get(vt, 0.0)
+        if up > 0:
+            return price >= up - 1e-6
+        buf = self._bar_buffers.get(vt)
+        if not buf:
+            return False
+        # 缺涨停价时的兜底：日内涨幅逼近 10% 就当涨停，宁可漏买不可错买
+        first = buf[0].get("open") or 0
+        return bool(first) and (price / first - 1) >= 0.098
 
     def sellable(self, vt: str) -> float:
         """能卖多少 —— 所有卖出路径（止损/信号/尾盘）都必须先过这道闸。
@@ -288,7 +323,8 @@ class IntradayGBMStrategy(StrategyBase):
                         self.write_log(f"T0 止损 {vt} pnl={pnl:.2%}")
                     continue
 
-            if row["prob_up"] > self.prob_buy_threshold:
+            if (row["prob_up"] > self.prob_buy_threshold
+                    and not self._at_limit_up(vt, price)):
                 vol = self.position_size / price
                 if vol > 0:
                     self.buy(vt, price, vol, OrderType.LIMIT)
@@ -326,7 +362,8 @@ class IntradayGBMStrategy(StrategyBase):
             if (vwap_gap < -self.vwap_deviation
                     and row["prob_up"] > self.prob_buy_threshold
                     and pos <= 0
-                    and active < self.max_positions):
+                    and active < self.max_positions
+                    and not self._at_limit_up(vt, price)):
                 vol = self.position_size / price
                 if vol > 0:
                     self.buy(vt, price, vol, OrderType.LIMIT)
@@ -377,7 +414,8 @@ class IntradayGBMStrategy(StrategyBase):
                     and row["vol_z"] > self.vol_z_threshold
                     and row["day_ret"] > 0
                     and pos <= 0
-                    and active < self.max_positions):
+                    and active < self.max_positions
+                    and not self._at_limit_up(vt, price)):
                 vol = self.position_size / price
                 if vol > 0:
                     self.buy(vt, price, vol, OrderType.LIMIT)

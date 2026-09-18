@@ -193,6 +193,28 @@ def rank_by_snapshot(symbols: list[str],
     return ranked
 
 
+def fetch_limit_up_prices(symbols: list[str]) -> dict[str, float]:
+    """取每只标的的涨停价，供策略过滤涨停票。
+
+    用券商给的 UpStopPrice 而非自己按涨跌幅推算 —— 主板 10%、创业板/科创板
+    20%、ST 5%、北交所 30%，还要考虑新股上市首日无涨跌幅，自己算迟早算错
+    一类。券商这个值是精确的。
+    """
+    from qmtquant.utils.symbol import to_xt_symbol
+    from xtquant import xtdata
+
+    out: dict[str, float] = {}
+    for vt in symbols:
+        try:
+            d = xtdata.get_instrument_detail(to_xt_symbol(vt)) or {}
+        except Exception:                            # noqa: BLE001
+            continue
+        up = d.get("UpStopPrice") or 0
+        if up:
+            out[vt] = float(up)
+    return out
+
+
 def warmup_buffers(strategy, symbols: list[str]) -> None:
     """下载当日 1m bar 灌进策略缓冲区，省掉 30 分钟冷启动。"""
     import datetime as _dt
@@ -262,6 +284,12 @@ def main() -> int:
                         help="标的范围：full=全市场（默认）/ csi1000")
     parser.add_argument("--max-price", type=float, default=500.0,
                         help="股价上限，超过则排除（默认 500 元）")
+    parser.add_argument("--vol-z", type=float, default=0.5,
+                        help="量能放大阈值（默认 0.5）。原先 1.5 要求放量到"
+                             "1.5 个标准差，筛出来的几乎全是已涨停的票")
+    parser.add_argument("--allow-limit-up", action="store_true",
+                        help="允许买涨停票。默认不买 —— 涨停板没有卖单，"
+                             "限价单只能排队，实测排在封单百万手后面成交不了")
     args = parser.parse_args()
 
     from qmtquant.config import LOG_DIR, get_config
@@ -347,6 +375,10 @@ def main() -> int:
     # 加载策略
     from strategies.intraday_gbm.strategy import IntradayGBMStrategy
 
+    print("取涨停价...")
+    limit_up = fetch_limit_up_prices(symbols)
+    print(f"  {len(limit_up)}/{len(symbols)} 只拿到涨停价")
+
     setting = {
         "trade_mode": args.trade_mode,
         "max_positions": args.max_positions,
@@ -355,6 +387,9 @@ def main() -> int:
         "max_intraday_loss": 0.02,
         "entry_time": "09:35",
         "exit_time": "14:50",
+        "vol_z_threshold": args.vol_z,
+        "avoid_limit_up": not args.allow_limit_up,
+        "limit_up_prices": limit_up,
     }
 
     engine.add_strategy(

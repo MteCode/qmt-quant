@@ -139,3 +139,52 @@ class TestStopRefPrice:
         eng = FakeEngine(pos={"600000.SSE": 100})
         s = _make(eng)
         assert s.stop_ref_price("600000.SSE") == 0.0
+
+
+class TestLimitUpFilter:
+    """涨停不买。
+
+    ## 起因
+
+    momentum 的三个买入条件（排名靠前 + 放量 + 日内正收益）筛出来的几乎
+    全是已经涨停的票。实盘实测：某时刻挂出的 10 笔买单，10 只全在涨停板上，
+    封单最大的一只有 116 万手（约 21 亿元）排在前面 —— 挂一天也成交不了，
+    还白占资金额度，同一只票每根 bar 重挂一次。
+
+    涨停板上没有卖单，限价买单只能排队。这不是滑点问题，是结构性买不到。
+    """
+
+    def _s(self, **kw):
+        eng = FakeEngine(pos={}, available={})
+        return _make(eng, **kw)
+
+    def test_blocks_buy_at_limit_price(self):
+        s = self._s(limit_up_prices={"600000.SSE": 11.00})
+        assert s._at_limit_up("600000.SSE", 11.00)
+
+    def test_allows_price_below_limit(self):
+        s = self._s(limit_up_prices={"600000.SSE": 11.00})
+        assert not s._at_limit_up("600000.SSE", 10.80)
+
+    def test_uses_exact_broker_limit_not_ten_percent(self):
+        """创业板 20% 涨停：按 10% 推算会误判成涨停，必须用券商给的值。"""
+        s = self._s(limit_up_prices={"300001.SZSE": 12.00})   # 昨收 10 → 20%
+        assert not s._at_limit_up("300001.SZSE", 11.00), "11 元离 20% 涨停还远"
+        assert s._at_limit_up("300001.SZSE", 12.00)
+
+    def test_can_be_disabled_for_limit_up_strategies(self):
+        """真要打板时关掉开关，不该被这层过滤挡住。"""
+        s = self._s(avoid_limit_up=False, limit_up_prices={"600000.SSE": 11.0})
+        assert not s._at_limit_up("600000.SSE", 11.0)
+
+    def test_falls_back_to_intraday_gain_without_limit_price(self):
+        """拿不到涨停价时用日内涨幅兜底，宁可漏买不可错买。"""
+        s = self._s()
+        s._bar_buffers["600000.SSE"] = [{"open": 10.0, "close": 10.0}]
+        assert s._at_limit_up("600000.SSE", 11.0)      # +10%
+        assert not s._at_limit_up("600000.SSE", 10.5)  # +5%
+
+    def test_no_data_does_not_block(self):
+        """既无涨停价也无 bar 缓冲时不误拦 —— 拦错比漏拦更难查。"""
+        s = self._s()
+        assert not s._at_limit_up("600000.SSE", 10.0)
