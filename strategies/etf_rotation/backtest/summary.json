@@ -1,0 +1,134 @@
+{
+  "config": {
+    "capital": 200000,
+    "max_holdings": 5,
+    "rebalance": 10,
+    "lookbacks": "20,60,120",
+    "min_momentum": 0.0,
+    "no_vol_adjust": false,
+    "max_symbols": 60,
+    "start": "2018-01-01",
+    "end": "2030-12-31",
+    "phases": ""
+  },
+  "defensive": "511360.SSE",
+  "n_symbols": 61,
+  "phases": [
+    {
+      "phase": 0,
+      "total_return": 0.10675607385434827,
+      "annual_return": 0.011679243540903883,
+      "max_drawdown": -0.2545025364565844,
+      "sharpe": -0.0006549837666428392,
+      "n_trades": 342,
+      "win_rate": 0.45989304812834225,
+      "trading_days": 2114,
+      "turnover_rate": 70.84370355485873
+    },
+    {
+      "phase": 1,
+      "total_return": 0.2814832353799692,
+      "annual_return": 0.02879875473600002,
+      "max_drawdown": -0.22339795076335267,
+      "sharpe": 0.13064741188192727,
+      "n_trades": 332,
+      "win_rate": 0.43243243243243246,
+      "trading_days": 2114,
+      "turnover_rate": 56.49217676553665
+    },
+    {
+      "phase": 2,
+      "total_return": -0.18708076212802927,
+      "annual_return": -0.023431565227636675,
+      "max_drawdown": -0.25462124882480297,
+      "sharpe": -0.2920365812791353,
+      "n_trades": 365,
+      "win_rate": 0.37073170731707317,
+      "trading_days": 2114,
+      "turnover_rate": 56.75318225498995
+    },
+    {
+      "phase": 3,
+      "total_return": -0.08599662195247904,
+      "annual_return": -0.01024090260301147,
+      "max_drawdown": -0.21470082244907907,
+      "sharpe": -0.1908949407864294,
+      "n_trades": 339,
+      "win_rate": 0.387434554973822,
+      "trading_days": 2114,
+      "turnover_rate": 55.0689666661272
+    },
+    {
+      "phase": 4,
+      "total_return": 0.4249680434511405,
+      "annual_return": 0.04137424055568362,
+      "max_drawdown": -0.19285793454282762,
+      "sharpe": 0.21936400857997035,
+      "n_trades": 355,
+      "win_rate": 0.45918367346938777,
+      "trading_days": 2114,
+      "turnover_rate": 67.0701178400498
+    },
+    {
+      "phase": 5,
+      "total_return": 0.13394909640136254,
+      "annual_return": 0.01449425925868919,
+      "max_drawdown": -0.2056683395722504,
+      "sharpe": 0.017529371642297426,
+      "n_trades": 310,
+      "win_rate": 0.48502994011976047,
+      "trading_days": 2114,
+      "turnover_rate": 57.50202918943665
+    },
+    {
+      "phase": 6,
+      "total_return": 0.10728453161393103,
+      "annual_return": 0.011734530129209775,
+      "max_drawdown": -0.19896004630986752,
+      "sharpe": -0.002572770871762097,
+      "n_trades": 341,
+      "win_rate": 0.4644808743169399,
+      "trading_days": 2114,
+      "turnover_rate": 67.79588868036905
+    },
+    {
+      "phase": 7,
+      "total_return": -0.12228547365912545,
+      "annual_return": -0.014820488315976932,
+      "max_drawdown": -0.2403571619384831,
+      "sharpe": -0.19997384941725413,
+      "n_trades": 327,
+      "win_rate": 0.4581005586592179,
+      "trading_days": 2114,
+      "turnover_rate": 56.86406823610941
+    },
+    {
+      "phase": 8,
+      "total_return": 0.04078718161241035,
+      "annual_return": 0.0045868899931722495,
+      "max_drawdown": -0.2015933533890213,
+      "sharpe": -0.0585504546969105,
+      "n_trades": 346,
+      "win_rate": 0.45108695652173914,
+      "trading_days": 2114,
+      "turnover_rate": 59.46007296311264
+    },
+    {
+      "phase": 9,
+      "total_return": 0.1023152339319151,
+      "annual_return": 0.011213722571759899,
+      "max_drawdown": -0.2475555110354376,
+      "sharpe": 0.00414228832823721,
+      "n_trades": 386,
+      "win_rate": 0.41262135922330095,
+      "trading_days": 2114,
+      "turnover_rate": 74.63726842406238
+    }
+  ],
+  "median": {
+    "total_return": 0.10453565389313169,
+    "annual_return": 0.011446483056331891,
+    "max_drawdown": -0.21904938660621587,
+    "sharpe": -0.001613877319202468
+  }
+}
